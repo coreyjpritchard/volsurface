@@ -19,11 +19,11 @@ for the ladder and [LOG.md](LOG.md) for what each session found.
 
 ## Run it
 
-Uses the shared environment in `~/phd/.venv` (Python 3.11).
+Python 3.11 or later.
 
 ```bash
-source ~/phd/.venv/bin/activate
-pip install -e ".[dev]"                      # once
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,data]"                 # once
 marimo run sessions/00_the_smile.py          # the app: sliders, surface, smile
 marimo edit sessions/00_the_smile.py         # the same, with the code
 pytest -m "not slow"                         # tests; add --impl exercises for your own code

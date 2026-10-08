@@ -1,7 +1,7 @@
 # Roadmap
 
 One question per session. Levels: 0 play, 1 reproduce, 2 implement, 3 extend (see
-`~/phd/CONVENTIONS.md`).
+`CLAUDE.md`).
 
 - [x] **00 The smile is the model's fingerprint** (level 0). Heston surface with sliders,
   Black-Scholes for contrast, SPY overlay. The market's short-dated skew follows a power
