@@ -7,6 +7,26 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
+## 2026-10-13 Library P1b: surfaces and the checker, in review
+
+Three interpolators of the normalised call: linear in the strike, a natural
+cubic of implied volatility, and raw SVI with total variance linear in
+expiry. The surface checker is pointwise (bounds, call spread, butterfly,
+calendar). The quote checker is the feasibility linear program, not a fit.
+
+On the saved SPY chain the figure uses the 30 September 2027 expiry. The
+spline passes through the last-trade vols and still goes negative in density
+between those strikes; past the lowest strike the same cubic crosses through
+zero volatility. Raw SVI on that slice stays positive in density. Across all
+24 expiries, 14 fitted slices have Durrleman's `g` negative somewhere on
+`k` in `[-0.5, 0.5]`. The file has no bid or ask, so the quote checker drops
+every row. `in_spread` on the SVI fit is NaN for that reason.
+
+Hypotheses, not findings: flat extrapolation of the linear call is the SANOS
+linear model; the SPY marks mix stale lasts, American premium, and real
+convexity breaks; short-dated negative `g` is the least squares, not a
+tradable wing; equal slack weights can book a calendar gap as a quote slack.
+
 ## 2026-10-13 Library P1a: interfaces, in review
 
 `docs/DESIGN.md` is now the source of truth for coordinates (normalised call,
