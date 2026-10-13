@@ -7,6 +7,28 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
+## 2026-10-13 Library P1d: five greek engines, in review
+
+Analytic Black-Scholes (vanilla and cash-or-nothing), central finite
+differences, pathwise, likelihood ratio, and torch autodiff in float64.
+Pathwise and autodiff agree to 1e-10 on the same paths, including a four-step
+exact scheme. Both refuse a digital and a gamma. The likelihood ratio prices
+the digital. Its forward-delta standard error on a cash-or-nothing call is
+larger at 0.05 year than at 1 year, 30,000 paths.
+
+Finite differences: from bumps 1e-2 down to 1.25e-3 the log error slopes at 2
+within 0.2, and halving the bump multiplies the error by about 1/4. Common
+random numbers, 40 seeds of 2,000 paths, bump 1 on a forward of 100, cut the
+variance by more than a factor of five. The figure's right panel puts the
+closed-form valley near a bump of 3e-4. The left panel is RMSE against paths:
+pathwise and autodiff together, likelihood ratio above, a slope of -1/2 drawn
+through the pathwise start.
+
+Hypotheses, not findings: that valley moves if the greek or the noise changes;
+the likelihood-ratio slope is the usual square root and six seeds do not prove
+it; the variance-reduction factor depends on the bump; spot and forward
+deltas agree only while the discount factor is held fixed.
+
 ## 2026-10-13 Library P1c: geometric Brownian motion by Monte Carlo, in review
 
 Exact and Euler stepping of the unit-mean martingale `Z`. One seed covers a
