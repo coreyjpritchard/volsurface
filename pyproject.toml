@@ -24,6 +24,7 @@ data = ["yfinance>=0.2.40", "ib_async>=1.0"]
 
 [project.entry-points."volsurface.models"]
 black_scholes = "volsurface.models.bs:BlackScholes"
+gbm = "volsurface.models.gbm:GBM"
 heston = "volsurface.models.heston:Heston"
 
 [tool.setuptools.packages.find]

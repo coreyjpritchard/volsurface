@@ -86,7 +86,9 @@ def implied_vol(
     the inversion is best conditioned. Then a safeguarded Newton iteration runs on the
     bracket ``[lo, hi]``: a Newton step is taken when it stays inside the current bracket,
     otherwise the bracket is bisected. Returns NaN where the price is at or below intrinsic
-    value, at or above the no-arbitrage upper bound, or not finite.
+    value, at or above the no-arbitrage upper bound, or not finite, and where
+    the iteration does not meet ``tol``. A finite return is a volatility that
+    reprices to a relative residual of about ``tol``.
     """
     p, F, K, T, df = np.broadcast_arrays(
         *(np.asarray(a, dtype=float) for a in (price_, F, K, T, df))
@@ -124,5 +126,9 @@ def implied_vol(
             newton = x - diff / v
         inside = np.isfinite(newton) & (newton > low) & (newton < high)
         x = np.where(inside, newton, 0.5 * (low + high))
-    sigma.flat[idx] = x
+    # A step that never met the residual is not an implied vol. Leaving it in
+    # would make a later round trip fail on a number the solver does not stand behind.
+    diff = price(f, k, tt, x, 1.0, kd) - t
+    ok = np.abs(diff) <= tol * np.maximum(t, 1e-300) + 1e-300
+    sigma.flat[idx[ok]] = x[ok]
     return sigma
