@@ -1,0 +1,560 @@
+# volsurface design
+
+Source of truth for interfaces, coordinates, and the way pull requests stack.
+Code changes cite the section they implement. A change to an interface in this
+file is a `design/<topic>` pull request of its own, reviewed before the code
+that depends on it.
+
+This document covers Phase 1: the types, the pricing protocols, surfaces,
+the static-arbitrage checker, geometric Brownian motion by Monte Carlo, and
+greeks. Later phases (SANOS, Heston cosine pricing, local volatility, SABR,
+the deep-hedging adapter) are named where the interface has to leave them
+room, and are not specified far enough to code from.
+
+The normalised-call coordinate below follows the plan's reading of the SANOS
+arXiv HTML (2601.11209). Equation numbers from the PDF are not in this file.
+**Hypothesis:** the HTML summary is faithful. Nothing here should be quoted
+as a paper result until the PDF has been read against it.
+
+## 1. What a price is
+
+Every model prices in the forward. The inputs are the forward `F` to the
+option's expiry, the strike `K`, the year fraction `T`, and the discount
+factor `df` to that expiry. Spot, the interest rate, and the dividend yield
+appear only through
+
+```
+F = S * exp((r - q) T),    df = exp(-r T).
+```
+
+A model never sees `S`, `r`, or `q`. One call prices one maturity, so a
+Monte Carlo model can reuse a single set of paths for every strike.
+
+The returned price is the cash price: `df` times the expected payoff under
+the forward measure. `price` always returns an `ndarray`. It does not carry
+a standard error. Standard errors travel on `PriceResult`, from
+`price_with_error` (section 4).
+
+## 2. Coordinates
+
+`Z_T = S_T / F_T` is a unit-mean martingale in the forward measure when
+dividends are proportional to the spot. SANOS writes its quotes in that
+coordinate. We use the same one on every surface.
+
+The log-moneyness is `k = log(K / F_T)`, so the normalised strike is
+`x = K / F_T = exp(k)`.
+
+The normalised call is the cash call divided by `df * F`:
+
+```
+C(T, k) = cash_call(T, K) / (df(T) * F(T)).
+```
+
+Black's formula then collapses to `C = N(d1) - exp(k) N(d2)`, with total
+variance `w = sigma^2 T` and `d1 = -k / sqrt(w) + sqrt(w) / 2`,
+`d2 = d1 - sqrt(w)`.
+
+Evaluation shape, used everywhere a surface is sampled: `T` has shape
+`(m,)`, `k` has shape `(n,)`, and the result has shape `(m, n)`. A scalar
+is treated as length 1. There is no silent extrapolation. Values outside
+the quoted domain are still returned, so plots can show the wing, and
+`extrapolated(T, k)` is a boolean array of the same shape, true where the
+value is not an interpolation of quotes.
+
+## 3. Types
+
+Defined in `volsurface/core/types.py`.
+
+`State` is a mapping from a string name to an array, batched over paths
+when a path is in hand. Black-Scholes has an empty state. Heston has
+`{"v": v0}`. `state=None` on `price` means the model's initial state, so
+existing callers keep working.
+
+`Paths` holds a simulation:
+
+- `times`, shape `(n + 1,)`, including `t = 0`.
+- `Z`, shape `(m, n + 1,)`, the unit-mean martingale `S / F`.
+- `state`, a dict of arrays, each shaped `(m, n + 1)` or
+  `(m, n + 1, d)`.
+
+`PriceResult` holds `value` (ndarray), `stderr` (ndarray or None when the
+price is not a Monte Carlo estimate), `n_evals`, and `wall_time` in seconds.
+
+`ParamSpec` is one parameter: `name`, `lower`, `upper`, `default`, and
+`transform`. The transform is `"log"` (positive parameter), `"logit"`
+(a bounded interval), or `"identity"`.
+
+`Quote` is one option: `T`, `K`, `kind` (`"call"` or `"put"`), `bid`,
+`ask`, `exercise` (`"european"` or `"american"`), `settlement`
+(`"cash"` or `"physical"`), `volume`.
+
+`MarketData` is a snapshot:
+
+- `asof`: timezone-aware datetime.
+- `quotes`: a dataframe. Required columns are the `Quote` fields. Loaders
+  may add `price`, `iv`, `k`, `F`, `df`, `expiry`, `price_source`.
+- `F(T)` and `df(T)`: the forward and the discount factor. They accept a
+  scalar or an array and return the same shape.
+- `F_err(T)`: an estimate of the uncertainty in `F`, or None.
+- `day_count`: `"ACT/365"` for chains built by this package. Time is
+  measured from the quote timestamp to 16:00 New York on the expiry date,
+  divided by 365.
+
+`Curves` is the pair `F`, `df` that a surface holds. It is the part of
+`MarketData` the surface needs in order to turn a normalised call back
+into a cash price.
+
+`Domain` is the quoted rectangle `t_min`, `t_max`, `k_min`, `k_max`.
+
+`FitResult` is what a fitter returns: `surface`, `residuals`, `in_spread`
+(a fraction, or NaN when the quotes have no two-sided market),
+`wall_time`, `solver_status`.
+
+`ArbTol` is `price` (default `1e-9`, in normalised-call units) and
+`spreads` (a half-spread in the same units, or None).
+
+`ArbReport` is the checker's result:
+
+- `violations`: a dataframe with columns `kind`, `T`, `k`, `magnitude`,
+  `magnitude_in_spreads`. One row per violated node. Empty if nothing is
+  flagged.
+- `masks`: boolean arrays on the evaluation grid, keyed `"call_spread"`,
+  `"butterfly"`, `"calendar"`, `"bounds"`. Quote checks use `"quote_bid"`,
+  `"quote_ask"`, `"calendar"` and may leave the grid masks empty.
+- `min_density`: the smallest risk-neutral density of `log(Z)` on the
+  grid, or NaN if the grid has no density.
+- `ok`: true when `violations` is empty.
+- `note`: plain text. For `check_surface` it says that the test is
+  pointwise on the supplied grid and says nothing between the nodes.
+
+`Vanilla(K, kind)` is a European call or put on the forward.
+`Digital(K, kind)` is cash-or-nothing: it pays 1 when the forward finishes
+in the money, and 0 otherwise. `Contract` pairs a payoff with an expiry `T`.
+
+`Spot`, `Forward`, and `Param(name)` are risk factors. `Forward` is
+`d/dF` with `df` held fixed. `Spot` is the same bump under the reading
+that `F` moves one-for-one with spot (`r = q`, or a futures-style bump).
+The two differ only when a later adapter supplies a rate. `Param("sigma")`
+is Black-Scholes vega. `Param("v0")` would be a Heston vega. A number
+called "vega" without a factor name is not a result this library returns.
+
+`GreeksResult` holds `value` with shape `(n_contracts, n_factors)`,
+`stderr` of that shape or None, `n_evals`, `wall_time`, and `method`
+(a short string such as `"pathwise"`).
+
+## 4. Protocols
+
+Defined in `volsurface/core/protocols.py`. They are runtime-checkable, so
+a plugin does not have to subclass anything. `capabilities(model)` returns
+the set of names whose protocols the object satisfies. The dashboard should
+use that helper rather than a hand-written flag.
+
+```
+class Model(Protocol):
+    def price(self, F, K, T, df=1.0, kind="call", *, state=None) -> ndarray
+    def initial_state(self) -> State
+
+class SupportsSimulate(Protocol):
+    def simulate(self, n_paths, times, *, seed, state0=None) -> Paths
+
+class SupportsCharFunc(Protocol):
+    def char_func(self, u, T, *, state=None) -> ndarray
+        # E[exp(i u X_T)], X_T = log(S_T / F_T). No extra drift term.
+    def cumulants(self, T, *, state=None) -> tuple[float, float, float]
+        # c1, c2, c4 of X_T, for the range of a cosine expansion.
+
+class Parametric(Protocol):
+    def to_unconstrained(self) -> ndarray
+    def from_unconstrained(cls, x) -> Self          # classmethod
+    def param_spec(cls) -> list[ParamSpec]          # classmethod
+
+class Surface(Protocol):
+    market: Curves
+    domain: Domain
+    def call(self, T, k) -> ndarray                 # the only required method
+
+class Fitter(Protocol):
+    def fit(self, data: MarketData) -> FitResult
+
+class GreeksEngine(Protocol):
+    def supports(self, model, contract, order: int) -> bool
+    def compute(self, model, contracts, wrt, *, order=1,
+                state=None, n_paths=None, seed=None) -> GreeksResult
+```
+
+`price_with_error(model, F, K, T, df=1.0, kind="call", *, state=None, n_paths=None, seed=None)`
+returns a `PriceResult`. A closed-form model reports `stderr=None` and
+`n_evals=1`. A Monte Carlo model reports the standard error of the
+estimator it actually used, including antithetic pairing and a control
+variate when those are switched on.
+
+Black-Scholes and Heston implement `Model`, `Parametric`, and
+`SupportsCharFunc`. Heston's characteristic function is the trap-free
+Gatheral form already in `volsurface/heston.py`. Its first cumulant is the
+closed form `-1/2 * integral E[v_t] dt`. The second and fourth are
+derivatives of `log phi` at the origin, read from a fixed polynomial
+stencil (see the method docstring). Heston does not implement
+`SupportsSimulate`: the Euler scheme in `heston.simulate` has a different
+signature and stays where it is until a later phase wraps it.
+
+`volsurface/plugins.py` holds an in-tree registry, `@register("name")`,
+and resolves `volsurface.models` entry points the same way. A plugin in
+another repository implements the protocols and does not import volsurface.
+
+## 5. Surfaces
+
+Implemented in `volsurface/surface/`. `SurfaceMixin` derives the quantities
+below from `call`. A surface overrides a method when it has an analytic
+form, so a comparison of interpolators is not a comparison of finite
+differences.
+
+Let `C` be the normalised call.
+
+- `iv(T, k)`: Black implied volatility of `C`. NaN where the price has no
+  volatility information.
+- `total_variance(T, k)`: `iv^2 * T`.
+- `dcall_dk`, `d2call_dk2`, `dcall_dT`: derivatives. The mixin uses a
+  central step of `1e-4`. Overrides replace that.
+- `density(T, k)`: the risk-neutral density of `k_log = log(Z_T)`,
+
+```
+phi(k) = exp(-k) * (d²C/dk² - dC/dk).
+```
+
+  Equivalently `phi(k) = exp(k) * d²C/dx²` with `x = exp(k)`. For a total
+  variance `w(k)` this is Durrleman's formula
+
+```
+g(k) = (1 - k w' / (2 w))^2 - (w')^2 / 4 * (1/w + 1/4) + w'' / 2,
+phi(k) = g(k) / sqrt(2 pi w) * exp(-d2(k)^2 / 2),
+```
+
+  with `d2 = -k / sqrt(w) - sqrt(w) / 2`. Flat Black-Scholes has `g = 1`
+  and `phi` equal to the normal density of `N(-w/2, w)`. A negative value
+  is a butterfly arbitrage.
+
+- `local_var(T, k)`: Dupire local variance in total-variance form,
+  `(dw/dT) / g(k)`. This is a variance, not a volatility, so a negative
+  number stays negative and visible. It is NaN where `g` is zero or `w`
+  is not positive.
+
+`ModelSurface(model, market, domain)` samples `model.price` and divides by
+`df * F`.
+
+### 5.1 Linear
+
+`LinearSurface` interpolates the normalised call linearly in the normalised
+strike `x = exp(k)` at each quoted expiry, and linearly in `T` at fixed `k`
+between expiries. Outside the quoted strikes the call is held flat at the
+edge value. Outside the quoted expiries it is held flat in `T`. Both
+regions are marked extrapolated.
+
+Between nodes the second derivative is zero, so a grid that misses the
+nodes cannot see a butterfly. At a quoted node the surface reports a second
+derivative that makes the checker's strike convexity equal to the jump in
+slope `dC/dx` across that node (right slope minus left slope). The jump is
+the discrete butterfly: convex call prices have an increasing slope, and
+the violation magnitude is how far the slope falls.
+
+This is the `eta = 0` limit described for SANOS: linear interpolation of
+the call in the strike. **Hypothesis:** the paper's linear model is this
+object, including the flat extrapolation past the last strike. The PDF
+should confirm the extrapolation.
+
+### 5.2 Cubic spline
+
+`SplineSurface` fits a natural cubic spline of implied volatility against
+`k` at each expiry, and interpolates total variance linearly in `T` at
+fixed `k` between expiries. `iv` returns the spline, which is allowed to
+be negative outside the quotes. `call` uses Black's formula where the
+spline volatility is positive and the intrinsic value `(1 - exp(k))+`
+otherwise. Derivatives, density, and local variance use the Durrleman
+formulas where total variance is positive.
+
+The cubic extrapolates as a cubic polynomial. That is the wing the demo
+is about: the implied volatility oscillates or crosses zero, and the
+density turns negative. Those points are marked extrapolated. The checker
+still evaluates them, because the wing is the object under study.
+
+### 5.3 Raw SVI
+
+One expiry has total variance
+
+```
+w(k) = a + b * (rho * (k - m) + sqrt((k - m)^2 + sigma^2)),
+```
+
+with `b > 0`, `|rho| < 1`, `sigma > 0`, and `a + b * sigma * sqrt(1 - rho^2) >= 0`
+so that `w` stays non-negative. `SVISurface` holds one parameter set per
+quoted expiry and interpolates `w` linearly in `T` at fixed `k`. All
+derivatives, `g`, the density, and local variance are analytic.
+
+The fitter minimises squared error in total variance, in the unconstrained
+coordinates of `param_spec`. It is a least-squares fit, not a guarantee of
+no arbitrage.
+
+The arbitrageable slice used in tests is Example 3.1 of Gatheral and
+Jacquier (2014), the parameters Axel Vogt posted: `(a, b, m, rho, sigma) = (-0.0410, 0.1331, 0.3586, 0.3060, 0.4153)` at `T = 1`. The tuple order is
+the one printed in the paper. Read that way, the SVI-JW parameters match
+the values in their Example 5.1 (`v = 0.01742625` and the rest). Durrleman's
+`g` is negative somewhere on that slice.
+
+## 6. Arbitrage checker
+
+Implemented in `volsurface/arbitrage/`.
+
+### 6.1 `check_surface(surface, T, k, *, tol=ArbTol())`
+
+Pointwise on the grid `T` (shape `(m,)`) and `k` (shape `(n,)`). At each
+node, with `x = exp(k)` and `C` the normalised call:
+
+| kind | quantity | violation when |
+|---|---|---|
+| bounds | `C` against `((1 - x)+ , 1)` | the price leaves the interval by more than `tol.price` |
+| call_spread | slope `s = dC/dx = exp(-k) * dC/dk` | `s` leaves `[-1, 0]` by more than `tol.price` |
+| butterfly | convexity `gamma = d²C/dx² = exp(-2k) * (d²C/dk² - dC/dk)` | `gamma < -tol.price` |
+| calendar | `dC/dT` at fixed `k` | `dC/dT < -tol.price` |
+
+`magnitude` is the amount by which the quantity leaves the allowed region,
+in normalised-call units (a slope gap, for the linear surface's discrete
+butterfly). `magnitude_in_spreads` is `magnitude / tol.spreads` when a
+spread is supplied, otherwise NaN.
+
+The derivatives are the surface's own methods, so SVI is judged by
+Durrleman's `g` and not by a finite difference. `min_density` is the
+minimum of `density(T, k)` on the grid.
+
+The report's `note` states that passing on the nodes does not constrain
+the surface between the nodes.
+
+### 6.2 `check_quotes(data, *, side="bidask")`
+
+An LP, solved with `scipy.optimize.linprog` method `"highs"`. This is the
+feasibility form of the SANOS `eta = 0` problem, not the full fit (that fit
+is a later phase).
+
+Puts are turned into calls by put-call parity, `cash_call = cash_put + df * (F - K)`,
+and then divided by `df * F`. For each expiry the unknowns are probabilities
+`q_j` on the quoted normalised strikes plus two boundary strikes, `0` and
+a point beyond the largest quote. The constraints are `q >= 0`, `sum q = 1`,
+and `sum q_j * x_j = 1` (the martingale has mean 1). The model call at a
+quoted strike is `sum q_j * (x_j - x)+`.
+
+`side="bidask"` requires the model call to lie between the normalised bid
+and ask. `side="mid"` uses the quote's working price as both bid and ask.
+Slack variables absorb violations. The objective minimises the sum of
+slacks. A quote whose slack exceeds `tol.price` is a row in `violations`,
+kind `"quote_bid"` or `"quote_ask"`, magnitude equal to the slack.
+
+Calendar: at a shared moneyness grid, the longer expiry's model call must
+dominate the shorter one's, again up to a slack. A positive slack is kind
+`"calendar"`.
+
+Quotes with a missing bid or ask are dropped from a `"bidask"` check. The
+note records how many were dropped. The committed SPY snapshot has no
+bid or ask (it was taken from last trades, and SPY options are American),
+so a bid-ask check on that file has nothing to constrain. **Hypothesis:**
+violations of a mid check on that file mix three effects: stale last
+trades, the American early-exercise premium, and any genuine butterfly
+or calendar arbitrage in the marks. The report is not evidence of a
+tradable arbitrage.
+
+`ok` is true when every slack is within `tol.price`.
+
+## 7. Monte Carlo and the z-rule
+
+Implemented in `volsurface/mc/` and `volsurface/models/gbm.py`.
+
+`GBM` is geometric Brownian motion with constant volatility `sigma`.
+Fields `n_paths`, `n_steps`, `seed`, `antithetic`, `control_variate`, and
+`scheme` (`"exact"` or `"euler"`) are part of the model, so the same fields
+produce the same prices.
+
+- `"exact"` draws one normal increment per time interval and updates the
+  log forward. For geometric Brownian motion that transition is exact.
+- `"euler"` updates `Z` with Euler-Maruyama, `Z + sigma Z dW`. The
+  discretisation is biased. The bias does not shrink when the path count
+  grows, only when the step count grows.
+
+`simulate(n_paths, times, *, seed, state0=None)` returns `Paths`. `times`
+includes 0. One `SeedSequence` child is spawned for the whole run, not one
+per strike or expiry. Draw order, exact scheme: for each time step after
+0, a vector of `n_paths` standard normals, path index fastest. If
+`antithetic` is on, the paired path uses the negated normal and is stored
+as the second half of the batch (the batch size doubles). The control
+variate, when on, is `Z_T` itself, whose mean is 1. The coefficient is the
+sample regression coefficient of the payoff on `Z_T`. The reported standard
+error is the sample standard deviation of the controlled, antithetic-averaged
+payoffs, divided by `sqrt(n_batches)`.
+
+`price` prices every strike at one maturity from one simulation.
+`price_grid(model, F, strikes, maturities, df, kind, *, n_paths, seed)`
+simulates once on the union of the maturities and prices the whole grid
+from those paths. That is the grid whose implied volatility the demo plots.
+
+Inversion, on a grid of cash prices (Monte Carlo or closed form):
+
+- Price to implied vol to price recovers the price to a relative error of
+  `1e-12` wherever the implied vol exists.
+- Implied vol to price to implied vol recovers the vol to `1e-8` where the
+  normalised vega `n(d1) * sqrt(T)` exceeds `1e-8`. Nodes below that
+  threshold are excluded, counted, and reported. They are not deleted
+  quietly from the assertion.
+
+Put-call parity for Monte Carlo is pathwise, on the same paths:
+`call_payoff - put_payoff = df * F * (Z - K/F)`, to `1e-12`. The averaged
+prices satisfy parity with the averaged `Z`, which equals `df (F - K)` only
+in expectation.
+
+### The z-rule
+
+A test that demands `|price - reference| < 3 * stderr` at every node of a
+large grid fails by chance. For about 200 independent normal nodes the
+probability that the maximum exceeds 3 is a few tens of percent.
+
+For a grid of `n` nodes, with `z = (estimate - reference) / stderr`:
+
+1. `max |z| < 4.5`. The test states `n`. At `4.5` the normal tail times a
+   few hundred nodes is still small, which is why the bound does not depend
+   on picking a lucky seed.
+2. The fraction of nodes with `|z| < 2` lies between 0.90 and 0.99.
+3. `|mean(z)| < 0.5`, a bias check.
+
+Nodes that share paths are one draw, not `n` draws. A z-rule test that
+checks the fraction uses independent seeds across nodes (or across
+maturities, with the dependence stated). The standard-error slope test is
+separate: independent seeds at path counts from `10^3` to `10^6`, and the
+slope of `log(standard error)` against `log(n_paths)` equals `-0.5` within
+`0.05`.
+
+## 8. Greeks
+
+Implemented in `volsurface/greeks/`. Five engines, each a `GreeksEngine`.
+
+The analytic engine supports Black-Scholes vanillas and cash-or-nothing
+digitals, orders 1 and 2, for `Spot`, `Forward`, and `Param("sigma")`.
+With `df` held fixed and `Spot` read as a one-for-one forward bump, spot
+delta equals forward delta. Cash-or-nothing call price is `df * N(d2)`.
+
+The finite-difference engine reprices with a central bump. It supports
+any model whose `price` covers the contract, orders 1 and 2. `crn=True`
+reuses the seed (common random numbers). `crn=False` uses an independent
+seed on the bumped price. The order test: for bump sizes above the
+round-off floor, halving the bump cuts the error in a first derivative by
+about 4, and the slope of log error against log bump is `2` within `0.2`.
+The common-random-number test states the variance-reduction factor it
+requires. The U-curve (error against bump size, truncation falling and
+round-off rising) is a figure, not a pass/fail threshold.
+
+The pathwise engine differentiates the discounted payoff with the normal
+increments held fixed. For a vanilla call on geometric Brownian motion the
+forward delta on a path is `df * Z * 1_{F Z > K}`, and the vega follows by
+differentiating `Z` with respect to `sigma`. The estimator is unbiased for
+Lipschitz payoffs. It is zero almost surely for a digital and for gamma,
+because those derivatives hit a kink or a corner. `supports` returns false
+for digitals and for order 2. Returning a number that is silently zero
+would be a wrong greek.
+
+The likelihood-ratio engine writes the derivative onto the lognormal
+density of the terminal forward and multiplies the undifferentiated payoff
+by the score. It supports digitals and order 1 and 2 for geometric
+Brownian motion. Variance is large at short expiry because the score
+divides by `sigma sqrt(T)`. That comparison is a figure and a test that
+the short-dated standard error exceeds the long-dated one at equal path
+count.
+
+The autodiff engine differentiates the same simulation the pathwise engine
+differentiates, in torch, dtype float64. It therefore matches the pathwise
+estimator to `1e-10` and does not repair gamma or digitals. `supports`
+agrees with the pathwise engine.
+
+`compute` accepts a sequence of contracts and a sequence of risk factors.
+`value[i, j]` is contract `i` against factor `j`.
+
+Cost in the demo is `n_evals` (paths times repricings) against RMSE versus
+the analytic greek, on log-log axes.
+
+## 9. Random numbers
+
+Every draw goes through `np.random.default_rng` on an `int` or a
+`numpy.random.SeedSequence`. `volsurface/mc/rng.py` turns an int into a
+`SeedSequence`, and `spawn` produces one child per independent stream.
+
+A grid of strikes and expiries shares one child for the whole model run.
+Draw order is part of each model's docstring. Two implementations produce
+the same paths for the same seed only when they consume draws in the same
+order. Tests that need identical paths assert that order. Tests that need
+accuracy use the z-rule instead.
+
+## 10. Data
+
+`market_data_from_snapshot` builds a `MarketData` from a tidy chain
+(`volsurface/chains.py`). Forwards and discount factors are the ones
+`market_implied_vols` already infers. `F_err` is the standard deviation of
+the near-the-money parity forwards. `day_count` is `"ACT/365"`.
+
+Exercise and settlement are not in the parquet file. The loader fills
+`"american"` and `"physical"` when the underlying is `SPY`, and
+`"european"` and `"cash"` when it is `SPX` or `XSP`. Any other underlying
+requires the caller to pass them. **Hypothesis:** that mapping matches the
+contracts. It is an assumption of the loader, not a field we observed.
+
+The committed file `data/snapshots/SPY_2026-10-07.parquet` has last-trade
+prices and empty bid and ask. Surface demos in Phase 1 use it and say so.
+SANOS fits, later, need European quotes.
+
+## 11. Tests that Phase 1 must keep
+
+Existing tests stay green: Black-Scholes parity and implied-vol round trip,
+the Fang and Oosterlee Heston references, the chain schema, the committed
+snapshot. New tests are those named in sections 5 to 8. A test marked
+`slow` is allowed to be heavy. `pytest -m "not slow"` is the bar for a
+pull request, together with `ruff check`.
+
+Statistical tests state the tolerance in standard errors and the sample
+size, or they use the z-rule and state `n`.
+
+## 12. Pull requests
+
+Stack, each branch based on the previous one:
+
+| logical name | branch slug | depends on | owns |
+|---|---|---|---|
+| P1a | `p1a-design-foundations` | `main` | `docs/DESIGN.md`, `volsurface/core/`, `volsurface/mc/rng.py`, `volsurface/mc/pricing.py`, `volsurface/plugins.py`, `volsurface/models/` as a package, the Black-Scholes and Heston classes |
+| P1b | `p1b-surfaces-checker` | P1a | `volsurface/surface/`, `volsurface/arbitrage/`, `volsurface/fit/` |
+| P1c | `p1c-gbm-mc` | P1b | `volsurface/models/gbm.py`, `volsurface/mc/grid.py` |
+| P1d | `p1d-greeks` | P1c | `volsurface/greeks/` |
+
+`volsurface/bs.py`, `volsurface/heston.py`, `volsurface/chains.py`, and
+`volsurface/smile.py` stay the function modules the existing tests import.
+The classes moved into `volsurface/models/` call those functions.
+
+Rules:
+
+- One pull request, one branch. Review fixes go to that branch.
+- Title `[P1b] Surfaces and arbitrage checker`. The body has two paragraphs
+  of plain English, the DESIGN sections implemented, the acceptance tests
+  and their results, the demo figure, the hypotheses, the LOG note, and
+  which pull request it depends on.
+- Draft until Corey merges. This stack does not merge itself.
+- Do not tick boxes in `ROADMAP.md` and do not add a session tag. Corey
+  does that after working through the material.
+- Labels, when a human adds them: `stack`, `needs-claude-review`,
+  `needs-corey`. `blocked-on-data` and `cut-list` are for later phases.
+- Two pull requests do not edit the same module. `core/protocols.py`
+  changes only in a design pull request.
+- A number reaches the site, the research statement, or the question bank
+  only after the pull request that produced it has been merged and written
+  into `LOG.md`.
+
+Branch names in git for the cloud run that opened this stack carry a
+`cursor/` prefix and an `-aa44` suffix, because that run's branch policy
+requires them. The logical name in the table is the name to rebase and to
+cite.
+
+## 13. Out of scope for Phase 1
+
+SANOS stages S1 to S5 beyond the feasibility LP in `check_quotes`, Heston
+calibration and the cosine pricer, Dupire simulation, SABR, rough Bergomi,
+the deep-hedging adapter, and the dashboard JSON. `check_quotes` is the LP
+those stages will call, not a fit to the market.
