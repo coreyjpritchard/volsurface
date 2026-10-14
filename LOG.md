@@ -7,28 +7,20 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
-<<<<<<< HEAD
-## 2026-10-13 Library P1c: geometric Brownian motion by Monte Carlo, in review
+## 2026-10-14 Library P1c review: z-rule, calibration, out-of-the-money wings
 
-Exact and Euler stepping of the unit-mean martingale `Z`. One seed covers a
-strike by expiry grid. The standard error is kept on `PriceResult`, off the
-array `price` returns. Antithetic pairs are the second half of the batch. The
-control is `Z` at expiry, mean 1.
+The z-rule bounds come from `volsurface/mc/zrule.py` and scale with the node
+count. A shared-path grid checks the maximum on one draw and the mean on 32
+replications, using the observed standard deviation of those means. The
+standard-error test is a calibration over 200 seeds, not a slope that holds
+because `stderr = sd / sqrt(n)`. The implied-vol coverage grid is
+standardised moneyness on `[-4, 4]`.
 
-Against Black, 200 nodes with independent seeds and 8,000 paths pass the
-z-rule (max |z| below 4.5, the fraction inside 2 between 0.90 and 0.99, mean
-z inside 0.5). From 10^3 to 10^6 paths the log standard error slopes at -0.5
-within 0.05. One-step Euler at volatility 1 matches the normal formula and
-misses Black, on 100,000 paths. Implied vol round trip: 85 of 124 nodes on the
-closed-form grid have normalised vega at or below 1e-8 and are excluded. The
-figure, 8,000 shared paths, has no implied vol at 6 of 63 nodes, all of them
-one-week wings.
+The figure prices puts for `k < 0` and calls otherwise. Two of 63 nodes have
+no implied vol, both the one-week wings at `|k| = 0.10`, where the
+out-of-the-money price on this seed is zero. The one-year curve sits about
+0.45 volatility points below Black because the strikes share the paths.
 
-Hypotheses, not findings: the smooth shift of the one-year curve is the shared
-seed; empty wings fill from more paths, not from a smoother interpolant; Euler
-bias at volatility 0.2 hides inside a few thousand paths; the control helps
-most at the money.
-=======
 ## 2026-10-14 Library P1b review: checker, SVI diagnostics, two-sided quotes
 
 `SVISurface` accepts list inputs, which is what `in_spread` passes. The floor
@@ -62,7 +54,27 @@ stencil, not against a copied closed form.
 
 `Spot` stays a one-for-one forward bump with `df` fixed. That is the reading
 in DESIGN section 8, and the greek tests lock `Spot == Forward`.
->>>>>>> cursor/p1b-surfaces-checker-aa44
+
+## 2026-10-13 Library P1c: geometric Brownian motion by Monte Carlo, in review
+
+Exact and Euler stepping of the unit-mean martingale `Z`. One seed covers a
+strike by expiry grid. The standard error is kept on `PriceResult`, off the
+array `price` returns. Antithetic pairs are the second half of the batch. The
+control is `Z` at expiry, mean 1.
+
+Against Black, 200 nodes with independent seeds and 8,000 paths pass the
+z-rule (max |z| below 4.5, the fraction inside 2 between 0.90 and 0.99, mean
+z inside 0.5). From 10^3 to 10^6 paths the log standard error slopes at -0.5
+within 0.05. One-step Euler at volatility 1 matches the normal formula and
+misses Black, on 100,000 paths. Implied vol round trip: 85 of 124 nodes on the
+closed-form grid have normalised vega at or below 1e-8 and are excluded. The
+figure, 8,000 shared paths, has no implied vol at 6 of 63 nodes, all of them
+one-week wings.
+
+Hypotheses, not findings: the smooth shift of the one-year curve is the shared
+seed; empty wings fill from more paths, not from a smoother interpolant; Euler
+bias at volatility 0.2 hides inside a few thousand paths; the control helps
+most at the money.
 
 ## 2026-10-13 Library P1b: surfaces and the checker, in review
 

@@ -1,30 +1,20 @@
 """Geometric Brownian motion: z-rule against Black, inversion, parity, Euler bias.
 
-The z-rule is ``docs/DESIGN.md`` section 7. ``n`` is stated on each test that
-uses it. Nodes in the fraction test have independent seeds. Nodes that share
-paths are not treated as independent, and that test does not check the fraction.
+The z-rule is ``docs/DESIGN.md`` section 7, implemented in
+``volsurface.mc.zrule``. ``n`` is stated on each test that uses it. Nodes in
+the fraction test have independent seeds. A shared-path grid checks the max
+on one draw and the mean on independent replications of that grid.
 """
 
 import numpy as np
-import pytest
 from scipy.stats import norm
 
 from volsurface import bs
 from volsurface.mc.grid import price_grid
 from volsurface.mc.rng import generator, spawn
+from volsurface.mc.zrule import check_replication_means, check_z, max_abs_bound
 from volsurface.models.gbm import GBM
 from volsurface.plugins import create
-
-
-def _z_rule(z, n: int) -> None:
-    """max |z| < 4.5, 90 to 99 percent inside 2, |mean z| < 0.5. ``n`` is the node count."""
-    z = np.asarray(z, dtype=float)
-    assert z.shape == (n,)
-    assert np.all(np.isfinite(z))
-    assert np.max(np.abs(z)) < 4.5, float(np.max(np.abs(z)))
-    frac = float(np.mean(np.abs(z) < 2.0))
-    assert 0.90 <= frac <= 0.99, frac
-    assert abs(float(z.mean())) < 0.5, float(z.mean())
 
 
 def test_draw_order_is_one_normal_vector_per_step():
@@ -75,42 +65,71 @@ def test_exact_scheme_matches_black_scholes_by_the_z_rule():
         result = model.price_with_error(F, K, t, df, "call")
         reference = float(bs.price(F, K, t, sigma, df, "call"))
         z[i] = (float(result.value) - reference) / float(result.stderr)
-    _z_rule(z, 200)
+    message = check_z(z)
+    assert message is None, message
 
 
-def test_standard_error_falls_like_one_over_sqrt_n():
-    """Independent seeds, path counts 10^3 to 10^6.
+def test_reported_standard_error_matches_the_scatter_of_estimates():
+    """R = 200 seeds, antithetic pairs and the Z control, 2_000 paths, one step.
 
-    The slope of log(stderr) on log(n) is -0.5 within 0.05.
+    ``stderr = sd / sqrt(n)`` by construction, so a slope of log(stderr) on
+    log(n) does not test the estimator. Here the sample standard deviation of
+    the 200 prices, divided by the mean reported standard error, lies in
+    [0.9, 1.1].
     """
     F, K, T, df, sigma = 100.0, 100.0, 1.0, 1.0, 0.2
-    counts = np.array([10**3, 10**4, 10**5, 10**6])
-    stderr = np.empty(counts.size)
-    for i, n in enumerate(counts):
-        model = GBM(sigma=sigma, n_paths=int(n), n_steps=1, seed=50 + i, scheme="exact")
-        stderr[i] = float(model.price_with_error(F, K, T, df, "call").stderr)
-    slope = float(np.polyfit(np.log(counts), np.log(stderr), 1)[0])
-    assert slope == pytest.approx(-0.5, abs=0.05), slope
+    n_rep = 200
+    estimates = np.empty(n_rep)
+    stderr = np.empty(n_rep)
+    for seed in range(n_rep):
+        model = GBM(
+            sigma=sigma,
+            n_paths=2_000,
+            n_steps=1,
+            seed=seed,
+            scheme="exact",
+            antithetic=True,
+            control_variate=True,
+        )
+        result = model.price_with_error(F, K, T, df, "call")
+        estimates[seed] = float(result.value)
+        stderr[seed] = float(result.stderr)
+    ratio = float(np.std(estimates, ddof=1) / np.mean(stderr))
+    assert 0.9 <= ratio <= 1.1, ratio
 
 
 def test_shared_path_grid_and_iv_round_trip():
-    """One simulation for the whole grid. z uses the shared paths, so only max and mean are checked.
+    """One simulation for the whole grid. The nodes share paths, so they are one draw.
 
-    n = 4 maturities x 11 strikes = 44. Price to implied vol to price, relative 1e-12
-    where the implied vol exists. The excluded count is the nodes with no volatility.
+    n = 4 maturities x 11 strikes = 44. The max bound uses that n. The mean is
+    checked on R = 32 independent replications, with the observed sd of the
+    replication means. Price to implied vol to price, relative 1e-12 where the
+    implied vol exists.
     """
     F, df, sigma = 50.0, 0.99, 0.2
     maturities = np.array([0.25, 0.5, 1.0, 2.0])
     k = np.linspace(-0.2, 0.2, 11)
     K = F * np.exp(k)
     model = GBM(sigma=sigma, scheme="exact", antithetic=True, control_variate=True)
-    result = price_grid(model, F, K, maturities, df, "call", n_paths=20_000, seed=7)
     reference = np.vstack([bs.price(F, K, t, sigma, df, "call") for t in maturities])
+
+    def grid(seed: int):
+        return price_grid(model, F, K, maturities, df, "call", n_paths=20_000, seed=seed)
+
+    def z_of(seed: int) -> np.ndarray:
+        result = grid(seed)
+        return (result.value - reference) / result.stderr
+
+    result = grid(7)
     z = (result.value - reference) / result.stderr
     n = int(z.size)
     assert n == 44
-    assert np.max(np.abs(z)) < 4.5, float(np.max(np.abs(z)))
-    assert abs(float(z.mean())) < 0.5, float(z.mean())
+    message = check_z(z, mean=False, fraction=False)
+    assert message is None, message
+    n_rep = 32
+    means = np.array([float(z_of(seed).mean()) for seed in range(n_rep)])
+    message = check_replication_means(means)
+    assert message is None, message
 
     excluded = 0
     for i, t in enumerate(maturities):
@@ -124,36 +143,40 @@ def test_shared_path_grid_and_iv_round_trip():
     assert excluded == 0, f"excluded {excluded} of {n} nodes with no implied vol"
 
 
-def test_closed_form_iv_round_trip_counts_low_vega_nodes():
+def test_closed_form_iv_round_trip_on_standardised_moneyness():
     """Vol to price to vol, to 1e-8 where n(d1) sqrt(T) exceeds 1e-8.
 
-    Nodes below that threshold are counted. They are not dropped quietly.
-    Where an implied vol is returned, the price round trip is relative 1e-12.
+    Strikes are built in standardised moneyness ``k / (sigma sqrt(T))`` on
+    ``[-4, 4]``, 21 strikes, four expiries. The fraction of that grid whose
+    normalised vega clears ``1e-8`` is asserted, not an absolute exclusion
+    count. Where an implied vol is returned, the price round trip is relative
+    1e-12. With a failed inversion stored as NaN, that round trip holds by
+    construction on the finite nodes.
     """
     F, df, sigma = 100.0, 0.95, 0.2
-    k = np.linspace(-1.5, 1.5, 31)
+    moneyness = np.linspace(-4.0, 4.0, 21)
     maturities = np.array([0.005, 0.02, 0.25, 1.0])
-    K = F * np.exp(k)
-    excluded = 0
+    kept = 0
     total = 0
     for t in maturities:
+        sd = sigma * np.sqrt(t)
+        k = moneyness * sd
+        K = F * np.exp(k)
         total += K.size
         price = bs.price(F, K, t, sigma, df, "call")
         back = bs.implied_vol(price, F, K, t, df, "call")
-        sd = sigma * np.sqrt(t)
-        d1 = np.log(F / K) / sd + 0.5 * sd
+        d1 = -moneyness + 0.5 * sd
         vega = norm.pdf(d1) * np.sqrt(t)
         keep = vega > 1e-8
-        excluded += int((~keep).sum())
+        kept += int(keep.sum())
         assert np.all(np.isfinite(back[keep]))
         np.testing.assert_allclose(back[keep], sigma, atol=1e-8)
         finite = np.isfinite(back)
         rebuilt = bs.price(F, K[finite], t, back[finite], df, "call")
         rel = np.abs(rebuilt - price[finite]) / np.abs(price[finite])
         assert np.max(rel) < 1e-12, float(np.max(rel))
-    # 31 strikes by 4 expiries. The short wings are the excluded nodes.
-    assert total == 124
-    assert excluded == 85, f"excluded {excluded} of {total}"
+    coverage = kept / total
+    assert coverage >= 0.95, f"coverage {coverage:.3f} on {total} nodes"
 
 
 def test_one_step_euler_matches_the_normal_and_not_black():
@@ -168,8 +191,8 @@ def test_one_step_euler_matches_the_normal_and_not_black():
     black = float(bs.price(F, K, T, sigma, df, "call"))
     z_euler = (float(result.value) - euler) / float(result.stderr)
     z_black = (float(result.value) - black) / float(result.stderr)
-    assert abs(z_euler) < 4.5, z_euler
-    assert abs(z_black) > 4.5, z_black
+    assert check_z(np.array([z_euler])) is None, z_euler
+    assert abs(z_black) > max_abs_bound(1), z_black
 
 
 def test_price_grid_uses_one_seed_for_every_maturity():
