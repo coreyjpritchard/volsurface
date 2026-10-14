@@ -425,8 +425,8 @@ from those paths. That is the grid whose implied volatility the demo plots.
 
 `implied_vol` in `volsurface/bs.py` returns NaN when the safeguarded Newton
 residual misses `tol`, as well as outside the arbitrage bounds. A finite
-implied vol is one the formula reprices. That change is owned by P1c; section
-12 records why it lives in the function module.
+implied vol is one the formula reprices. Section 12 records why that edit
+sits in the function module.
 
 Inversion, on a grid of cash prices (Monte Carlo or closed form):
 
@@ -585,21 +585,21 @@ Stack, each branch based on the previous one:
 
 | logical name | branch slug | depends on | owns |
 |---|---|---|---|
-| P1a | `p1a-design-foundations` | `main` | `docs/DESIGN.md`, `volsurface/core/`, `volsurface/mc/rng.py`, `volsurface/mc/pricing.py`, `volsurface/plugins.py`, `volsurface/models/` as a package, the Black-Scholes and Heston classes |
+| P1a | `p1a-design-foundations` | `main` | `docs/DESIGN.md`, `volsurface/core/`, `volsurface/mc/rng.py`, `volsurface/mc/zrule.py`, `volsurface/mc/pricing.py`, `volsurface/plugins.py`, `volsurface/models/` as a package, the Black-Scholes and Heston classes, and the failed-residual NaN in `volsurface/bs.py` |
 | P1b | `p1b-surfaces-checker` | P1a | `volsurface/surface/`, `volsurface/arbitrage/`, `volsurface/fit/` |
-| P1c | `p1c-gbm-mc` | P1b | `volsurface/models/gbm.py`, `volsurface/mc/grid.py`, and the failed-residual NaN in `volsurface/bs.py` |
+| P1c | `p1c-gbm-mc` | P1b | `volsurface/models/gbm.py`, `volsurface/mc/grid.py` |
 | P1d | `p1d-greeks` | P1c | `volsurface/greeks/` |
 
 `volsurface/bs.py`, `volsurface/heston.py`, `volsurface/chains.py`, and
 `volsurface/smile.py` stay the function modules the existing tests import.
 The classes moved into `volsurface/models/` call those functions.
 
-One exception. P1c changes `implied_vol` so a Newton residual that misses
-`tol` returns NaN. A finite volatility is then one the formula reprices, and
-the price round trip in section 7 holds by construction on those nodes. The
-change is a few lines at the end of the iteration, and the test that needs
-it is the Monte Carlo inversion. A fifth pull request for those lines was
-considered and not opened.
+One exception. This design revision changes `implied_vol` so a Newton residual
+that misses `tol` returns NaN. A finite volatility is then one the formula
+reprices, and the price round trip in section 7 holds by construction on
+those nodes. P1c's Monte Carlo grid is where the coverage fraction is tested.
+The change is a few lines at the end of the iteration. A separate pull request
+for those lines was considered and not opened.
 
 Rules:
 
