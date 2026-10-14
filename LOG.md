@@ -31,17 +31,24 @@ about `0.4` seconds. The Feller ratio is reported (`0.75` on that set) and
 not enforced. `check_surface` on a Heston `ModelSurface`, five expiries by
 nine strikes, returns no violations.
 
-SPY last trades of 7 October 2026, 264 quotes, 24 expiries, `|k| <= 0.4`, at
-most 11 strikes each. Four starts, 16.1 seconds. `v0 = 0.00784`,
-`kappa = 9.25`, `theta = 0.0433`, `xi = 2.18`, `rho = -0.639`, Feller ratio
-`0.17`. Root-mean-square price residual `0.58`, largest `2.40`. ATM skew at
-`T = 0.0027`: market `-1.56`, model `-2.65`. At `T = 0.981`: market `-0.28`,
-model `-0.24`. The short end is too steep and the long end is a little flat.
+SPXW mids of 14 October 2026, thinned to `|k| <= 0.4` and at most 11 strikes
+an expiry: 440 quotes, 40 expiries. Four starts, seed 0, vega-weighted
+prices, 27.2 seconds (`docs/figures/p2c_spx_fit.json` records 27.182).
+`v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`,
+`rho = -0.6508`, Feller ratio `0.141`. Solver `xtol`, cost `6.912e-2`.
+Root-mean-square price residual `5.48` index points, largest `20.68`, on a
+spot of `7805.45`. ATM skew on the full quote set, not the thinned fit set.
+At `T = 0.00114`: market `-2.965`, model `-3.050` (level `0.151` against
+`0.087`). At `T = 0.00388`: market `-1.989`, model `-2.890`. At
+`T = 0.0203`: market `-1.057`, model `-1.498`. At `T = 0.963`: market
+`-0.282`, model `-0.239` (level `0.160` against `0.164`). The short-dated
+model skew is steeper than the market. The long end is a little flat.
 
 **Hypothesis:** that pattern is this loss and this thinning, not the only
-thing Heston can do. Session 00, fitting ATM level and skew with `kappa`
-capped at 20, got the opposite short-end error (model flatter). A fit aimed
-at the skew, or a cap on `xi`, is the next specification.
+thing Heston can do. The session 00 fit on this same file, ATM level and
+skew with `kappa` capped at 20, misses the front the other way (model skew
+`-1.865` against the market's `-2.965`). A fit aimed at the skew, or a cap
+on `xi`, is the next specification.
 
 Phase 1 follow-ups in the same branch. One-sided SVI quotes take the median
 two-sided weight. A HiGHS failure sets `ok` to None and keeps the message.

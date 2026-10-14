@@ -1,12 +1,12 @@
-"""Figures for the Heston cosine pricer and the SPY calibration.
+"""Figures for the Heston cosine pricer and the SPX calibration.
 
 Run from the repository root:
 
     python scripts/figures_p2c.py
 
 Writes PNG and CSV under docs/figures/, and the widget preset
-data/presets/heston.json. Seeds are fixed. The SPY file is the committed
-snapshot, last trades, not a two-sided market.
+data/presets/heston.json. Seeds are fixed. The chain is the committed
+SPXW file: CBOE delayed mids, European and cash-settled.
 """
 
 from __future__ import annotations
@@ -125,8 +125,8 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(kept, ignore_index=True)
 
 
-def spy_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPY"))
+def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     full = market_data_from_snapshot(chain)
     data = full.__class__(
         asof=full.asof,
@@ -156,7 +156,7 @@ def spy_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         "n_quotes": int(len(data.quotes)),
         "n_expiries": int(data.quotes["expiry"].nunique()),
     }
-    (FIG / "p2c_spy_fit.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (FIG / "p2c_spx_fit.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
     # Smiles at four expiries nearest 1 day, 1 week, 1 month, 1 year.
     targets = np.array([1.0 / 365.0, 7.0 / 365.0, 30.0 / 365.0, 1.0])
@@ -199,14 +199,14 @@ def spy_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
             )
     ax.set_xlabel("log-moneyness k")
     ax.set_ylabel("implied volatility (%)")
-    ax.set_title("Heston fit against SPY last trades, 7 Oct 2026")
+    ax.set_title("Heston fit against SPX mids, 14 Oct 2026")
     ax.grid(True, alpha=0.3)
     ax.legend(frameon=False, fontsize=7)
     fig.tight_layout()
-    fig.savefig(FIG / "p2c_spy_smiles.png", dpi=140)
+    fig.savefig(FIG / "p2c_spx_smiles.png", dpi=140)
     plt.close(fig)
     smiles = pd.DataFrame(smile_rows)
-    smiles.to_csv(FIG / "p2c_spy_smiles.csv", index=False)
+    smiles.to_csv(FIG / "p2c_spx_smiles.csv", index=False)
 
     skew_rows = []
     # Market skew uses every quote, not the 11-strike subset the fitter saw.
@@ -233,25 +233,27 @@ def spy_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
             }
         )
     skew = pd.DataFrame(skew_rows).sort_values("T")
-    skew.to_csv(FIG / "p2c_spy_skew.csv", index=False)
+    skew.to_csv(FIG / "p2c_spx_skew.csv", index=False)
 
     finite = skew[np.isfinite(skew["market_skew"]) & np.isfinite(skew["model_skew"])]
     short = finite.iloc[0]
     long = finite.iloc[-1]
     fig, ax = plt.subplots(figsize=(6.8, 4.4))
-    ax.plot(finite["T"], finite["market_skew"], marker="o", ms=3.5, label="SPY last trades")
+    ax.plot(finite["T"], finite["market_skew"], marker="o", ms=3.5, label="SPX mids")
     ax.plot(finite["T"], finite["model_skew"], marker="s", ms=3.5, label="fitted Heston")
     ax.axhline(0.0, color="k", lw=0.6)
     ax.set_xlabel("maturity T (year fraction)")
     ax.set_ylabel("ATM skew d iv / d k")
     ax.set_title(
-        f"One day: market {short['market_skew']:.2f}, model {short['model_skew']:.2f}. "
-        f"One year: market {long['market_skew']:.2f}, model {long['model_skew']:.2f}."
+        f"T={short['T']:.4f}: market {short['market_skew']:.2f}, "
+        f"model {short['model_skew']:.2f}. "
+        f"T={long['T']:.3f}: market {long['market_skew']:.2f}, "
+        f"model {long['model_skew']:.2f}."
     )
     ax.grid(True, alpha=0.3)
     ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
-    fig.savefig(FIG / "p2c_spy_skew.png", dpi=140)
+    fig.savefig(FIG / "p2c_spx_skew.png", dpi=140)
     plt.close(fig)
     return smiles, skew, model
 
@@ -289,7 +291,7 @@ def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     error = cos_error_against_n()
     gap = lewis_minus_cos()
-    _, skew, _ = spy_calibration()
+    _, skew, _ = spx_calibration()
     preset()
     at_256 = error.loc[error["N"] == 256].iloc[0]
     print(f"cos N=256 minus reference {at_256['cos_minus_reference']:.3e}")
@@ -304,7 +306,7 @@ def main() -> None:
     print(
         f"skew T={long['T']:.4f} market {long['market_skew']:.3f} model {long['model_skew']:.3f}"
     )
-    print(json.loads((FIG / "p2c_spy_fit.json").read_text()) )
+    print(json.loads((FIG / "p2c_spx_fit.json").read_text()))
 
 
 if __name__ == "__main__":
