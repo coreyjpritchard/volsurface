@@ -2,7 +2,19 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Discrete local volatility round-trips the call on a common strike grid. **Next:** the rough-volatility plug-in, mocked where `roughvol` is absent.
+**Current state:** The rough-volatility plug-in calibrates through `create("rbergomi")` and reads forward variance from the SANOS log contract. `roughvol` is not installed here, so the SPX figure has no rBergomi curve. **Next:** market paths, the three pricers, and the `nu`-only regime chain.
+
+## 2026-10-14 Library P3e: rough-volatility plug-in
+
+`roughvol` does not import. The conformance test skips. `calibrate` calls `create("rbergomi")` and raises `KeyError` when that name is absent. It does not build another model.
+
+On the known two-pillar mixture the log contract `VS(T) = -2 E[log Z_T]` matches `-2 q' log K + eta V` to `1e-12`, and the value at the midpoint maturity is the average of the two pillars to `1e-12`. On the three-expiry Heston book at `eta = 0.25` the same contract is nondecreasing on 13 maturities: every difference is at least `-1e-8`.
+
+A test double, not labelled rBergomi, prices `sigma = 0.2 + 0.4 nu k`. With `H` fixed at 0.167 and seed 7 it recovers `nu = 0.3` to `1e-3`. A second call with the same seed returns the same parameters. `detail["rbergomi"]` is false and the label is `_MockVol`.
+
+SPX, 40 expiries. The power law refit to the market skew is `0.30511 T^{-0.33283}`. The merged Heston parameters are `v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`, `rho = -0.6508`. At `T = 0.00114` the market skew is `-2.9648` and the Heston skew is `-3.2744`. At `T = 0.02032` they are `-1.0565` and `-1.4822`. At `T = 0.4614` they are `-0.3817` and `-0.3881`. At `T = 0.96278` they are `-0.2815` and `-0.2387`. The front at-the-money level is `0.1511` in the market and `0.0879` in Heston. The figure is `docs/figures/p3e_skew.png`. No rBergomi curve is drawn.
+
+**Hypothesis:** the merged Heston fit is steeper than this snapshot from the front out to about half a year, and flatter after that. The next specification is the same figure with `create("rbergomi")` at `H` free, `H = 0.167` and `H = 0.149`, once `roughvol` is installed. The size of the gap between those three curves and the power law is the quantity that comparison measures.
 
 ## 2026-10-14 Library P3d: discrete local volatility
 
