@@ -44,7 +44,9 @@ def market_data_from_snapshot(
     The working price is the chain's ``price`` column (mid when the loader had
     a two-sided quote, otherwise the last trade). Bid and ask are copied
     through and may be missing. ``F_err(T)`` is the standard deviation of the
-    near-the-money forwards implied by put-call parity at that expiry.
+    near-the-money forwards implied by put-call parity at that expiry, held
+    flat outside the pillars. ``F`` and ``df`` follow :func:`_forward_curve`
+    and :func:`_discount_curve`.
     """
     if chain.empty:
         raise ValueError("chain is empty")
@@ -62,9 +64,9 @@ def market_data_from_snapshot(
         .reset_index()
     )
     t_pillars = pillars["T"].to_numpy(dtype=float)
-    f_of = _interpolant(t_pillars, pillars["F"].to_numpy(dtype=float))
-    # Discount factors are log-linear between pillars: a constant forward rate on each gap.
-    df_of = _interpolant(t_pillars, np.log(pillars["df"].to_numpy(dtype=float)), exp=True)
+    f_of = _forward_curve(t_pillars, pillars["F"].to_numpy(dtype=float))
+    # Log-linear discount factor: a constant forward rate on each gap, df(0) = 1.
+    df_of = _discount_curve(t_pillars, pillars["df"].to_numpy(dtype=float))
     err_values = np.array(
         [
             _forward_scatter(chain, row.expiry, float(row.F), float(row.df), n_atm)
@@ -151,8 +153,12 @@ def _forward_scatter(chain: pd.DataFrame, expiry, F: float, df: float, n_atm: in
     return float(np.std(implied[idx], ddof=1))
 
 
-def _interpolant(xp: np.ndarray, fp: np.ndarray, *, exp: bool = False) -> Callable:
-    """Linear interpolation in expiry, flat outside the first and last pillar."""
+def _interpolant(xp: np.ndarray, fp: np.ndarray) -> Callable:
+    """Linear interpolation in expiry, flat outside the first and last pillar.
+
+    Used for ``F_err``, which has no carry to extend. Forwards and discount
+    factors use :func:`_forward_curve` and :func:`_discount_curve`.
+    """
     order = np.argsort(xp)
     xp = np.asarray(xp, dtype=float)[order]
     fp = np.asarray(fp, dtype=float)[order]
@@ -160,8 +166,95 @@ def _interpolant(xp: np.ndarray, fp: np.ndarray, *, exp: bool = False) -> Callab
     def evaluate(t):
         t_arr = np.asarray(t, dtype=float)
         y = np.interp(np.atleast_1d(t_arr), xp, fp)
-        if exp:
-            y = np.exp(y)
+        if t_arr.ndim == 0:
+            return y.reshape(())
+        return y.reshape(t_arr.shape)
+
+    return evaluate
+
+
+def _forward_curve(times: np.ndarray, forwards: np.ndarray) -> Callable:
+    """Forward curve, linear in calendar time between pillars.
+
+    Left of the first pillar the first carry is extended, and right of the
+    last pillar the last carry is extended. The carry on a gap is
+    ``log(F_right / F_left) / (T_right - T_left)``, so
+
+        F(T) = F_edge * exp(carry * (T - T_edge)).
+
+    A single pillar has no second point, so the level is held outside it.
+    A non-positive forward has no logarithm, and that gap's carry is 0.
+    """
+    order = np.argsort(times)
+    times = np.asarray(times, dtype=float)[order]
+    forwards = np.asarray(forwards, dtype=float)[order]
+
+    def carry(i_left: int, i_right: int) -> float:
+        dt = float(times[i_right] - times[i_left])
+        left = float(forwards[i_left])
+        right = float(forwards[i_right])
+        if dt <= 0.0 or left <= 0.0 or right <= 0.0:
+            return 0.0
+        return float(np.log(right / left) / dt)
+
+    if times.size >= 2:
+        left_carry = carry(0, 1)
+        right_carry = carry(-2, -1)
+    else:
+        left_carry = 0.0
+        right_carry = 0.0
+
+    def evaluate(t):
+        t_arr = np.asarray(t, dtype=float)
+        flat = np.atleast_1d(t_arr)
+        y = np.interp(flat, times, forwards).astype(float)
+        before = flat < times[0]
+        after = flat > times[-1]
+        if np.any(before) or np.any(after):
+            y = y.copy()
+            y[before] = forwards[0] * np.exp(left_carry * (flat[before] - times[0]))
+            y[after] = forwards[-1] * np.exp(right_carry * (flat[after] - times[-1]))
+        if t_arr.ndim == 0:
+            return y.reshape(())
+        return y.reshape(t_arr.shape)
+
+    return evaluate
+
+
+def _discount_curve(times: np.ndarray, dfs: np.ndarray) -> Callable:
+    """Discount factor, log-linear between pillars (a constant forward rate on each gap).
+
+    If the first pillar is strictly after 0, ``log df`` is anchored at
+    ``(0, 0)``, so ``df(0) = 1`` and times before the first pillar are not
+    stuck at ``df(T_1)``. Past the last pillar the slope of ``log df`` on the
+    last gap between market pillars is extended. One market pillar has no
+    second point to define that rate, so ``df`` is held flat past the pillar.
+    The anchor, when present, still fixes the segment from 0 to that pillar.
+    Times before 0 stay at ``df(0)``.
+    """
+    order = np.argsort(times)
+    times = np.asarray(times, dtype=float)[order]
+    log_df = np.log(np.asarray(dfs, dtype=float)[order])
+    if times.size >= 2 and times[-1] > times[-2]:
+        right_slope = float((log_df[-1] - log_df[-2]) / (times[-1] - times[-2]))
+    else:
+        right_slope = 0.0
+    if times[0] > 0.0:
+        knots_t = np.concatenate(([0.0], times))
+        knots_y = np.concatenate(([0.0], log_df))
+    else:
+        knots_t = times
+        knots_y = log_df
+
+    def evaluate(t):
+        t_arr = np.asarray(t, dtype=float)
+        flat = np.atleast_1d(t_arr)
+        y = np.interp(flat, knots_t, knots_y).astype(float)
+        after = flat > times[-1]
+        if np.any(after):
+            y = y.copy()
+            y[after] = log_df[-1] + right_slope * (flat[after] - times[-1])
+        y = np.exp(y)
         if t_arr.ndim == 0:
             return y.reshape(())
         return y.reshape(t_arr.shape)

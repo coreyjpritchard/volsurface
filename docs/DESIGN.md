@@ -37,12 +37,14 @@ a standard error. Standard errors travel on `PriceResult`, from
 
 ## 2. Coordinates
 
-`Z_T = S_T / F_T` is a unit-mean martingale in the forward measure when
-dividends are proportional to the spot. SANOS writes its quotes in that
-coordinate. We use the same one on every surface.
+`F(T)` is today's forward curve for maturity `T`. `F_T` is the random
+terminal value of that forward. Under proportional dividends `F_T = S_T`
+at the expiry. `Z_T = F_T / F(T)` is a unit-mean martingale in the forward
+measure. SANOS writes its quotes in that coordinate. We use the same one
+on every surface.
 
-The log-moneyness is `k = log(K / F_T)`, so the normalised strike is
-`x = K / F_T = exp(k)`.
+The log-moneyness is `k = log(K / F(T))`, so the normalised strike is
+`x = K / F(T) = exp(k)`.
 
 The normalised call is the cash call divided by `df * F`:
 
@@ -108,7 +110,9 @@ into a cash price.
 
 `FitResult` is what a fitter returns: `surface`, `residuals`, `in_spread`
 (a fraction, or NaN when the quotes have no two-sided market),
-`wall_time`, `solver_status`.
+`wall_time`, `solver_status`, and `slice_report` (a dataframe with one row
+per fitted expiry, or None). The raw SVI fitter fills `min_g`, `lee_ok`,
+`calendar_ok`, and a per-slice `in_spread`.
 
 `ArbTol` is `price` (default `1e-9`, in normalised-call units) and
 `spreads` (a half-spread in the same units, or None).
@@ -123,9 +127,16 @@ into a cash price.
   `"quote_ask"`, `"calendar"` and may leave the grid masks empty.
 - `min_density`: the smallest risk-neutral density of `log(Z)` on the
   grid, or NaN if the grid has no density.
-- `ok`: true when `violations` is empty.
+- `n_checked`: how many nodes entered the test. For a surface this is the
+  grid size `m * n`. For quotes it is the number of quote rows that entered
+  the linear program.
+- `ok`: True when `violations` is empty and `n_checked > 0`, False when a
+  violation was recorded, None when `n_checked == 0`. An empty quote file
+  is None. It is not a pass.
 - `note`: plain text. For `check_surface` it says that the test is
-  pointwise on the supplied grid and says nothing between the nodes.
+  pointwise on the supplied grid and says nothing between the nodes. When
+  the butterfly comparison uses the finite-difference floor of section 6.1,
+  the note says so.
 
 `Vanilla(K, kind)` is a European call or put on the forward.
 `Digital(K, kind)` is cash-or-nothing: it pays 1 when the forward finishes
@@ -159,7 +170,7 @@ class SupportsSimulate(Protocol):
 
 class SupportsCharFunc(Protocol):
     def char_func(self, u, T, *, state=None) -> ndarray
-        # E[exp(i u X_T)], X_T = log(S_T / F_T). No extra drift term.
+        # E[exp(i u X_T)], X_T = log(F_T / F(T)). No extra drift term.
     def cumulants(self, T, *, state=None) -> tuple[float, float, float]
         # c1, c2, c4 of X_T, for the range of a cosine expansion.
 
@@ -214,7 +225,12 @@ Let `C` be the normalised call.
   volatility information.
 - `total_variance(T, k)`: `iv^2 * T`.
 - `dcall_dk`, `d2call_dk2`, `dcall_dT`: derivatives. The mixin uses a
-  central step of `1e-4`. Overrides replace that.
+  central step of `1e-4` for a first derivative and `1e-3` for a second
+  derivative. A second difference at `1e-4` sits in round-off: the noise
+  on a price of order 1 is about `1e-8`, larger than `ArbTol.price`.
+  Overrides replace the finite difference. `ModelSurface` around
+  Black-Scholes overrides them, so a flat Black surface is judged by the
+  analytic derivative.
 - `density(T, k)`: the risk-neutral density of `k_log = log(Z_T)`,
 
 ```
@@ -312,7 +328,7 @@ node, with `x = exp(k)` and `C` the normalised call:
 |---|---|---|
 | bounds | `C` against `((1 - x)+ , 1)` | the price leaves the interval by more than `tol.price` |
 | call_spread | slope `s = dC/dx = exp(-k) * dC/dk` | `s` leaves `[-1, 0]` by more than `tol.price` |
-| butterfly | convexity `gamma = d²C/dx² = exp(-2k) * (d²C/dk² - dC/dk)` | `gamma < -tol.price` |
+| butterfly | convexity `gamma = d²C/dx² = exp(-2k) * (d²C/dk² - dC/dk)` | `gamma < -tol.price`, or `gamma < -1e-8` when `d2call_dk2` is the mixin's finite difference |
 | calendar | `dC/dT` at fixed `k` | `dC/dT < -tol.price` |
 
 `magnitude` is the amount by which the quantity leaves the allowed region,
@@ -324,8 +340,16 @@ The derivatives are the surface's own methods, so SVI is judged by
 Durrleman's `g` and not by a finite difference. `min_density` is the
 minimum of `density(T, k)` on the grid.
 
+When `type(surface).d2call_dk2` is `SurfaceMixin.d2call_dk2`, the butterfly
+comparison uses `max(tol.price, 1e-8)`. That floor is the finite-difference
+noise left after the `1e-3` step, and the report's note records it. An
+analytic second derivative, including `ModelSurface` around Black-Scholes,
+is judged at `tol.price`. A flat Black surface therefore passes
+`check_surface` at the default tolerance.
+
 The report's `note` states that passing on the nodes does not constrain
-the surface between the nodes.
+the surface between the nodes. `n_checked` is `T.size * k.size`. An empty
+grid returns `ok is None` and `n_checked == 0`.
 
 ### 6.2 `check_quotes(data, *, side="bidask")`
 
@@ -335,10 +359,14 @@ is a later phase).
 
 Puts are turned into calls by put-call parity, `cash_call = cash_put + df * (F - K)`,
 and then divided by `df * F`. For each expiry the unknowns are probabilities
-`q_j` on the quoted normalised strikes plus two boundary strikes, `0` and
-a point beyond the largest quote. The constraints are `q >= 0`, `sum q = 1`,
-and `sum q_j * x_j = 1` (the martingale has mean 1). The model call at a
-quoted strike is `sum q_j * (x_j - x)+`.
+`q_j >= 0` on `{0}` union the quoted normalised strikes, plus a tail pair
+`(Q, M)`. `Q >= 0` is the mass beyond the largest quoted strike `x_max`, and
+`M` is that tail's contribution to the mean, with `M >= x_max * Q`. The
+constraints are `sum q_j + Q = 1` and `sum q_j * x_j + M = 1`. The model
+call at a quoted strike `x <= x_max` is `sum q_j * (x_j - x)+ + (M - x * Q)`.
+The tail term is the call of an atom at `M / Q` when `Q > 0`. It is valid
+only for strikes at or below `x_max`, which is why calendar rows (below) are
+written only at knots that both expiries actually quote.
 
 `side="bidask"` requires the model call to lie between the normalised bid
 and ask. `side="mid"` uses the quote's working price as both bid and ask.
@@ -359,7 +387,10 @@ trades, the American early-exercise premium, and any genuine butterfly
 or calendar arbitrage in the marks. The report is not evidence of a
 tradable arbitrage.
 
-`ok` is true when every slack is within `tol.price`.
+`ok` is True when every slack is within `tol.price` and at least one quote
+entered the program. `n_checked` is that quote count. When every quote was
+dropped, `ok` is None and `n_checked` is 0. A solver that returns no point
+sets `ok` False.
 
 ## 7. Monte Carlo and the z-rule
 
@@ -392,14 +423,23 @@ payoffs, divided by `sqrt(n_batches)`.
 simulates once on the union of the maturities and prices the whole grid
 from those paths. That is the grid whose implied volatility the demo plots.
 
+`implied_vol` in `volsurface/bs.py` returns NaN when the safeguarded Newton
+residual misses `tol`, as well as outside the arbitrage bounds. A finite
+implied vol is one the formula reprices. That change is owned by P1c; section
+12 records why it lives in the function module.
+
 Inversion, on a grid of cash prices (Monte Carlo or closed form):
 
 - Price to implied vol to price recovers the price to a relative error of
-  `1e-12` wherever the implied vol exists.
-- Implied vol to price to implied vol recovers the vol to `1e-8` where the
-  normalised vega `n(d1) * sqrt(T)` exceeds `1e-8`. Nodes below that
-  threshold are excluded, counted, and reported. They are not deleted
-  quietly from the assertion.
+  `1e-12` wherever the implied vol is finite. Once a failed inversion is
+  NaN, this holds by construction on those nodes: the price is rebuilt from
+  the volatility that was just solved. It does not test the solver.
+- The informative check is coverage. Implied vol to price to implied vol
+  recovers the vol to `1e-8` where the normalised vega `n(d1) * sqrt(T)`
+  exceeds `1e-8`. The test reports the fraction of the grid that clears
+  that threshold and inverts, on a grid built in standardised moneyness
+  `k / (sigma sqrt(T))`. It does not lock an absolute count of excluded
+  nodes.
 
 Put-call parity for Monte Carlo is pathwise, on the same paths:
 `call_payoff - put_payoff = df * F * (Z - K/F)`, to `1e-12`. The averaged
@@ -410,22 +450,32 @@ in expectation.
 
 A test that demands `|price - reference| < 3 * stderr` at every node of a
 large grid fails by chance. For about 200 independent normal nodes the
-probability that the maximum exceeds 3 is a few tens of percent.
+probability that the maximum exceeds 3 is a few tens of percent. Fixed
+caps have the same problem at the other end: `|mean z| < 0.5` is about two
+standard errors when `n = 20`, and a fraction cap of 0.99 rejects a small
+sample in which every `|z|` is below 2.
 
-For a grid of `n` nodes, with `z = (estimate - reference) / stderr`:
+`volsurface/mc/zrule.py` is the one implementation. For `n` nodes, with
+`z = (estimate - reference) / stderr`, and `p = 2 Phi(2) - 1`:
 
-1. `max |z| < 4.5`. The test states `n`. At `4.5` the normal tail times a
-   few hundred nodes is still small, which is why the bound does not depend
-   on picking a lucky seed.
-2. The fraction of nodes with `|z| < 2` lies between 0.90 and 0.99.
-3. `|mean(z)| < 0.5`, a bias check.
+1. `max |z| < Phi^{-1}(1 - 0.001 / (2 n))`. One normal exceeds the bound
+   with probability `0.001 / n`, so a union bound keeps the chance of any
+   exceedance at or below 0.1 percent. The test states `n`.
+2. The fraction of nodes with `|z| < 2` lies between the 0.1 percent and
+   99.9 percent quantiles of `Binomial(n, p)`, divided by `n`.
+3. `|mean z| < 3.5 / sqrt(n_eff)`. For independent nodes `n_eff = n`.
 
-Nodes that share paths are one draw, not `n` draws. A z-rule test that
-checks the fraction uses independent seeds across nodes (or across
-maturities, with the dependence stated). The standard-error slope test is
-separate: independent seeds at path counts from `10^3` to `10^6`, and the
-slope of `log(standard error)` against `log(n_paths)` equals `-0.5` within
-`0.05`.
+Nodes that share paths are one draw. The fraction band does not apply, and
+`n_eff` is not `n`. On that grid the test keeps the max bound (it is valid
+as a union bound, and dependence only makes it looser) and checks the mean
+on `R` independent replications of the whole grid:
+`|mean(m)| < 3.5 * sd(m) / sqrt(R)`, where `m` is the per-replication mean
+of `z` and `sd` uses `ddof=1`. The test states `R` and the observed `sd`.
+
+The standard-error check is a calibration, not a slope fitted to
+`stderr = sd / sqrt(n)`, which holds by construction. Over `R` seeds the
+sample standard deviation of the estimates, divided by the mean reported
+standard error, lies in `[0.9, 1.1]`. The test states `R`.
 
 ## 8. Greeks
 
@@ -458,10 +508,13 @@ would be a wrong greek.
 The likelihood-ratio engine writes the derivative onto the lognormal
 density of the terminal forward and multiplies the undifferentiated payoff
 by the score. It supports digitals and order 1 and 2 for geometric
-Brownian motion. Variance is large at short expiry because the score
-divides by `sigma sqrt(T)`. That comparison is a figure and a test that
-the short-dated standard error exceeds the long-dated one at equal path
-count.
+Brownian motion. The score for the forward is `u / (F * w)` with
+`w = sigma^2 T` and `u = log Z + w / 2`, so the weight divides by
+`sigma^2 T`. A vanilla price shrinks with `T` along with that weight. A
+cash-or-nothing digital pays 1 and does not, which is why the short-dated
+comparison uses a digital. The test requires the short-dated standard error
+to exceed twice the long-dated one at equal path count. The theoretical
+ratio for an at-the-money digital delta is several times that.
 
 The autodiff engine differentiates the same simulation the pathwise engine
 differentiates, in torch, dtype float64. It therefore matches the pathwise
@@ -478,7 +531,11 @@ the analytic greek, on log-log axes.
 
 Every draw goes through `np.random.default_rng` on an `int` or a
 `numpy.random.SeedSequence`. `volsurface/mc/rng.py` turns an int into a
-`SeedSequence`, and `spawn` produces one child per independent stream.
+`SeedSequence`. A `SeedSequence` argument is copied (`entropy`, `spawn_key`,
+`pool_size`) before use, because `spawn` advances `n_children_spawned` on
+the object it is called on. Two repricings with common random numbers and
+the same `SeedSequence` therefore both draw child 0. `spawn` produces one
+child per independent stream.
 
 A grid of strikes and expiries shares one child for the whole model run.
 Draw order is part of each model's docstring. Two implementations produce
@@ -490,8 +547,16 @@ accuracy use the z-rule instead.
 
 `market_data_from_snapshot` builds a `MarketData` from a tidy chain
 (`volsurface/chains.py`). Forwards and discount factors are the ones
-`market_implied_vols` already infers. `F_err` is the standard deviation of
-the near-the-money parity forwards. `day_count` is `"ACT/365"`.
+`market_implied_vols` already infers, at the pillars. Between pillars `F`
+is linear in calendar time and `df` is log-linear. If the first pillar is
+after 0, `log df` is anchored at `(0, 0)`, so `df(0) = 1`. Past the last
+pillar the last carry is extended: `log(F_n / F_{n-1}) / (T_n - T_{n-1})`
+for the forward, and the slope of `log df` for the discount factor. The
+forward is extended backward with the first carry as well. One pillar has
+no second point, so both curves hold their level past that pillar (the
+discount anchor still fills `[0, T_1]` when `T_1 > 0`). `F_err` is the
+standard deviation of the near-the-money parity forwards, interpolated
+flat outside the pillars. `day_count` is `"ACT/365"`.
 
 Exercise and settlement are not in the parquet file. The loader fills
 `"american"` and `"physical"` when the underlying is `SPY`, and
@@ -522,12 +587,19 @@ Stack, each branch based on the previous one:
 |---|---|---|---|
 | P1a | `p1a-design-foundations` | `main` | `docs/DESIGN.md`, `volsurface/core/`, `volsurface/mc/rng.py`, `volsurface/mc/pricing.py`, `volsurface/plugins.py`, `volsurface/models/` as a package, the Black-Scholes and Heston classes |
 | P1b | `p1b-surfaces-checker` | P1a | `volsurface/surface/`, `volsurface/arbitrage/`, `volsurface/fit/` |
-| P1c | `p1c-gbm-mc` | P1b | `volsurface/models/gbm.py`, `volsurface/mc/grid.py` |
+| P1c | `p1c-gbm-mc` | P1b | `volsurface/models/gbm.py`, `volsurface/mc/grid.py`, and the failed-residual NaN in `volsurface/bs.py` |
 | P1d | `p1d-greeks` | P1c | `volsurface/greeks/` |
 
 `volsurface/bs.py`, `volsurface/heston.py`, `volsurface/chains.py`, and
 `volsurface/smile.py` stay the function modules the existing tests import.
 The classes moved into `volsurface/models/` call those functions.
+
+One exception. P1c changes `implied_vol` so a Newton residual that misses
+`tol` returns NaN. A finite volatility is then one the formula reprices, and
+the price round trip in section 7 holds by construction on those nodes. The
+change is a few lines at the end of the iteration, and the test that needs
+it is the Monte Carlo inversion. A fifth pull request for those lines was
+considered and not opened.
 
 Rules:
 

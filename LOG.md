@@ -7,6 +7,19 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
+## 2026-10-14 Library review: curves, seeds, and the z-rule
+
+`ArbReport.ok` is None when the checker evaluated nothing, and `n_checked`
+counts what it did evaluate. `as_seed_sequence` copies a `SeedSequence` so a
+second spawn with common random numbers still draws child 0. The discount
+curve is anchored at `df(0) = 1` and both curves extend the last carry past
+the final pillar. The z-rule bounds scale with the node count; the helper is
+`volsurface/mc/zrule.py`. Heston `c2` and `c4` are checked against a second
+stencil, not against a copied closed form.
+
+`Spot` stays a one-for-one forward bump with `df` fixed. That is the reading
+in DESIGN section 8, and the greek tests lock `Spot == Forward`.
+
 ## 2026-10-13 Library P1a: interfaces, in review
 
 `docs/DESIGN.md` is now the source of truth for coordinates (normalised call,

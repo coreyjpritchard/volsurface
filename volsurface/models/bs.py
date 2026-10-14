@@ -43,7 +43,9 @@ class BlackScholes:
         return bs.price(F, K, T, self.sigma, df, kind)
 
     def char_func(self, u, T: float, *, state: State | None = None) -> np.ndarray:
-        """``E[exp(i u X_T)]`` for ``X_T = log(F_T / F) ~ N(-w/2, w)``, ``w = sigma^2 T``.
+        """``E[exp(i u X_T)]`` for ``X_T = log(F_T / F(T)) ~ N(-w/2, w)``, ``w = sigma^2 T``.
+
+        ``F`` in ``price`` is the curve value ``F(T)``. ``F_T`` is the random terminal forward.
 
         Completing the normal integral gives ``exp(-i u w / 2 - u^2 w / 2)``.
         """
@@ -54,7 +56,7 @@ class BlackScholes:
         return np.exp(-0.5j * u * w - 0.5 * u * u * w)
 
     def cumulants(self, T: float, *, state: State | None = None) -> tuple[float, float, float]:
-        """``(c1, c2, c4)`` of ``log(F_T / F)``. The fourth cumulant of a normal is 0."""
+        """``(c1, c2, c4)`` of ``log(F_T / F(T))``. The fourth cumulant of a normal is 0."""
         if state:
             raise ValueError(f"BlackScholes has an empty state, got keys {sorted(state)}")
         w = self.sigma**2 * float(T)

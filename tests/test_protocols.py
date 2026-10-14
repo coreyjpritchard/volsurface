@@ -54,21 +54,41 @@ def test_heston_state_replaces_v0_and_matches_the_module():
     np.testing.assert_allclose(m.char_func(u, 1.0), m.char_func(u, 1.0, state=m.initial_state()))
 
 
-def test_heston_mean_cumulant_matches_integrated_variance():
-    """c1 = -1/2 * integral of E[v_t]. The stencil's c1 agrees with that closed form."""
+def test_heston_cumulants_match_a_second_differentiation():
+    """c2 and c4 agree with a second stencil and with central differences.
+
+    The integrated-variance line is the expression ``cumulants`` already
+    returns, rearranged. It is an algebraic consistency check on one parameter
+    set (the Fang and Oosterlee values). The independent check is computed
+    here from ``char_func``: a degree-8 fit at ``h = 0.01`` for ``c1``, the
+    same fit at ``h = 0.02`` for ``c2`` and ``c4``, and a central difference
+    at ``h = 0.02``. Tolerances are absolute and wider than the gap observed
+    on this parameter set (about ``1e-12`` for the second-stencil ``c2``,
+    about ``5e-8`` for ``c4``, and a few ``1e-7`` for the central difference).
+    """
     m = models.Heston(v0=0.0175, kappa=1.5768, theta=0.0398, xi=0.5751, rho=-0.5711)
     T = 1.0
     integ = m.theta * T + (m.v0 - m.theta) * (1.0 - np.exp(-m.kappa * T)) / m.kappa
     c1, c2, c4 = m.cumulants(T)
     assert c1 == pytest.approx(-0.5 * integ, rel=0, abs=1e-12)
-    # The polynomial stencil reproduces c1, and c2 is positive and finite.
+
+    def cgf(t):
+        return np.log(m.char_func(-1j * np.asarray(t, dtype=float), T)).real
+
     h = 0.01
-    t = np.arange(-4, 5) * h
-    psi = np.log(m.char_func(-1j * t, T)).real
-    fitted_c1 = float(np.poly1d(np.polyfit(t, psi, 8)).deriv(1)(0.0))
-    assert fitted_c1 == pytest.approx(c1, abs=1e-9)
-    assert c2 > 0.0
-    assert np.isfinite(c4)
+    fitted = np.poly1d(np.polyfit(np.arange(-4, 5) * h, cgf(np.arange(-4, 5) * h), 8))
+    assert float(fitted.deriv(1)(0.0)) == pytest.approx(c1, abs=1e-9)
+
+    h2 = 0.02
+    grid = np.arange(-4, 5) * h2
+    fitted2 = np.poly1d(np.polyfit(grid, cgf(grid), 8))
+    assert float(fitted2.deriv(2)(0.0)) == pytest.approx(c2, abs=1e-10)
+    assert float(fitted2.deriv(4)(0.0)) == pytest.approx(c4, abs=1e-6)
+
+    c2_fd = (cgf(h2) - 2.0 * cgf(0.0) + cgf(-h2)) / h2**2
+    c4_fd = (cgf(-2 * h2) - 4 * cgf(-h2) + 6 * cgf(0.0) - 4 * cgf(h2) + cgf(2 * h2)) / h2**4
+    assert c2_fd == pytest.approx(c2, abs=1e-6)
+    assert c4_fd == pytest.approx(c4, abs=1e-5)
 
 
 def test_price_with_error_is_deterministic_for_black_scholes():
@@ -100,3 +120,6 @@ def test_market_data_from_committed_snapshot():
     assert data.df(np.array([row["T"]]))[0] == pytest.approx(row["df"], rel=1e-10)
     assert np.isfinite(data.F_err(row["T"]))
     assert data.F_err(row["T"]) > 0.0
+    # The first expiry is after 0, so the discount curve is anchored at df(0) = 1.
+    assert float(data.quotes["T"].min()) > 0.0
+    assert data.df(0.0) == pytest.approx(1.0)
