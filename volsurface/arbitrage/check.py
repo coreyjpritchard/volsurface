@@ -131,10 +131,7 @@ def check_quotes(
     dropped = int(expiries.pop("_dropped"))
     n_checked = int(expiries.pop("_n_checked"))
     if not expiries:
-        note = (
-            f"No quotes to check (dropped {dropped} without a two-sided market). "
-            "The committed SPY snapshot is in this state: last trades, empty bid and ask."
-        )
+        note = f"No quotes to check (dropped {dropped} without a two-sided market)."
         return ArbReport(
             violations=_empty(),
             masks={},
@@ -146,8 +143,9 @@ def check_quotes(
     result = _solve(expiries, tol, n_checked)
     result_note = (
         f"{result.note} Dropped {dropped} quotes with no two-sided market. "
-        "Puts entered through put-call parity. On American options that parity "
-        "is approximate, so a slack is not by itself a tradable arbitrage."
+        "Puts entered through put-call parity. That identity holds for European "
+        "options. On American options it is approximate, so a slack there is not "
+        "by itself a tradable arbitrage."
     )
     return ArbReport(
         violations=result.violations,

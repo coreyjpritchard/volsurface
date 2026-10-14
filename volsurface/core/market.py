@@ -16,9 +16,11 @@ import pandas as pd
 from volsurface import chains
 from volsurface.core.types import MarketData
 
-# Equity options in this repo's snapshots are American and physically settled.
-# Index options SPX and XSP are European and cash settled. Anything else must
-# be labelled by the caller. This is a loader assumption, not a field we read.
+# The committed snapshot is SPX: European and cash-settled. A ticker in
+# _EQUITY_AMERICAN is still marked American and physical if a chain with that
+# underlying is passed. Index options SPX and XSP are European and cash settled.
+# Anything else must be labelled by the caller. This is a loader assumption,
+# not a field we read.
 _EQUITY_AMERICAN = {"SPY"}
 _INDEX_EUROPEAN = {"SPX", "XSP"}
 
@@ -37,9 +39,10 @@ def market_data_from_snapshot(
 ) -> MarketData:
     """``MarketData`` for one tidy chain (see :mod:`volsurface.chains`).
 
-    ``exercise`` and ``settlement`` default from the underlying: SPY is marked
-    American and physical, SPX and XSP European and cash. Pass them explicitly
-    for any other name.
+    ``exercise`` and ``settlement`` default from the underlying. The committed
+    chain is SPX, marked European and cash. SPY, if a chain with that ticker is
+    passed, is marked American and physical. XSP is European and cash. Pass
+    both explicitly for any other name.
 
     The working price is the chain's ``price`` column (mid when the loader had
     a two-sided quote, otherwise the last trade). Bid and ask are copied

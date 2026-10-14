@@ -108,13 +108,13 @@ def test_registry_and_entry_point_build_black_scholes():
 def test_market_data_from_committed_snapshot():
     from volsurface import chains
 
-    chain = chains.load_snapshot(chains.latest_snapshot("SPY"))
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     assert data.day_count == "ACT/365"
-    assert set(data.quotes["exercise"]) == {"american"}
-    assert set(data.quotes["settlement"]) == {"physical"}
-    # Bid and ask are absent on this file: it was built from last trades.
-    assert data.quotes["bid"].isna().all()
+    assert set(data.quotes["exercise"]) == {"european"}
+    assert set(data.quotes["settlement"]) == {"cash"}
+    assert data.quotes["bid"].notna().all()
+    assert (data.quotes["bid"] > 0).all()
     row = data.quotes.iloc[len(data.quotes) // 2]
     assert data.F(row["T"]) == pytest.approx(row["F"], rel=1e-10)
     assert data.df(np.array([row["T"]]))[0] == pytest.approx(row["df"], rel=1e-10)
@@ -123,3 +123,45 @@ def test_market_data_from_committed_snapshot():
     # The first expiry is after 0, so the discount curve is anchored at df(0) = 1.
     assert float(data.quotes["T"].min()) > 0.0
     assert data.df(0.0) == pytest.approx(1.0)
+
+
+def test_spy_underlying_is_marked_american_and_physical():
+    """A chain passed with underlying SPY is American and physical.
+
+    The loader does not read a SPY snapshot. Three strikes, each with a call
+    and a put, are enough for put-call parity and one implied vol.
+    """
+    import pandas as pd
+
+    from volsurface import bs
+
+    quote_time = pd.Timestamp("2026-10-14 15:00", tz="UTC")
+    expiry = pd.Timestamp("2027-01-15 20:00", tz="UTC")
+    maturity = 0.25
+    forward = 100.0
+    discount = float(np.exp(-0.01 * maturity))
+    rows = []
+    for strike in (90.0, 100.0, 110.0):
+        for kind in ("call", "put"):
+            price = float(bs.price(forward, strike, maturity, 0.2, discount, kind))
+            rows.append(
+                {
+                    "underlying": "SPY",
+                    "quote_time": quote_time,
+                    "spot": 100.0,
+                    "expiry": expiry,
+                    "T": maturity,
+                    "kind": kind,
+                    "strike": strike,
+                    "bid": price,
+                    "ask": price,
+                    "price": price,
+                    "price_source": "mid",
+                    "volume": 1.0,
+                }
+            )
+    data = market_data_from_snapshot(pd.DataFrame(rows))
+    assert set(data.quotes["underlying"]) == {"SPY"}
+    assert set(data.quotes["exercise"]) == {"american"}
+    assert set(data.quotes["settlement"]) == {"physical"}
+    assert len(data.quotes) >= 1

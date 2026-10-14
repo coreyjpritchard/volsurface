@@ -2,10 +2,85 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Session 00 built. **Next:** Session 01, SVI on the SPY snapshot.
+**Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
+
+## 2026-10-14 SPY snapshot replaced by SPX
+
+The committed chain is now `data/snapshots/SPX_2026-10-14.parquet`. The file
+`data/snapshots/SPY_2026-10-07.parquet` is removed. SPY options are American
+and SPY pays dividends, so a European implied vol on that chain does not match
+the contract. SPX options are European and cash-settled. The note is
+`docs/notes/spx_not_spy.md`. The entries below this one that quote SPY counts
+are that removed file. `docs/figures/p1b_surfaces.png` and `docs/00_the_smile.png`
+were regenerated on the SPX chain.
+
+Source: CBOE public delayed quotes,
+`https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json`. The JSON
+`timestamp` is `2026-10-14 10:01:12` with no timezone. The fetch clock matched
+that stamp in UTC, so `quote_time` is that instant as UTC. The index object
+has `current_price` 7805.4502, equal to `prev_day_close` 7805.4502, `close`
+7805.45, `price_change` -1.7898, and `last_trade_time` `2026-10-13T16:14:59`
+(no zone). At 10:01 UTC the US cash session is not open. The option rows still
+have a bid and an ask.
+
+Only the SPXW root is kept: 18,543 rows, 40 expiries, T from 0.001139 to
+0.962783, strikes per expiry 134, 366.5, 1232 (min, median, max). The SPX root
+is the AM-settled monthly and is dropped, including on dates where both roots
+list the same calendar day. Every SPXW expiry with T > 0 inside moneyness
+0.5 to 1.3 and price at least 0.03 is kept, dailies included. `rate` is NaN.
+`price_source` is mid. No crossed market remains. Out-of-the-money implied
+vols: 8,973 rows, from 0.0800 to 0.8571. Median half-spread 0.20 index points
+(maximum 0.85); the median half-spread is 1.08% of the mid.
+
+Put-call parity at each expiry, eight strikes nearest the crossing of C - P:
+`df = -slope`, `F = intercept / df`. No dividend yield. The front expiry
+(14 October, T = 0.001139) has F = 7823.9057 and df = 1.000357. The next
+(15 October, T = 0.003879) has F = 7824.2157 and df = 1.001786. The last
+(30 September 2027, T = 0.962783) has F = 8133.2863 and df = 0.953810, so
+`-log(df) / T = 0.0491`. A discount factor above 1 on the two front expiries
+is what the regression returned. **Hypothesis:** that is the bid-ask tilt on
+a pre-open book, not a negative policy rate. An explicit `rate` still replaces
+`df` with `exp(-r T)`.
+
+At-the-money skew on this file: 2.965 at T = 0.001139 (about 10 hours), 1.989
+at T = 0.003879 (1.42 days), 1.057 at T = 0.02032 (7.42 days), 0.282 at
+T = 0.9628 (351 days). Power law on all 40 expiries:
+`|ψ(T)| = 0.30511 T^(-0.33283)`, so `H = 0.167` if read as `1/2 - alpha`.
+The 7 October SPY last-trade fit in the Session 00 entry was 0.30 and 0.26.
+The date, the quote (last trade against mid), and the underlying all changed.
+**Hypothesis:** the exponent moved. This pair of files does not say which
+change did it.
+
+Heston, joint least squares of at-the-money level and skew, three starts,
+slider box with kappa up to 20 (`docs/figure_00.py`). Winning start, `xtol`,
+cost 0.7454: `v0 = 0.012593`, `kappa = 8.805`, `theta = 0.044344`,
+`xi = 1.740`, `rho = -0.5334`. Rho is inside [-0.99, 0.99]. RMSE 0.0128 in
+the level and 0.193 in the skew. Model skew against the market: -1.865 against
+-2.965 at the front, -1.785 against -1.989 at 1.42 days, -1.181 against
+-1.057 at 7.42 days, -0.180 against -0.282 at 351 days. The T to 0 limit
+`rho xi / (4 sqrt(v0))` is -2.068. The short end of this fit is flatter than
+the market. The one-week point is steeper. The long end is flatter.
+
+SVI on the same `MarketData`, vega weights from the half-spread: 40 slices,
+wall 8.5 seconds, `in_spread = 0.558`. On `k` in [-0.5, 0.5], 24 of 40 slices
+have `g < 0`. The smallest such `g` is -0.0923 at T = 0.1218 (27 November
+2026). The plotted expiry is 30 October 2026, T = 0.044975, 466 strikes,
+chosen because the cubic continued 0.12 past the quotes reaches implied vol
+-24.95, the lowest such wing in the file. On that slice the weighted SVI has
+`g` minimum 0.0578 on the same window, in-sample implied-vol RMS 0.00213, and
+spline density negative on 125 of 263 points inside the quotes. Butterfly
+nodes on the plotted grid: 129 of 361. The fitter's wider diagnostic grid,
+half a unit of log-moneyness past the quoted strikes, is a different count:
+minimum `g` is -5509.8 at T = 0.711 (30 June 2027) and -13054 at T = 0.963
+(30 September 2027). Those wings are outside the figure's window.
+
+The quote linear program on the two shortest expiries together: `ok` true,
+278 quotes, total slack 0, 0.08 seconds. The first 24 expiries together:
+`ok` true, 4,398 quotes, 0 violations, 9.0 seconds. The first 32, and all 40,
+were killed at 15.6 GB before a status came back.
 
 ## 2026-10-14 Library P1d review: finite-difference errors, torch extra
 

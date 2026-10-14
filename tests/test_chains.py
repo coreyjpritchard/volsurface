@@ -1,4 +1,7 @@
 import datetime as dt
+import importlib.util
+import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -72,18 +75,86 @@ def test_tidy_time_to_expiry_and_filters():
 
 
 def test_committed_snapshot_loads():
-    snap = chains.load_snapshot(chains.latest_snapshot("SPY"))
+    snap = chains.load_snapshot(chains.latest_snapshot("SPX"))
     assert list(snap.columns) == chains.COLUMNS
+    assert set(snap["underlying"]) == {"SPX"}
+    assert set(snap["source"]) == {"cboe"}
+    assert set(snap["price_source"]) == {"mid"}
+    assert snap["bid"].notna().all() and (snap["bid"] > 0).all()
+    assert (snap["ask"] >= snap["bid"]).all()
+    assert len(snap) == 18543
+    assert snap["expiry"].nunique() == 40
+    assert not np.isfinite(snap["rate"].iloc[0])
     out = chains.market_implied_vols(snap)
-    assert out["expiry"].nunique() >= 8
+    assert out["expiry"].nunique() == 40
     assert out["iv"].between(0.02, 2.0).all()
+    # Parity on this file: the front discount factor is above 1, the last is not.
+    df = out.groupby("expiry", sort=True)["df"].first()
+    assert float(df.iloc[0]) > 1.0
+    assert float(df.iloc[-1]) < 1.0
 
 
-@pytest.mark.skipif(not chains.ib_reachable(), reason="no IB Gateway or TWS reachable")
+def test_ibkr_refuses_an_index():
+    with pytest.raises(ValueError, match="index"):
+        chains.fetch_ibkr("SPX")
+
+
+@pytest.mark.skipif(
+    not chains.ib_reachable() or not os.environ.get("IB_TEST_SYMBOL"),
+    reason="no IB Gateway, or IB_TEST_SYMBOL is unset (the fetcher qualifies a stock)",
+)
 def test_ibkr_fetch_schema():
-    chain = chains.fetch_ibkr("SPY", max_years=0.1)
+    chain = chains.fetch_ibkr(os.environ["IB_TEST_SYMBOL"], max_years=0.1)
     assert list(chain.columns) == chains.COLUMNS
     assert len(chain) > 0
+
+
+def _cboe_builder():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "build_cboe_spx_snapshot.py"
+    spec = importlib.util.spec_from_file_location("build_cboe_spx_snapshot", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_cboe_builder_keeps_spxw_and_drops_the_am_root():
+    """SPX and SPXW can share a calendar day. The builder keeps the PM root only."""
+    def row(symbol, bid=100.0, ask=101.0):
+        return {
+            "option": symbol,
+            "bid": bid,
+            "ask": ask,
+            "last_trade_price": bid,
+            "volume": 1.0,
+            "open_interest": 1.0,
+        }
+
+    payload = {
+        "timestamp": "2026-10-14 10:01:12",
+        "data": {
+            "current_price": 7805.45,
+            "options": [
+                row("SPXW261016C07600000"),
+                row("SPXW261016P07600000", bid=90.0, ask=91.0),
+                row("SPXW261016C08000000"),
+                row("SPXW261016P08000000", bid=80.0, ask=81.0),
+                row("SPX261016C07600000"),
+                row("SPX261016P07600000", bid=90.0, ask=91.0),
+                row("SPXW261016C07700000", bid=50.0, ask=40.0),
+                row("SPXW261013C07600000"),
+            ],
+        },
+    }
+    chain = _cboe_builder().build(payload)
+    assert len(chain) == 4
+    assert set(chain["underlying"]) == {"SPX"}
+    assert set(chain["source"]) == {"cboe"}
+    assert chain["expiry"].nunique() == 1
+    assert pd.Timestamp(chain["quote_time"].iloc[0]) == pd.Timestamp(
+        "2026-10-14 10:01:12", tz="UTC"
+    )
+    assert not np.isfinite(chain["rate"].iloc[0])
+    assert set(chain["strike"]) == {7600.0, 8000.0}
 
 
 def test_read_env(tmp_path, monkeypatch):
