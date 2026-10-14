@@ -2,7 +2,15 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance, and its hit rate sits near the unconditional base rate. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field, so `E[v]` matches `xi0` at `H = 0.1` inside the z-rule. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance, and its hit rate sits near the unconditional base rate. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field, so `E[v]` matches `xi0` at `H = 0.1` inside the z-rule. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+
+## 2026-10-14 Review: the gate's chain, correlation, level, and cost
+
+The draft pins the generator `[[-1.5, 1.5], [0.8, -0.8]]`. Mean holding times are 2/3 of a year and 1.25 years. The initial law is `(0.7, 0.3)`, which is not the stationary law, about `(0.348, 0.652)`. `rho = -0.4`. `xi0` is flat at `0.04`. The spot hedge costs `1e-4` of notional per unit traded. The variance swap and the calls are at the model mid, with no extra spread. Duration multiples of 5 and of 0.5 replace that matrix and stay outside the family of three. The file is still a draft and is not frozen.
+
+Regenerating `docs/figures/p3g_pca.png` reproduced the previous file byte for byte. The minimal DYSANOS share is `0.9989`. The regime share is `1.0000`.
+
+**Hypothesis:** the same figure, priced from `surface_at` instead of the integrated forward variance, keeps a regime share above `0.99` at `H = 1/2`. The quantity to report is that share, next to `1.0000`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 

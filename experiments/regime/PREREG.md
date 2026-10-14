@@ -47,11 +47,33 @@ The primary risk is entropic risk at `lambda = 1`. For a sample of P&L
 the risk is `(1/lambda) log E[exp(-lambda X)]` with `lambda = 1`. That is
 the deep-hedging default. CVaR at 95 percent is a report, not the gate.
 
+The regime chain is the one the market tests run. The generator is
+
+```
+[[-1.5, 1.5],
+ [ 0.8, -0.8]]
+```
+
+Mean holding times are 2/3 of a year and 1.25 years. The initial law is
+`p0 = (0.7, 0.3)`. That is not the stationary law, which is about
+`(0.348, 0.652)`. Duration multiples of 5 times and of 0.5 times
+maturity are a sensitivity that replaces this matrix. They are not a
+second gate.
+
+The spot-variance correlation is `rho = -0.4`. The forward-variance
+level `xi0` is flat at `0.04`.
+
+The spot hedge costs `1e-4` of notional per unit traded, one basis
+point, proportional to the absolute change in delta. The variance swap
+and the calls are transacted at the model mid. They carry no extra
+spread.
+
 ## Metrics
 
 The primary risk is the entropic risk in the fixed settings, at
 `lambda = 1`. The same paths also report CVaR at 95 percent, the mean,
-the standard deviation, turnover, and cost.
+the standard deviation, turnover, and cost. Cost uses the spot rate
+in the fixed settings.
 
 Test paths are paired across policies. Uncertainty is a hierarchical
 bootstrap over paths and over network seeds.
@@ -87,6 +109,8 @@ I2 is the variance swap priced under the trader's information set. The
 price is the mixture of the regime-conditional variance swaps, weighted
 by the filtered regime probabilities. It is not the variance swap
 conditioned on the true regime. `surface_at` uses the same mixture.
+At `H` other than `1/2` each regime's Monte Carlo is conditioned on
+that regime's forward curve `xi_t(u)`.
 
 The gate contrast is the L1 reduction: `Gap` with I1 minus `Gap` with I2,
 for L1, above 0. The variance swap hedges the level of variance. The bar
@@ -116,9 +140,10 @@ is the opposite of the sign used in testing. The gap is clearly above 0.
 ## Design knobs, not results
 
 Regime durations of 5 times maturity and of 0.5 times maturity are a
-design axis. The ratio grid `{1, 1.5, 2}` is a sensitivity around the
-primary ratio 2. Those values are settings. They are not measurements,
-and they are outside the family of three.
+design axis. They replace the pinned transition matrix. The ratio grid
+`{1, 1.5, 2}` is a sensitivity around the primary ratio 2. Those values
+are settings. They are not measurements, and they are outside the family
+of three.
 
 ## Not the gate
 
