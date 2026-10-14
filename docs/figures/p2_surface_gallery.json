@@ -266,6 +266,33 @@
         "raw_max": 2.6062477811701483,
         "worst": []
       }
+    },
+    "error_heatmap": {
+      "percentile": 98.0,
+      "limit_vol_points": 15.9,
+      "limit_raw": 15.901461918015464,
+      "n_errors": 2541,
+      "n_beyond_limit": 51,
+      "panels": {
+        "svi": {
+          "n": 847,
+          "rmse_vol_points": 0.5244522169891721,
+          "max_abs_vol_points": 2.6568760271142633,
+          "p98_abs_vol_points": 1.7508288842307365
+        },
+        "heston": {
+          "n": 847,
+          "rmse_vol_points": 7.253952100171276,
+          "max_abs_vol_points": 23.117382123626307,
+          "p98_abs_vol_points": 18.902107478594868
+        },
+        "sabr": {
+          "n": 847,
+          "rmse_vol_points": 3.5571145633481978,
+          "max_abs_vol_points": 21.67358396308797,
+          "p98_abs_vol_points": 11.539901436208009
+        }
+      }
     }
   }
 }

@@ -75,6 +75,15 @@ def test_display_grid_drops_short_expiries_and_unquoted_wings():
     assert gallery.DISPLAY_MIN_DAYS == 7
 
 
+def test_error_colour_limit_ignores_a_handful_of_large_cells():
+    """The heatmap scale is a high percentile of |error|, not the maximum."""
+    gallery = _gallery()
+    abs_errors = np.concatenate([np.full(98, 1.0), np.array([50.0, 50.0])])
+    limit = gallery.error_colour_limit(abs_errors, percentile=98)
+    assert 1.0 <= limit < 5.0
+    assert limit < float(np.max(abs_errors))
+
+
 def test_extrapolation_mask_is_outside_each_expiry():
     gallery = _gallery()
     pillars = [
@@ -148,6 +157,11 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     local = numbers["display"]["clips"]["dupire_localvol"]
     assert local["n_clipped"] == 0
     assert local["raw_max"] is None or local["hi"] >= local["raw_max"]
+    heat = numbers["display"]["error_heatmap"]
+    assert heat["percentile"] == 98
+    assert heat["limit_vol_points"] > 0.0
+    assert heat["panels"]["svi"]["n"] > 0
+    assert heat["panels"]["svi"]["rmse_vol_points"] > 0.0
 
     fig_dir = tmp_path / "figures"
     html_dir = tmp_path / "surfaces"

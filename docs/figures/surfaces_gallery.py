@@ -12,7 +12,9 @@ vertical scale, set to the values actually drawn.
 The market surface in the picture is a light Gaussian smooth along
 ``k / sqrt(T)``. The smooth is display only. The raw quotes are the
 points, and the error tables use the unsmoothed interpolation on the
-full book, including the short expiries.
+full book, including the short expiries. The error heatmap uses the
+same figure domain. Its colour scale is the 98th percentile of the
+absolute in-quote error, not the largest cell.
 
 Heston and SABR are fit on the smile, ``|k| <= 0.4`` and at most 11 strikes
 an expiry, the same cut as the calibration figures. Raw SVI uses every
@@ -45,7 +47,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
+from matplotlib.colors import ListedColormap, Normalize
 
 from volsurface import bs, chains
 from volsurface.core.market import market_data_from_snapshot
@@ -85,6 +87,9 @@ M_STEP = 0.1
 IV_LO = 0.05
 IV_HI = 0.90
 IV_CAP = 1.25
+# Error heatmap. The limit is a high percentile of |error|, not the maximum.
+ERROR_PERCENTILE = 98.0
+ERROR_KEYS = ("svi", "heston", "sabr")
 MARK_HIGH = "#9b2335"
 MARK_LOW = "#1f4e79"
 
@@ -772,6 +777,7 @@ def summary_numbers(built: dict) -> dict:
         "implied_vol_axis": [float(display["iv_axis"][0]), float(display["iv_axis"][1])],
         "local_vol_axis": [float(display["local_axis"][0]), float(display["local_axis"][1])],
         "clips": _display_clips(display),
+        "error_heatmap": summarise_errors(error_gaps(display)),
     }
     return numbers
 
@@ -1061,51 +1067,163 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
     _write_error_heatmap(built, fig_dir)
 
 
-def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
-    """Model minus unsmoothed market, on the same domain as the 3D figures."""
-    display = built["display"]
+def error_colour_limit(abs_errors: np.ndarray, percentile: float = ERROR_PERCENTILE) -> float:
+    """Symmetric colour limit from a high percentile of ``|error|``, in vol points.
+
+    A handful of large cells must not set the scale. An empty sample falls
+    back to 1 vol point.
+    """
+    if abs_errors.size == 0:
+        return 1.0
+    limit = float(np.quantile(np.asarray(abs_errors, dtype=float), percentile / 100.0))
+    if not np.isfinite(limit) or limit <= 0.0:
+        return 1.0
+    return limit
+
+
+def error_gaps(display: dict) -> dict[str, np.ndarray]:
+    """Model minus unsmoothed market, in vol points, on the figure grid.
+
+    Cells outside that expiry's quotes, and cells with no finite pair, are NaN.
+    """
     sheets = {sheet.key: sheet for sheet in display["sheets"]}
     market = display["market_raw"]
     quoted = display["quoted"]
-    keys = ("svi", "heston", "sabr")
-    gaps = []
-    for key in keys:
+    gaps = {}
+    for key in ERROR_KEYS:
         gap = 100.0 * (sheets[key].z - market)
-        gap = np.ma.array(gap, mask=~quoted | ~np.isfinite(gap))
-        gaps.append(gap)
-    finite = np.concatenate([gap.compressed() for gap in gaps])
-    limit = 1.0 if finite.size == 0 else float(np.max(np.abs(finite)))
-    if limit == 0.0:
-        limit = 1.0
-    fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.8), sharey=True)
+        gaps[key] = np.where(quoted & np.isfinite(gap), gap, np.nan)
+    return gaps
+
+
+def summarise_errors(gaps: dict[str, np.ndarray]) -> dict:
+    """Percentile colour limit and the in-quote RMSE of each panel."""
+    panels = {}
+    pieces = []
+    for key in ERROR_KEYS:
+        values = gaps[key][np.isfinite(gaps[key])]
+        pieces.append(np.abs(values))
+        panels[key] = {
+            "n": int(values.size),
+            "rmse_vol_points": None if values.size == 0 else float(np.sqrt(np.mean(values**2))),
+            "max_abs_vol_points": None if values.size == 0 else float(np.max(np.abs(values))),
+            "p98_abs_vol_points": None if values.size == 0 else error_colour_limit(np.abs(values)),
+        }
+    pooled = np.concatenate(pieces) if pieces else np.array([], dtype=float)
+    raw = error_colour_limit(pooled)
+    stated = _stated_limit(raw)
+    beyond = int(np.sum(pooled > stated)) if pooled.size else 0
+    return {
+        "percentile": ERROR_PERCENTILE,
+        "limit_vol_points": stated,
+        "limit_raw": raw,
+        "n_errors": int(pooled.size),
+        "n_beyond_limit": beyond,
+        "panels": panels,
+    }
+
+
+def _limit_text(limit: float) -> str:
+    """Digits for the caption. A limit under 0.01 keeps four places so it does not print as 0."""
+    text = f"{limit:.2f}"
+    if float(text) <= 0.0:
+        return f"{limit:.4f}"
+    return text
+
+
+def _stated_limit(raw: float) -> float:
+    """Round the colour limit to the digits the caption prints. Never round it to zero."""
+    stated = float(_limit_text(raw))
+    return stated if stated > 0.0 else raw
+
+
+def _hatch_unquoted(ax, m: np.ndarray, maturities: np.ndarray, show: np.ndarray) -> None:
+    """White hatched cells where the error is not drawn. White itself means zero."""
+    hidden = np.ma.array(np.ones(show.shape, dtype=float), mask=show)
+    cells = ax.pcolormesh(
+        m,
+        maturities,
+        hidden,
+        shading="nearest",
+        cmap=ListedColormap(["white"]),
+        vmin=0.0,
+        vmax=1.0,
+        zorder=1,
+    )
+    cells.set_hatch("////")
+    cells.set_edgecolor("0.45")
+    cells.set_linewidth(0.3)
+
+
+def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
+    """Model minus unsmoothed market, on the same domain as the 3D figures."""
+    display = built["display"]
+    gaps = error_gaps(display)
+    stats = summarise_errors(gaps)
+    limit = float(stats["limit_vol_points"])
     titles = {
         "svi": "SVI minus market",
         "heston": "Heston minus market",
         "sabr": "SABR minus market",
     }
+    levels = [level for level in (-2.0, -1.0, 1.0, 2.0) if abs(level) < limit]
     m = display["m"]
     maturities = display["maturities"]
-    for ax, key, gap in zip(axes, keys, gaps, strict=True):
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 5.4), sharey=True)
+    mesh = None
+    for ax, key in zip(axes, ERROR_KEYS, strict=True):
+        gap = gaps[key]
+        show = np.isfinite(gap)
         ax.set_facecolor("white")
+        _hatch_unquoted(ax, m, maturities, show)
         mesh = ax.pcolormesh(
             m,
             maturities,
-            gap,
-            cmap="coolwarm",
+            np.ma.array(gap, mask=~show),
+            cmap="RdBu_r",
             vmin=-limit,
             vmax=limit,
             shading="nearest",
+            zorder=2,
         )
+        if levels and np.any(show):
+            ax.contour(
+                m,
+                maturities,
+                gap,
+                levels=levels,
+                colors="#222222",
+                linewidths=0.7,
+                zorder=3,
+            )
+        panel = stats["panels"][key]
+        rmse = panel["rmse_vol_points"]
+        if rmse is None:
+            note = f"n = {panel['n']}"
+        else:
+            note = f"RMSE {rmse:.2f} vol points, n = {panel['n']}"
         ax.set_xlim(float(display["m_view"][0]), float(display["m_view"][1]))
         ax.set_xlabel("standardised moneyness k/√T")
-        ax.set_title(titles[key])
+        ax.set_title(f"{titles[key]}\n{note}", fontsize=10)
     axes[0].set_ylabel("maturity T (year fraction)")
-    fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points")
+    extend = "both" if stats["n_beyond_limit"] else "neither"
+    fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points", extend=extend)
+    drawn = sorted({abs(level) for level in levels})
+    if drawn:
+        contour_note = " Contours at " + " and ".join(f"±{level:.0f}" for level in drawn) + "."
+    else:
+        contour_note = ""
     fig.suptitle(
-        f"Model minus unsmoothed SPX implied vol, {built['date']}. {_domain_caption(built)}",
-        fontsize=10,
+        f"Model minus unsmoothed SPX implied vol, {built['date']}. "
+        f"Colour saturates at ±{_limit_text(limit)} vol points, the {ERROR_PERCENTILE:.0f}th "
+        f"percentile of |error| inside the quotes "
+        f"({stats['n_beyond_limit']} cells beyond it). "
+        f"Hatched cells are outside that expiry's quotes.{contour_note} "
+        f"{_domain_caption(built)} "
+        "The RMSE on each panel is this grid, not the full-book table.",
+        fontsize=9,
     )
-    fig.subplots_adjust(left=0.06, right=0.90, bottom=0.18, top=0.78, wspace=0.16)
+    fig.subplots_adjust(left=0.06, right=0.90, bottom=0.20, top=0.72, wspace=0.16)
     fig.savefig(fig_dir / "p2_surface_iv_error.png", dpi=140)
     plt.close(fig)
 
