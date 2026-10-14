@@ -11,7 +11,8 @@ A model is an immutable object holding its parameters, with one method::
 - ``df`` (float): discount factor to ``T``. Prices are ``df`` times the forward price.
 - ``kind``: ``"call"`` or ``"put"``, or an array of those with the shape of ``K``.
 - ``state``: latent state at the pricing time. ``None`` means ``initial_state()``.
-  Black-Scholes has an empty state. Heston carries the variance ``v``.
+  Black-Scholes has an empty state. Heston carries the variance ``v``. SABR
+  carries the volatility ``alpha``.
 
 Rates and dividends enter only through ``F`` and ``df``, so a model never sees spot,
 rate or yield. Standard errors are not attached to the array. Use
@@ -30,8 +31,9 @@ from volsurface.core.protocols import Model
 from volsurface.core.types import State
 from volsurface.models.bs import BlackScholes
 from volsurface.models.heston import Heston
+from volsurface.models.sabr import SABR
 
-__all__ = ["BlackScholes", "Heston", "Model", "implied_surface"]
+__all__ = ["BlackScholes", "Heston", "Model", "SABR", "implied_surface"]
 
 
 def implied_surface(

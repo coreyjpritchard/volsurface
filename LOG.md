@@ -4,6 +4,69 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
+## 2026-10-14 Library P2f: SABR, Hagan's formula, log-Euler
+
+`beta = 1`, `nu = 0`, `alpha = 0.2`, `rho = -0.4`. Implied vol on 21 strikes
+from `k = -1` to `1`, at three maturities, differs from `0.2` by `0`. The
+cash price matches Black at that vol to `1e-12`. The at-the-money limit is
+the closed form. For `alpha = 0.2`, `rho = -0.3`, `nu = 0.4`, `T = 1` it is
+`0.20110666666666668`. A strike at log-moneyness `1e-8` is within `1e-8` of
+that value.
+
+Log-Euler against Hagan, `nu = 0.15`, `rho = -0.2`, `beta = 1`, so
+`nu^2 T = 0.0225` at one year. Twelve independent nodes, `k` from `-0.12`
+to `0.12`, maturities `0.5` and `1`, 8,000 paths, 32 steps, seeds `50` to
+`61`. The z-rule bound at `n = 12` is max |z| below `3.93`. The grid
+passes. Across seeds `10000` onward, 200 further grids: pass rate
+`200/200`. Median max |z| `1.92`, 95th percentile `2.73`, largest `3.65`.
+Mean of the per-grid mean z is `-0.027` (sample sd `0.29`).
+
+With `beta = 1` and `rho = 0` the price is an average of Black prices over
+the integrated variance of `alpha`. On the panel `alpha = 0.25`, `nu = 1`,
+`T = 2` (`nu^2 T = 2`), that mixture at 100,000 paths and 1,000 steps
+(seed 20) has implied vol `0.2733` at the money and `0.2913` at
+`k = ±0.2`. The standard error is `7.6` to `7.9` bp. Hagan minus that
+mixture is `+184` bp at the money and `+271` bp at `k = ±0.2`. The
+20,000-path, 64-step log-Euler (seed 3) minus the mixture runs from
+`-290` bp to `-187` bp. Monte Carlo minus Hagan, `-561` bp to `-380` bp,
+is those two errors added. It is not the size of the formula's error.
+The small-regime panel (`nu^2 T = 0.0225`, 8,000 paths, 32 steps, seed 11,
+strikes sharing paths) still has a largest Monte Carlo minus Hagan gap of
+`28` bp against standard errors of `26` to `90` bp.
+
+`beta = 0.5`, `alpha = 0.8`, `nu = 0`, unit forward. The hitting
+probability is `exp(-2 / 0.64) = 0.04394`. At 64 steps, 20,000 paths, seed
+2, the estimate is `0.0433` (standard error `0.00144`, four standard
+errors is `0.0058`). The terminal mean of `Z` is `1.0020` (standard error
+`0.0057`). No absorbed path leaves 0. A level below `1e-12` is absorbed,
+so the step does not leave a positive underflow. The 20,000-path test
+does not see the step bias. At 200,000 paths and 64 steps, seed 2 is
+`0.04551` (`z = +3.4`) and seed 3 is `0.04542` (`z = +3.2`). Seed 2 at
+256 steps is `0.04420` (`z = +0.57`). Seeds 10000 to 10029 of the
+20,000-path test have mean `z = +0.55`.
+
+Synthetic book, `beta` fixed at 1, one fit per expiry, truth
+`alpha = 0.22`, `rho = -0.45`, `nu = 0.35`. Four starts, 0.18 seconds.
+Each of `T = 0.5`, `1` and `1.5` recovers the parameters. The largest
+price residual is `4.6e-10`, on `T = 1.5`.
+
+The same fitter on the thinned SPXW book (440 quotes, 40 expiries,
+`beta = 1`, four starts, seed 0) takes 5.94 seconds. Median price RMSE
+is `2.82` index points. The largest is `3.84`, at `T = 0.371`. The
+expiry nearest one year (`T = 0.963`) has `alpha = 0.161`,
+`rho = -0.669`, `nu = 0.932`, RMSE `1.62`. The front expiry has
+`alpha = 0.161`, `rho = -0.999`, `nu = 4`, RMSE `0.37`. `nu` is on its
+upper bound of 4 for the 15 expiries through `T = 0.056`, and `rho` is
+on its lower bound of `-0.999` for the first three.
+
+`check_surface` on Hagan prices, `alpha = 0.3`, `beta = 1`, `rho = -0.3`,
+`nu = 1.5`, `T = 10`, `k` from `-1.5` to `0.5`. The report is not ok, and
+it contains a butterfly. On the 81-point figure grid the density is
+negative from `k = -1.5` to `-0.15` and from `0.325` to `0.50`, and
+positive in between. The minimum is `-1.099` at `k = -0.325`. Implied vol
+on that window stays between `0.662` and `2.065`. The preset
+`data/presets/sabr.json` is 6,042 bytes.
+
 ## 2026-10-14 Library P2d: Dupire local variance and log-Euler
 
 Flat Black-Scholes, sigma `0.2`, gives local volatility `0.2` with a gap of
