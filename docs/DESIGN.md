@@ -112,7 +112,8 @@ into a cash price.
 (a fraction, or NaN when the quotes have no two-sided market),
 `wall_time`, `solver_status`, and `slice_report` (a dataframe with one row
 per fitted expiry, or None). The raw SVI fitter fills `min_g`, `lee_ok`,
-`calendar_ok`, and a per-slice `in_spread`.
+`calendar_ok`, a per-slice `in_spread`, and `n_one_sided` (quotes on that
+expiry with no two-sided market).
 
 `ArbTol` is `price` (default `1e-9`, in normalised-call units) and
 `spreads` (a half-spread in the same units, or None).
@@ -391,8 +392,8 @@ pre-open quote. It would not be an American early-exercise premium.
 
 `ok` is True when every slack is within `tol.price` and at least one quote
 entered the program. `n_checked` is that quote count. When every quote was
-dropped, `ok` is None and `n_checked` is 0. A solver that returns no point
-sets `ok` False.
+dropped, `ok` is None and `n_checked` is 0. A solver that returns no point sets `ok` to None and copies the solver
+message into `note`. That is not a recorded violation and not a pass.
 
 ## 7. Monte Carlo and the z-rule
 
@@ -659,3 +660,7 @@ SANOS stages S1 to S5 beyond the feasibility LP in `check_quotes`, Heston
 calibration and the cosine pricer, Dupire simulation, SABR, rough Bergomi,
 the deep-hedging adapter, and the dashboard JSON. `check_quotes` is the LP
 those stages will call, not a fit to the market.
+
+SSVI and eSSVI are out of scope as well. The fitter in `volsurface/fit/svi.py`
+is raw SVI, one parameter set per expiry. A surface SVI would tie the slices
+together and change the arbitrage counts this phase reports.
