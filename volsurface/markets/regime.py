@@ -37,7 +37,16 @@ The forward variance stored in ``state["xi"]`` is, at ``H = 0.5``,
 
     xi_t(u) = xi0(u) sum_r P(r_u = r | r_t) exp(nu_r Y_t - nu_r^2 t / 2).
 
-That is ``E[v_u | Y_t, r_t]``. The filter observation is
+That is ``E[v_u | Y_t, r_t]``. At any other ``H`` the curve is the rough
+Bergomi forward variance at the current regime's ``nu``,
+
+    xi_t(u) = xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2),
+    I_t(u) = int_0^t (u - s)^{H - 1/2} dW_s,
+
+with the kernel integrated in closed form on each step. This module does
+not draw that Wiener path: the plugin owns it, and a nonzero ``Y`` without
+increments raises rather than copying ``v_t`` onto every later tenor. The
+filter observation is
 ``y_t | r_t ~ Normal(obs_mean[r_t], obs_sigma^2)``, drawn with the regime
 stream. ``regime_prob`` is the Hamilton filter of ``y``. It does not see
 the future of ``y``.
@@ -140,7 +149,24 @@ class RegimeSwitchingBergomi:
             np.full(n_regimes, self.obs_sigma**2),
             p0,
         )
-        xi = _forward_curve(self.xi0, grid, Y, regime, nus, generator_q, self.H)
+        if self.H == 0.5:
+            xi = _forward_curve(self.xi0, grid, Y, regime, nus, generator_q, self.H)
+        else:
+            if np.any(Y != 0.0):
+                raise RuntimeError(
+                    "H other than 1/2 needs the Wiener increments behind Y. "
+                    "driver_y returned a nonzero path and no increments. "
+                    "This module does not invert the kernel."
+                )
+            xi = bergomi_forward_variance(
+                self.H,
+                nus[regime],
+                self.xi0,
+                grid,
+                np.zeros((n_paths, grid.size - 1)),
+            )
+            diagonal = np.arange(grid.size)
+            xi[:, diagonal, diagonal] = v
         parent = as_seed_sequence(seed)
         return MarketPaths(
             times=grid,
@@ -274,29 +300,119 @@ def _brownian(n_paths: int, times: np.ndarray, seed) -> np.ndarray:
     return Y
 
 
-def _forward_curve(xi0, tenors, Y, regime, nus, generator_q, H) -> np.ndarray:
-    """``E[v_u | Y_t, r_t]`` on the time grid.
+def bergomi_forward_variance(H: float, nu, xi0, times: np.ndarray, dW: np.ndarray) -> np.ndarray:
+    """Closed form of the rough Bergomi forward variance. Shape ``(m, n + 1, n + 1)``.
 
-    The mixture over future regimes is the ``H = 0.5`` case.
+    ``dW`` has shape ``(m, n)`` and ``times`` has length ``n + 1``. ``nu`` is a
+    scalar, shape ``(m,)``, or shape ``(m, n + 1)``. In the last case the vol
+    of vol at the clock is used for every later tenor. ``xi0`` is a positive
+    float or a callable of the tenor grid.
+
+    For ``u > t``,
+
+        I_t(u) = int_0^t (u - s)^{H - 1/2} dW_s,
+        xi_t(u) = xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2).
+
+    On the clock the entry is ``v_t``. Behind the clock it is NaN. At
+    ``H = 1/2`` the kernel is 1, so ``I_t(u) = W_t`` and the exponent does
+    not depend on ``u``.
     """
+    grid = np.asarray(times, dtype=float)
+    increments = np.asarray(dW, dtype=float)
+    if increments.ndim != 2 or increments.shape[1] != grid.size - 1:
+        raise ValueError(f"dW must have shape (m, {grid.size - 1}), got {increments.shape}")
+    m = increments.shape[0]
+    nu_arr = np.asarray(nu, dtype=float)
+    if nu_arr.ndim == 0:
+        nu_clock = np.full((m, grid.size), float(nu_arr))
+    elif nu_arr.shape == (m,):
+        nu_clock = np.broadcast_to(nu_arr[:, None], (m, grid.size)).copy()
+    elif nu_arr.shape == (m, grid.size):
+        nu_clock = np.asarray(nu_arr, dtype=float)
+    else:
+        raise ValueError(f"nu shape {nu_arr.shape} does not match {m} paths")
+    if callable(xi0):
+        level = np.asarray(xi0(grid), dtype=float)
+        if level.shape != grid.shape:
+            raise ValueError(f"xi0 returned shape {level.shape}, expected {grid.shape}")
+    else:
+        level = np.full(grid.shape, float(xi0))
+    weights = _kernel_weights(float(H), grid, grid)
+    stacked = increments[:, :, None] * weights[None, :, :]
+    integral = np.zeros((m, grid.size, grid.size))
+    integral[:, 1:, :] = np.cumsum(stacked, axis=1)
+    gap = grid[None, :] - grid[:, None]
+    tol = 1e-12 * max(1.0, float(grid[-1]))
+    ahead = gap > tol
+    safe = np.where(ahead, gap, 1.0)
+    u_power = np.zeros_like(grid)
+    positive = grid > 0.0
+    u_power[positive] = grid[positive] ** (2.0 * float(H))
+    nu_b = nu_clock[:, :, None]
+    gap_power = np.zeros_like(safe)
+    gap_power[ahead] = safe[ahead] ** (2.0 * float(H))
+    compensator = np.where(
+        ahead[None, :, :],
+        0.5 * nu_b**2 * (u_power[None, None, :] - gap_power[None, :, :]),
+        0.0,
+    )
+    scale = math.sqrt(2.0 * float(H))
+    xi = level[None, None, :] * np.exp(nu_b * scale * integral - compensator)
+    diagonal = np.arange(grid.size)
+    y_diag = integral[:, diagonal, diagonal]
+    clock_power = np.zeros_like(grid)
+    clock_power[positive] = grid[positive] ** (2.0 * float(H))
+    variance = level[None, :] * np.exp(
+        nu_clock * scale * y_diag - 0.5 * nu_clock**2 * clock_power[None, :]
+    )
+    xi[:, diagonal, diagonal] = variance
+    behind = gap < -tol
+    if np.any(behind):
+        xi = np.where(behind[None, :, :], np.nan, xi)
+    return xi
+
+
+def _kernel_weights(H: float, times: np.ndarray, tenors: np.ndarray) -> np.ndarray:
+    """``int_{step} (u - s)^{H - 1/2} ds / dt``. Shape ``(n_steps, n_tenors)``.
+
+    A step that finishes after the tenor has weight 0. At ``H = 1/2`` the
+    kernel is 1 on every step that finishes at or before the tenor.
+    """
+    alpha = H - 0.5
+    t0 = times[:-1]
+    t1 = times[1:]
+    dt = t1 - t0
+    left = tenors[None, :] - t0[:, None]
+    right = tenors[None, :] - t1[:, None]
+    if abs(alpha) < 1e-12:
+        weights = np.ones((t0.size, tenors.size))
+    else:
+        power = alpha + 1.0
+        integral = (np.maximum(left, 0.0) ** power - np.maximum(right, 0.0) ** power) / power
+        weights = integral / dt[:, None]
+    return np.where(right >= -1e-14, weights, 0.0)
+
+
+def _forward_curve(xi0, tenors, Y, regime, nus, generator_q, H) -> np.ndarray:
+    """``E[v_u | Y_t, r_t]`` on the time grid at ``H = 0.5``.
+
+    The mixture over future regimes is the Brownian case. Any other ``H``
+    uses :func:`bergomi_forward_variance`.
+    """
+    if H != 0.5:
+        raise ValueError(f"the regime mixture is the H = 0.5 curve, got H={H}")
     m, n = Y.shape
     curve = np.zeros((m, n, n))
-    scale = math.sqrt(2.0 * H)
     for i in range(n):
-        clock = float(tenors[i]) ** (2.0 * H)
+        clock = float(tenors[i])
         nu = nus[regime[:, i]]
-        level = np.exp(nu * scale * Y[:, i] - 0.5 * nu * nu * clock)
-        if H == 0.5:
-            basis = np.exp(nus[None, :] * Y[:, i, None] - 0.5 * (nus**2)[None, :] * clock)
-        else:
-            basis = None
-        for j in range(i, n):
-            if H == 0.5 and j > i:
-                law = _stochastic(expm(generator_q * float(tenors[j] - tenors[i])))
-                probs = law[regime[:, i]]
-                curve[:, i, j] = xi0 * np.sum(probs * basis, axis=1)
-            else:
-                curve[:, i, j] = xi0 * level
+        level = np.exp(nu * Y[:, i] - 0.5 * nu * nu * clock)
+        basis = np.exp(nus[None, :] * Y[:, i, None] - 0.5 * (nus**2)[None, :] * clock)
+        curve[:, i, i] = xi0 * level
+        for j in range(i + 1, n):
+            law = _stochastic(expm(generator_q * float(tenors[j] - tenors[i])))
+            probs = law[regime[:, i]]
+            curve[:, i, j] = xi0 * np.sum(probs * basis, axis=1)
     return curve
 
 

@@ -11,7 +11,7 @@ from volsurface.core.protocols import capabilities
 from volsurface.core.types import Contract, Digital, MarketPaths, RegimeSpec, Vanilla
 from volsurface.markets.filter import hamilton_filter
 from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, VarianceSwapPricer
-from volsurface.markets.regime import RegimeSwitchingBergomi
+from volsurface.markets.regime import RegimeSwitchingBergomi, bergomi_forward_variance
 from volsurface.markets.seeds import DRAW_ORDER, run_seed, stream_seeds
 from volsurface.mc.rng import generator
 from volsurface.mc.zrule import check_z
@@ -244,3 +244,101 @@ def test_filter_is_causal_and_inside_binomial_bands():
         assert lo <= hits <= hi
         checked += 1
     assert checked >= 2
+
+
+def test_forward_variance_matches_the_closed_form_away_from_one_half():
+    """One path. The weight is the exact integral of ``(u - s)^{H - 1/2}``."""
+    H = 0.25
+    nu = 0.8
+    xi0 = 0.05
+    times = np.array([0.0, 0.16, 0.36, 1.0])
+    increments = np.array([[0.3, -0.15, 0.05]])
+    xi = bergomi_forward_variance(H, nu, xi0, times, increments)
+    assert xi[0, 0, :] == pytest.approx(xi0)
+    assert np.isnan(xi[0, 2, 0])
+
+    alpha = H - 0.5
+    u = 1.0
+    # Two steps have finished by t = 0.36. Each weight is the antiderivative.
+    steps = ((0.0, 0.16, 0.3), (0.16, 0.36, -0.15))
+    integral = 0.0
+    for left, right, shock in steps:
+        dt = right - left
+        weight = ((u - left) ** (alpha + 1) - (u - right) ** (alpha + 1)) / ((alpha + 1) * dt)
+        integral += weight * shock
+    t = 0.36
+    compensator = 0.5 * nu**2 * (u ** (2 * H) - (u - t) ** (2 * H))
+    expected = xi0 * math.exp(nu * math.sqrt(2 * H) * integral - compensator)
+    assert xi[0, 2, 3] == pytest.approx(expected, rel=1e-12)
+
+    dt = 0.16
+    y_weight = dt**alpha / (alpha + 1.0)
+    y = y_weight * 0.3
+    variance = xi0 * math.exp(nu * math.sqrt(2 * H) * y - 0.5 * nu**2 * dt ** (2 * H))
+    assert xi[0, 1, 1] == pytest.approx(variance, rel=1e-12)
+    # The spot variance, copied onto a later tenor, is the bug this replaces.
+    spot = xi0 * math.exp(-0.5 * nu**2 * t ** (2 * H))
+    assert xi[0, 2, 3] != pytest.approx(spot)
+
+
+def test_half_hurst_forward_variance_depends_on_the_clock_only():
+    """At H = 1/2, ``I_t(u) = W_t`` and the exponent has no tenor in it."""
+    nu = 1.1
+    times = np.array([0.0, 0.2, 0.5, 1.0])
+    increments = np.array([[0.1, -0.4, 0.2]])
+
+    def xi0(t):
+        grid = np.asarray(t, dtype=float)
+        return 0.03 + 0.01 * grid
+
+    xi = bergomi_forward_variance(0.5, nu, xi0, times, increments)
+    level = xi0(times)
+    assert xi[0, 0, :] == pytest.approx(level)
+    for i, t in enumerate(times):
+        if i == 0:
+            continue
+        w = float(increments[0, :i].sum())
+        factor = math.exp(nu * w - 0.5 * nu**2 * float(t))
+        assert xi[0, i, i:] == pytest.approx(level[i:] * factor, rel=1e-12)
+        assert np.all(np.isnan(xi[0, i, :i]))
+
+
+def test_zero_driver_stores_the_rough_compensator(monkeypatch):
+    """Y = 0, so the Wiener increment is 0. Future tenors are not copies of v_t."""
+
+    class _StandIn:
+        def driver_y(self, n_paths, times, seed, H):
+            return np.zeros((n_paths, len(times)))
+
+    monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
+    H = 0.1
+    model = _model(H=H)
+    times = np.linspace(0.0, 0.2, 4)
+    paths = model.simulate_market(6, times, seed=3)
+    row = 0
+    clock = 1
+    tenor = times.size - 1
+    nu = float(_spec().params[int(paths.regime[row, clock])]["nu"])
+    t = float(times[clock])
+    u = float(times[tenor])
+    expected = model.xi0 * math.exp(-0.5 * nu**2 * (u ** (2 * H) - (u - t) ** (2 * H)))
+    assert paths.state["xi"][row, clock, tenor] == pytest.approx(expected, rel=1e-12)
+    assert paths.state["xi"][row, clock, clock] == pytest.approx(paths.state["v"][row, clock])
+    assert paths.state["xi"][row, clock, tenor] != pytest.approx(paths.state["v"][row, clock])
+    assert np.isnan(paths.state["xi"][row, clock, 0])
+
+
+def test_forward_variance_matches_roughvol_on_a_known_increment():
+    """Same dW, same grid. Skip only when the plugin is absent."""
+    pytest.importorskip("roughvol")
+    from roughvol.rbergomi import _forward_curve
+
+    H = 0.1
+    nu = 1.3
+    xi0 = 0.04
+    times = np.linspace(0.0, 1.0, 9)
+    increments = np.random.default_rng(0).normal(scale=np.sqrt(np.diff(times)), size=(5, 8))
+    ours = bergomi_forward_variance(H, nu, xi0, times, increments)
+    variance = np.diagonal(ours, axis1=1, axis2=2)
+    theirs = _forward_curve(H, nu, xi0, times, increments, variance, times)
+    assert np.allclose(ours, theirs, equal_nan=True, rtol=1e-10, atol=1e-12)

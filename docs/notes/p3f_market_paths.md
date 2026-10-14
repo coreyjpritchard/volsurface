@@ -27,7 +27,18 @@ The forward curve stored on the path, at `H = 0.5`, is
 
 `xi_t(u) = xi0(u) sum_r P(r_u = r | r_t) exp(nu_r Y_t - nu_r^2 t / 2)`.
 
-That equals `E[v_u | Y_t, r_t]`. The variance-swap pricer integrates it
+That equals `E[v_u | Y_t, r_t]`. At any other `H` the curve is the rough
+Bergomi forward variance at the vol of vol of the current regime,
+
+`xi_t(u) = xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`,
+
+`I_t(u) = int_0^t (u - s)^{H - 1/2} dW_s`.
+
+The weight on a step is the integral of the kernel over that step, divided
+by the step length. On the clock the entry is `v_t`. At `H = 1/2` the
+kernel is 1, so `I_t(u) = W_t` and the exponent does not depend on `u`.
+The plugin owns the Wiener path. A nonzero `Y` without increments raises.
+The variance-swap pricer integrates the stored curve
 with a left Riemann sum. The same sum of the left-point variance is the
 discrete realised variance, so the two agree in expectation.
 
