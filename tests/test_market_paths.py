@@ -8,6 +8,7 @@ import pytest
 from scipy.linalg import expm
 from scipy.stats import binom, chisquare
 
+from volsurface import bs
 from volsurface.core.protocols import capabilities
 from volsurface.core.types import Contract, Digital, MarketPaths, RegimeSpec, Vanilla
 from volsurface.markets.filter import hamilton_filter
@@ -549,9 +550,11 @@ def test_regime_cannot_be_read_exactly_from_prices():
     Eight quantile bins of the call and of the variance swap each contain
     both regimes. Their modal accuracy beats the base rate by more than
     0.05 and by less than 0.35, so the price is not the unconditional law
-    and it is not the label. The log-RV filter's modal hit rate stays
-    within 0.10 of the same base rate. One-step log realised variance has
-    one mean in both regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
+    and it is not the label. With 256 Monte Carlo copies the call accuracy
+    is 0.6417 (lift 0.1033) and the variance-swap accuracy is 0.6600
+    (lift 0.1217). The log-RV filter's modal hit rate stays within 0.10 of
+    the same base rate. One-step log realised variance has one mean in both
+    regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
     """
     model = _model()
     times = np.linspace(0.0, 1.0, 21)
@@ -570,3 +573,99 @@ def test_regime_cannot_be_read_exactly_from_prices():
     predicted = paths.regime_prob[:, 10].argmax(axis=1)
     filter_accuracy = float(np.mean(predicted == labels))
     assert -0.10 < filter_accuracy - base < 0.10
+
+
+def _single_regime(nu: float, n_mc: int, **kwargs) -> RegimeSwitchingBergomi:
+    spec = RegimeSpec(
+        generator=np.zeros((1, 1)),
+        params=[{"nu": nu}],
+        p0=np.array([1.0]),
+        switch="nu",
+    )
+    values = {"xi0": 0.04, "rho": -0.4, "H": 0.5, "n_mc": n_mc}
+    values.update(kwargs)
+    return RegimeSwitchingBergomi(spec, **values)
+
+
+def _quoted_paths(v0: float, n_steps: int, prob: np.ndarray, entropy: int = 7) -> MarketPaths:
+    """One clock at time 0, variance ``v0``, filter weights ``prob``."""
+    times = np.linspace(0.0, 1.0, n_steps + 1)
+    weights = np.asarray(prob, dtype=float)
+    regime_prob = np.zeros((1, times.size, weights.size))
+    regime_prob[:, 0, :] = weights
+    variance = np.full((1, times.size), float(v0))
+    return MarketPaths(
+        times=times,
+        Z=np.ones((1, times.size)),
+        state={"v": variance, "xi_tenor": times.copy()},
+        F0=lambda t: np.full(np.shape(np.asarray(t, dtype=float)), 100.0),
+        df=lambda t: np.ones(np.shape(np.asarray(t, dtype=float))),
+        regime=np.zeros((1, times.size), dtype=np.int8),
+        regime_prob=regime_prob,
+        meta={"seed_entropy": entropy, "spawn_key": (2,)},
+    )
+
+
+def _last_smile(model: RegimeSwitchingBergomi, paths: MarketPaths) -> np.ndarray:
+    """Implied vol of the last expiry on the unit forward."""
+    batch = model.surface_at(paths, 0)
+    tau = float(batch.T[-1] - paths.times[0])
+    return bs.implied_vol(batch.call[0, -1], 1.0, np.exp(batch.k), tau)
+
+
+def test_surface_mixes_the_filter_and_repeats():
+    """A convex combination of regime probabilities is the same combination of prices."""
+    low = _model(n_mc=32)
+    times = np.linspace(0.0, 0.25, 5)
+    paths = low.simulate_market(4, times, seed=run_seed(9, 2))
+    pure = []
+    for regime in (0, 1):
+        weights = np.zeros_like(paths.regime_prob)
+        weights[:, :, regime] = 1.0
+        pure.append(low.surface_at(replace(paths, regime_prob=weights), 2).call)
+    mixed_weights = 0.25 * np.ones_like(paths.regime_prob)
+    mixed_weights[:, :, 0] = 0.25
+    mixed_weights[:, :, 1] = 0.75
+    mixed = low.surface_at(replace(paths, regime_prob=mixed_weights), 2).call
+    assert mixed == pytest.approx(0.25 * pure[0] + 0.75 * pure[1], rel=0, abs=1e-12)
+    assert np.array_equal(mixed, low.surface_at(replace(paths, regime_prob=mixed_weights), 2).call)
+
+
+def test_half_smile_is_not_flat_and_moves_with_nu():
+    """H = 1/2, one path, 32 steps, 8,192 Monte Carlo copies, seed entropy 7.
+
+    The implied-vol span at nu = 1.5 is 0.0401, against 0.0044 at nu = 0.01.
+    With rho = -0.4 the low-strike implied vol is 0.2066 and the high-strike
+    implied vol is 0.1668.
+    """
+    paths = _quoted_paths(0.04, 32, np.array([1.0]))
+    calm = _last_smile(_single_regime(0.01, 8192), paths)
+    moved = _last_smile(_single_regime(1.5, 8192), paths)
+    assert np.isfinite(calm).all() and np.isfinite(moved).all()
+    calm_span = float(calm.max() - calm.min())
+    moved_span = float(moved.max() - moved.min())
+    assert moved_span > 0.03
+    assert moved_span > calm_span + 0.02
+    assert moved[0] > moved[-1]
+
+
+def test_half_surface_does_not_call_the_plugin(monkeypatch):
+    def absent(name, **kwargs):
+        raise AssertionError(name)
+
+    monkeypatch.setattr("volsurface.markets.regime.create", absent)
+    paths = _quoted_paths(0.04, 4, np.array([1.0]))
+    batch = _single_regime(0.4, 8).surface_at(paths, 0)
+    assert np.isfinite(batch.call).all()
+
+
+def test_rough_surface_ignores_the_label_and_responds_to_nu():
+    """H = 0.1 restarts the hybrid kernel. Two copies, 16 Monte Carlo paths, 4 steps."""
+    pytest.importorskip("roughvol")
+    paths = _quoted_paths(0.04, 4, np.array([1.0]), entropy=11)
+    calm = _single_regime(0.2, 16, H=0.1).surface_at(paths, 0)
+    moved = _single_regime(1.5, 16, H=0.1).surface_at(paths, 0)
+    flipped = replace(paths, regime=np.ones_like(paths.regime))
+    assert np.array_equal(calm.call, _single_regime(0.2, 16, H=0.1).surface_at(flipped, 0).call)
+    assert np.isfinite(calm.call).all()
+    assert not np.allclose(calm.call, moved.call)

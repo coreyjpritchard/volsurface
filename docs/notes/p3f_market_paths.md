@@ -41,11 +41,21 @@ Every price uses the trader's information. `state["xi"]` is the mixture
 of the regime-conditional forward curves, weighted by `regime_prob`. It
 is not conditioned on the true label `r_t`. At `H = 1/2` each
 conditional expectation equals `v_t` when `xi0` is flat, so the mixture
-is that common curve. The variance-swap pricer integrates it. `surface_at`
-prices each regime's Black call and mixes the prices with the same
-weights. At `H` other than `1/2` the tenor slope is the constant-`nu`
-rough ratio for each regime, anchored at `v_t`, then mixed. Behind the
-clock the entry is NaN. On the clock it is `v_t`.
+is that common curve. The variance-swap pricer integrates it. Behind
+the clock the forward-variance entry is NaN. On the clock it is `v_t`.
+At `H` other than `1/2` the tenor slope of that curve is the
+constant-`nu` rough ratio for each regime, anchored at `v_t`, then mixed.
+
+`surface_at` is a separate Monte Carlo of the call. Each regime holds
+`nu` fixed, starts from `v_t`, and is weighted by `regime_prob` at the
+clock. The seed is the path entropy and `spawn_key + (i_t, 4, regime)`.
+`n_mc` defaults to 256. The unit forward is 1 and the strike is `exp(k)`.
+At `H = 1/2` the variance step is the exponential martingale. A Black
+call on the expected variance is flat in strike there, and independent
+of `nu`, so the surface simulates the payoff instead. The plugin is not
+called. Any other `H` restarts `volterra_components` on a uniform grid
+from the clock to the last expiry, anchored at `v_t`. The path's past
+Volterra integral is left out of that draw.
 
 The filter observation is one-step log realised variance of the simulated
 spot, `log((d log Z)^2 / dt)`. Time 0 has no return, and the probability
@@ -109,11 +119,17 @@ value `1.602` and mean `-0.194`. It passes the z-rule.
 Six hundred paths, 21 times, clock index 10, seed entropy 12, test split.
 The base rate, the larger share of the latent regime, is 0.5383. Eight
 quantile bins of the at-the-money call, and the same bins of the variance
-swap, each contain both regimes. The modal prediction is right on 0.6600
-of the paths, for both prices. The lift over the base rate is 0.1217,
-inside the band from 0.05 to 0.35. The log-RV filter's modal hit rate on
-the same paths is 0.4783, a lift of -0.0600, inside the band from -0.10
-to 0.10. The figure is `docs/figures/p3f_paths.png`.
+swap, each contain both regimes. With 256 Monte Carlo copies the call's
+modal prediction is right on 0.6417 of the paths, a lift of 0.1033. The
+variance swap is right on 0.6600 of the paths, a lift of 0.1217. Both
+lifts sit inside the band from 0.05 to 0.35. The log-RV filter's modal
+hit rate on the same paths is 0.4783, a lift of -0.0600, inside the band
+from -0.10 to 0.10. The figure is `docs/figures/p3f_paths.png`.
+
+One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1,
+8,192 copies, seed entropy 7, test split. The implied-vol span at
+`nu = 0.01` is 0.0044. At `nu = 1.5` the span is 0.0401. The implied
+vol at that `nu` is 0.2066 at log-moneyness -0.2 and 0.1668 at 0.2.
 
 `H = 0.1`, the same two regimes, eight runs, 2,000 paths, terminal time
 1, 11 times, seed entropies 70 to 77, test split. The driver is the

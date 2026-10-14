@@ -56,8 +56,21 @@ filtered probabilities. It is not computed from the true label ``r_t``.
 At ``H = 1/2`` each regime-conditional expectation equals
 ``v_t xi0(u) / xi0(t)``, so the mixture equals that common curve.
 ``state["xi"]`` stores the mixture. ``VarianceSwapPricer`` integrates it.
-``surface_at`` prices each regime's Black call and mixes those prices with
-``regime_prob``.
+``surface_at`` does not price Black on that curve: at ``H = 1/2`` that
+Black call is flat in strike and does not depend on ``nu``. The surface
+is a Monte Carlo of the call payoff under the filtered mixture. Each
+regime holds ``nu`` fixed, starts from the path's ``v_t``, and is weighted
+by ``regime_prob`` at the clock. The true label is not an argument. At
+``H = 1/2`` the variance step is the exponential martingale and the
+plugin is not called. Any other ``H`` restarts ``volterra_components``
+on a uniform grid from the clock to the last expiry, anchored at ``v_t``.
+That restart does not replay the path's past Volterra integral.
+
+The Monte Carlo seed is a ``SeedSequence`` with the path's entropy and
+``spawn_key + (i_t, 4, regime)``. It is not one of the four simulation
+children. At ``H = 1/2`` each step draws ``dW`` for every path and every
+copy, then the orthogonal shock. ``n_mc`` is the number of copies. The
+unit forward is 1 and the strike is ``exp(k)``.
 
 The Hamilton filter reads one-step log realised variance of the simulated
 spot,
@@ -107,12 +120,10 @@ import math
 import numpy as np
 from scipy.linalg import expm
 
-from volsurface import bs
 from volsurface.core.types import MarketPaths, RegimeSpec, SurfaceBatch
 from volsurface.markets.filter import hamilton_filter
-from volsurface.markets.pricers import integrate_forward_variance
 from volsurface.markets.seeds import DRAW_ORDER, stream_seeds
-from volsurface.mc.rng import as_seed_sequence, generator
+from volsurface.mc.rng import as_seed_sequence, generator, spawn
 from volsurface.plugins import create
 
 # E[log(chi^2_1)] = -gamma - log(2). Var(log(chi^2_1)) = trigamma(1/2) = pi^2 / 2.
@@ -135,6 +146,7 @@ class RegimeSwitchingBergomi:
         forward: float = 100.0,
         rate: float = 0.0,
         smile_k: np.ndarray | None = None,
+        n_mc: int = 256,
     ):
         self.spec = spec
         self.xi0 = float(xi0)
@@ -147,6 +159,9 @@ class RegimeSwitchingBergomi:
         self.smile_k = (
             np.linspace(-0.2, 0.2, 9) if smile_k is None else np.asarray(smile_k, dtype=float)
         )
+        self.n_mc = int(n_mc)
+        if self.n_mc < 1:
+            raise ValueError(f"n_mc must be positive, got {self.n_mc}")
         self._plugin = None
 
     def simulate_market(
@@ -233,37 +248,79 @@ class RegimeSwitchingBergomi:
         )
 
     def surface_at(self, paths: MarketPaths, i_t: int) -> SurfaceBatch:
-        """Black calls mixed over the filtered regime probabilities.
+        """Monte Carlo calls mixed over the filtered regime probabilities.
 
-        Each regime is priced from its own forward curve, anchored at the
-        path's variance. The curves do not read ``paths.regime``. At
-        ``H = 1/2`` the curves agree, so the mixture is that common price.
+        Each regime is simulated with that regime's ``nu`` held fixed,
+        starting from ``v`` at the clock. The draws do not read
+        ``paths.regime``. Weights are ``regime_prob`` at the clock. Two
+        calls on the same paths use the same seed, so the prices match.
         """
         if paths.regime_prob is None:
             raise ValueError("surface_at mixes filtered regime probabilities")
-        probs = np.asarray(paths.regime_prob[:, i_t, :], dtype=float)
-        tenors = np.asarray(paths.state["xi_tenor"], dtype=float)
-        now = float(paths.times[i_t])
-        future = tenors[tenors > now + 1e-15]
-        if future.size == 0:
-            future = tenors[-1:]
-        if future.size > 7:
-            future = future[np.linspace(0, future.size - 1, 7).astype(int)]
+        clock = int(i_t)
+        times = np.asarray(paths.times, dtype=float)
+        indices = _expiry_indices(times.size, clock)
+        v_now = np.asarray(paths.state["v"][:, clock], dtype=float)
         nus = np.array([float(item["nu"]) for item in self.spec.params], dtype=float)
-        dW = np.asarray(paths.state["dW"], dtype=float)
-        v_now = np.asarray(paths.state["v"][:, i_t], dtype=float)
-        k = self.smile_k
+        probs = np.asarray(paths.regime_prob[:, clock, :], dtype=float)
+        if probs.shape != (v_now.shape[0], nus.size):
+            raise ValueError(
+                f"regime_prob shape {probs.shape} does not match "
+                f"{(v_now.shape[0], nus.size)} paths and regimes"
+            )
+        k = np.asarray(self.smile_k, dtype=float)
         strikes = np.exp(k)
-        call = np.zeros((paths.Z.shape[0], future.size, k.size))
+        call = np.zeros((v_now.shape[0], indices.size, k.size))
         for r, nu in enumerate(nus):
-            weight = probs[:, r]
-            row = _anchored_row(self.H, float(nu), v_now, self.xi0, paths.times, dW, i_t)
-            for j, maturity in enumerate(future):
-                total = integrate_forward_variance(row, tenors, now, float(maturity))
-                vol = np.sqrt(np.maximum(total, 0.0))
-                for a, strike in enumerate(strikes):
-                    call[:, j, a] += weight * bs.price(1.0, float(strike), 1.0, vol, 1.0)
-        return SurfaceBatch(T=np.asarray(future, dtype=float), k=k.copy(), call=call)
+            seed = _surface_seed(paths, clock, r)
+            column = self._regime_calls(float(nu), v_now, times, clock, indices, strikes, seed)
+            call += probs[:, r, None, None] * column
+        return SurfaceBatch(T=times[indices].copy(), k=k.copy(), call=call)
+
+    def _regime_calls(self, nu, v_now, times, i_t, indices, strikes, seed) -> np.ndarray:
+        """Call prices for one constant ``nu``. Shape ``(m, n_exp, n_k)``."""
+        if int(indices[-1]) == i_t:
+            return _intrinsic_calls(v_now.shape[0], strikes)
+        if self.H == 0.5:
+            return _half_calls(nu, v_now, times, i_t, indices, strikes, seed, self.n_mc, self.rho)
+        return self._rough_calls(nu, v_now, times, i_t, indices, strikes, seed)
+
+    def _rough_calls(self, nu, v_now, times, i_t, indices, strikes, seed) -> np.ndarray:
+        """Restarted hybrid kernel, anchored at ``v_now``. The plugin draws the vol child."""
+        m = v_now.shape[0]
+        n_mc = self.n_mc
+        last = int(indices[-1])
+        n_steps = last - i_t
+        tau = float(times[last] - times[i_t])
+        grid = np.linspace(0.0, tau, n_steps + 1)
+        vol_seed, spot_seed = spawn(seed, 2)
+        n_sim = m * n_mc
+        components = self._rough_components(n_sim, grid, vol_seed)
+        nu_step = np.full((n_sim, n_steps), float(nu))
+        variance = hybrid_increment_variance(self.H, nu_step, 1.0, grid, components)
+        variance = variance * np.repeat(np.maximum(v_now, 0.0), n_mc)[:, None]
+        rng = generator(spot_seed)
+        log_z = np.zeros(n_sim)
+        rho = self.rho
+        ortho = math.sqrt(max(0.0, 1.0 - rho * rho))
+        stored: dict[int, np.ndarray] = {}
+        wanted = {_residual_step(times, i_t, int(idx), grid) for idx in indices}
+        for step in range(n_steps):
+            dt = float(grid[step + 1] - grid[step])
+            dW = np.asarray(components[:, step, 0], dtype=float)
+            dW_perp = math.sqrt(dt) * rng.standard_normal(n_sim)
+            left = np.maximum(variance[:, step], 0.0)
+            shock = rho * dW + ortho * dW_perp
+            log_z = log_z + np.sqrt(left) * shock - 0.5 * left * dt
+            if step + 1 in wanted:
+                stored[step + 1] = log_z.copy()
+        out = np.empty((m, indices.size, strikes.size))
+        for j, idx in enumerate(indices):
+            step = _residual_step(times, i_t, int(idx), grid)
+            z = np.exp(stored[step]).reshape(m, n_mc)
+            payoff = np.maximum(z[:, :, None] - strikes, 0.0)
+            out[:, j, :] = payoff.mean(axis=1)
+        return out
 
     def _checked_spec(self) -> RegimeSpec:
         spec = self.spec
@@ -598,27 +655,65 @@ def _log_realised_variance(Z: np.ndarray, times: np.ndarray) -> np.ndarray:
     return y
 
 
-def _anchored_row(
-    H: float,
-    nu: float,
-    v_now: np.ndarray,
-    xi0: float,
-    times: np.ndarray,
-    dW: np.ndarray,
-    i_t: int,
-) -> np.ndarray:
-    """One regime's forward curve at one clock time, anchored at ``v_now``."""
-    grid = np.asarray(times, dtype=float)
-    current = np.asarray(v_now, dtype=float)
-    row = np.full((current.size, grid.size), np.nan)
-    if float(H) == 0.5:
-        row[:, i_t:] = current[:, None]
-        return row
-    component = bergomi_forward_variance(float(H), float(nu), xi0, grid, dW)[:, i_t, :]
-    clock = component[:, i_t]
-    future = np.arange(grid.size) >= i_t
-    row[:, future] = current[:, None] * component[:, future] / clock[:, None]
-    return row
+def _expiry_indices(n_times: int, i_t: int) -> np.ndarray:
+    """Later clock indices, at most seven, spread through to the last time."""
+    if i_t < 0 or i_t >= n_times:
+        raise ValueError(f"i_t must lie in [0, {n_times}), got {i_t}")
+    future = np.arange(i_t + 1, n_times)
+    if future.size == 0:
+        return np.array([i_t], dtype=int)
+    if future.size > 7:
+        pick = np.linspace(0, future.size - 1, 7).astype(int)
+        future = future[pick]
+    return future
+
+
+def _surface_seed(paths: MarketPaths, i_t: int, regime: int) -> np.random.SeedSequence:
+    """Monte Carlo seed for one clock and one regime. Not a simulation child."""
+    meta = paths.meta
+    if "seed_entropy" not in meta or "spawn_key" not in meta:
+        raise ValueError("surface_at draws from paths.meta seed_entropy and spawn_key")
+    key = tuple(int(part) for part in meta["spawn_key"]) + (int(i_t), 4, int(regime))
+    return np.random.SeedSequence(entropy=meta["seed_entropy"], spawn_key=key)
+
+
+def _intrinsic_calls(n_paths: int, strikes: np.ndarray) -> np.ndarray:
+    """Unit-forward intrinsic value, shape ``(m, 1, n_k)``."""
+    intrinsic = np.maximum(1.0 - strikes, 0.0)
+    return np.broadcast_to(intrinsic, (n_paths, 1, strikes.size)).copy()
+
+
+def _half_calls(nu, v_now, times, i_t, indices, strikes, seed, n_mc, rho) -> np.ndarray:
+    """Exponential-martingale variance at ``H = 1/2``. Shape ``(m, n_exp, n_k)``."""
+    m = int(v_now.shape[0])
+    rng = generator(seed)
+    current = np.broadcast_to(np.maximum(v_now, 0.0)[:, None], (m, n_mc)).copy()
+    log_z = np.zeros((m, n_mc))
+    ortho = math.sqrt(max(0.0, 1.0 - rho * rho))
+    wanted = {int(i) for i in indices}
+    slot = {int(i): j for j, i in enumerate(indices)}
+    out = np.empty((m, indices.size, strikes.size))
+    last = int(indices[-1])
+    for i in range(i_t + 1, last + 1):
+        dt = float(times[i] - times[i - 1])
+        scale = math.sqrt(dt)
+        dW = scale * rng.standard_normal((m, n_mc))
+        dW_perp = scale * rng.standard_normal((m, n_mc))
+        left = np.maximum(current, 0.0)
+        shock = rho * dW + ortho * dW_perp
+        log_z = log_z + np.sqrt(left) * shock - 0.5 * left * dt
+        current = current * np.exp(nu * dW - 0.5 * nu * nu * dt)
+        if i in wanted:
+            z = np.exp(log_z)
+            payoff = np.maximum(z[:, :, None] - strikes, 0.0)
+            out[:, slot[i], :] = payoff.mean(axis=1)
+    return out
+
+
+def _residual_step(times: np.ndarray, i_t: int, index: int, grid: np.ndarray) -> int:
+    """Grid step nearest to a clock expiry. Exact when both grids are uniform."""
+    residual = float(times[index] - times[i_t])
+    return int(np.argmin(np.abs(grid - residual)))
 
 
 def bergomi_forward_variance(H: float, nu, xi0, times: np.ndarray, dW: np.ndarray) -> np.ndarray:

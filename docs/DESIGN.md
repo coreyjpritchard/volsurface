@@ -1038,10 +1038,17 @@ the regime-conditional curves, weighted by the filtered probabilities
 `H = 1/2` each regime-conditional expectation of future variance equals
 `v_t xi0(u) / xi0(t)`, so the mixture equals that common curve.
 `state["xi"]` stores the mixture. `VarianceSwapPricer` integrates it.
-`surface_at` prices each regime's Black call on that regime's curve and
-mixes the prices with `regime_prob`. Whether `Z` stays a martingale when
-`nu` switches is a hypothesis. The test is the z-rule. It is not a
-theorem in this file.
+`surface_at` is a Monte Carlo of the call payoff under the same mixture.
+Each regime holds `nu` fixed and starts from the path's `v_t`. The
+weights are `regime_prob` at the clock. The seed is the path entropy
+and `spawn_key + (i_t, 4, regime)`, and `n_mc` defaults to 256. At
+`H = 1/2` the variance step is the exponential martingale, and a Black
+call on the expected variance would be flat in strike and independent
+of `nu`. The plugin is not called at that `H`. Any other `H` restarts
+`volterra_components` on a uniform grid from the clock to the last
+expiry, anchored at `v_t`. That draw leaves the path's past Volterra
+integral out. Whether `Z` stays a martingale when `nu` switches is a
+hypothesis. The test is the z-rule. It is not a theorem in this file.
 
 The Hamilton filter reads one-step log realised variance of the simulated
 spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
@@ -1059,10 +1066,15 @@ index 10, seed entropy 12, test split, the filter's modal hit rate is
 0.4783 against the base rate 0.5383, the larger share of the latent
 regime at that clock. The lift is -0.0600. The bar is a two-sided band
 on that lift, from -0.10 to 0.10, not a claim that the hit rate is below
-1. The same paths, read from eight quantile bins of the at-the-money call
-and of the variance swap, have modal accuracy 0.6600, a lift of 0.1217
-over the same base rate. That lift sits between 0.05 and 0.35, so the
-price is not the unconditional law and it is not the latent label.
+1. The same paths, read from eight quantile bins, give a call modal
+accuracy of 0.6417 with 256 Monte Carlo copies (lift 0.1033) and a
+variance-swap modal accuracy of 0.6600 (lift 0.1217). Both lifts sit
+between 0.05 and 0.35, so the price is not the unconditional law and
+it is not the latent label. On one path with `v = 0.04`, `rho = -0.4`,
+32 steps and 8,192 copies, seed entropy 7, test split, the implied-vol
+span at expiry 1 is 0.0044 when `nu = 0.01` and 0.0401 when `nu = 1.5`.
+At `nu = 1.5` the implied vol is 0.2066 at log-moneyness -0.2 and
+0.1668 at log-moneyness 0.2.
 Reliability of the filter on a hand-built Gaussian series is checked
 against binomial bands.
 

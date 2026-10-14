@@ -2,7 +2,17 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Market paths switch `nu` on a continuous-time chain, price a variance swap from the forward curve, and attach a causal filter probability. **Next:** a minimal DYSANOS replication on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo under that mixture, and at `H = 1/2` the smile moves with `nu`. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Review: the Monte Carlo smile
+
+`surface_at` simulates the call under each regime's constant `nu`, from `v_t`, and mixes the payoffs with `regime_prob`. The seed is the path entropy and `spawn_key + (i_t, 4, regime)`. `n_mc` defaults to 256. At `H = 1/2` the variance step is `v <- v exp(nu dW - nu^2 dt / 2)`, and the plugin is not called. At any other `H` the hybrid kernel restarts on a uniform grid from the clock, anchored at `v_t`.
+
+One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies, seed entropy 7, test split. The implied-vol span at `nu = 0.01` is 0.0044. At `nu = 1.5` the span is 0.0401, with implied vol 0.2066 at log-moneyness -0.2 and 0.1668 at 0.2.
+
+Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
+
+**Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
 
 ## 2026-10-14 Library P3f: market paths and regimes
 
