@@ -773,13 +773,16 @@ volatility shock is `rho Z_F + sqrt(1 - rho^2) Z_vol`. Both updates read
 the volatility at the left edge of the step. `euler_price` starts that
 volatility at `alpha * F^(beta - 1)`. For `beta < 1` a normal Euler
 predictor that is not strictly positive sets `Z` to 0, and later steps
-leave it there. `beta = 1` does not absorb.
+leave it there. A level below `1e-12`, or a non-finite power, absorbs
+as well. `beta = 1` does not absorb.
 
 The formula is an expansion in small `nu^2 T`. The Monte Carlo test uses
-`nu = 0.15` (so `nu^2 T = 0.0225` at one year) and the z-rule. A large
-`nu^2 T` is plotted. It is not required to match. `SABRFitter` holds
-`beta` fixed and fits `alpha`, `rho` and `nu` by a vega-weighted price
-residual, multi-start, bounds from `param_spec`.
+`nu = 0.15` (so `nu^2 T = 0.0225` at one year) and the z-rule. At
+`beta = 1` and `rho = 0` the price is the average of Black prices over
+the integrated variance of `alpha`. On the panel with `nu^2 T = 2` that
+mixture is the reference: Hagan is about 184 to 271 bp high, and the
+20,000-path log-Euler is about 187 to 290 bp low. `SABRFitter` holds
+`beta` fixed and fits `alpha`, `rho` and `nu` once per expiry.
 
 `check_surface` on Hagan prices at `T = 10`, `nu = 1.5`, `beta = 1` reports
 a butterfly. The implied vol on that window stays positive. The negative

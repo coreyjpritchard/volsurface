@@ -28,10 +28,17 @@ For ``beta = 1`` that factor is 1.
 For ``beta < 1`` the continuous process can reach 0 and must stay there.
 Log-Euler of a positive number stays positive, so the step also forms the
 normal predictor ``Z + a Z^beta sqrt(dt) Z_F``. If that predictor is not
-strictly positive, ``Z`` is set to 0 and later steps leave it there.
+strictly positive, or the level is already below ``1e-12``, ``Z`` is set
+to 0 and later steps leave it there. The power ``Z^(beta - 1)`` is
+evaluated with overflow ignored, and a non-finite step absorbs as well.
 ``beta = 1`` does not absorb: 0 is not attainable, and the log-Euler step
 is the exact lognormal transition for a volatility that is constant on
 the step.
+
+When ``beta = 1`` and ``rho = 0``, ``alpha`` is independent of the forward
+and the price is an average of Black prices over
+``(1/T) int alpha_t^2 dt``. :func:`integrated_black_mixture` is that
+average. It is the reference for the large-``nu^2 T`` panel.
 """
 
 from __future__ import annotations
@@ -110,8 +117,7 @@ class SABR:
         if value.shape == () or value.size == 1:
             return float(value.reshape(()))
         raise ValueError(
-            "SABR.price uses one volatility. "
-            f"Got state['alpha'] with shape {value.shape}."
+            f"SABR.price uses one volatility. Got state['alpha'] with shape {value.shape}."
         )
 
     def implied_vol(self, F, K, T, *, state: State | None = None) -> np.ndarray:
@@ -132,8 +138,12 @@ class SABR:
         return bs.price(F, K, T, sigma, df, kind)
 
     def simulate(
-        self, n_paths: int, times: np.ndarray, *,
-        seed: int | np.random.SeedSequence, state0: State | None = None,
+        self,
+        n_paths: int,
+        times: np.ndarray,
+        *,
+        seed: int | np.random.SeedSequence,
+        state0: State | None = None,
     ) -> Paths:
         """Unit-mean ``Z`` for a unit forward. See the module note for ``F != 1``.
 
@@ -158,7 +168,13 @@ class SABR:
             raise ValueError(f"initial alpha must be positive, got {a0}")
         rng = generator(spawn(seed, 1)[0])
         Z, alpha = _log_euler(
-            a0, self.beta, self.rho, self.nu, times, n_paths, rng,
+            a0,
+            self.beta,
+            self.rho,
+            self.nu,
+            times,
+            n_paths,
+            rng,
         )
         return Paths(times=times, Z=Z, state={"alpha": alpha})
 
@@ -210,9 +226,7 @@ def hagan_implied_vol(F, K, T, alpha: float, beta: float, rho: float, nu: float)
     z = (nu / alpha) * fk_half * log_moneyness
     numerator = alpha * _z_over_x(z, rho)
     denominator = fk_half * (
-        1.0
-        + (one_minus**2) / 24.0 * log_moneyness**2
-        + (one_minus**4) / 1920.0 * log_moneyness**4
+        1.0 + (one_minus**2) / 24.0 * log_moneyness**2 + (one_minus**4) / 1920.0 * log_moneyness**4
     )
     correction = _correction_array(forward, strike, alpha, beta, rho, nu)
     sigma = (numerator / denominator) * (1.0 + correction * maturity)
@@ -221,9 +235,17 @@ def hagan_implied_vol(F, K, T, alpha: float, beta: float, rho: float, nu: float)
 
 
 def euler_price(
-    model: SABR, F, K, T, df=1.0, kind="call", *,
-    state: State | None = None, n_paths: int | None = None,
-    n_steps: int | None = None, seed: int | np.random.SeedSequence | None = None,
+    model: SABR,
+    F,
+    K,
+    T,
+    df=1.0,
+    kind="call",
+    *,
+    state: State | None = None,
+    n_paths: int | None = None,
+    n_steps: int | None = None,
+    seed: int | np.random.SeedSequence | None = None,
 ) -> PriceResult:
     """Log-Euler price and its standard error. Strikes share the paths.
 
@@ -252,11 +274,19 @@ def euler_price(
     scaled = alpha * forward ** (model.beta - 1.0)
     times = np.linspace(0.0, maturity, n_steps + 1)
     paths = model.simulate(
-        n_paths, times, seed=seed, state0={"alpha": np.array(scaled)},
+        n_paths,
+        times,
+        seed=seed,
+        state0={"alpha": np.array(scaled)},
     )
     value, stderr = estimate_terminal(
-        paths.Z[:, -1], forward, strike, float(df), kind,
-        antithetic=False, control_variate=False,
+        paths.Z[:, -1],
+        forward,
+        strike,
+        float(df),
+        kind,
+        antithetic=False,
+        control_variate=False,
     )
     return PriceResult(
         value=value.reshape(strike_in.shape),
@@ -267,7 +297,12 @@ def euler_price(
 
 
 def _correction(
-    forward: float, strike: float, alpha: float, beta: float, rho: float, nu: float,
+    forward: float,
+    strike: float,
+    alpha: float,
+    beta: float,
+    rho: float,
+    nu: float,
 ) -> float:
     """The bracket that multiplies ``T`` in Hagan's formula, at one strike."""
     one_minus = 1.0 - beta
@@ -309,7 +344,10 @@ def _z_over_x(z: np.ndarray, rho: float) -> np.ndarray:
 
 
 def _log_euler(a0, beta, rho, nu, times, n_paths, rng):
-    """Log-Euler. For ``beta < 1``, a non-positive normal predictor absorbs at 0."""
+    """Log-Euler. For ``beta < 1``, a non-positive predictor absorbs at 0.
+
+    A level below ``1e-12``, or a step that overflowed, absorbs as well.
+    """
     Z = np.empty((n_paths, times.size), dtype=float)
     alpha = np.empty((n_paths, times.size), dtype=float)
     Z[:, 0] = 1.0
@@ -317,6 +355,7 @@ def _log_euler(a0, beta, rho, nu, times, n_paths, rng):
     level = np.ones(n_paths, dtype=float)
     vol = np.full(n_paths, a0, dtype=float)
     absorb = float(beta) < 1.0
+    floor = 1e-12
     for i in range(1, times.size):
         dt = float(times[i] - times[i - 1])
         sqrt_dt = np.sqrt(dt)
@@ -326,22 +365,102 @@ def _log_euler(a0, beta, rho, nu, times, n_paths, rng):
         # Both updates read the volatility at the left edge of the step.
         left = vol
         alive = level > 0.0
-        diffusion = np.zeros(n_paths, dtype=float)
-        diffusion[alive] = left[alive] * np.power(level[alive], beta) * sqrt_dt * shock_f[alive]
-        killed = alive & absorb & (level + diffusion <= 0.0)
+        power = np.zeros(n_paths, dtype=float)
+        local = np.zeros(n_paths, dtype=float)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            if np.any(alive):
+                power[alive] = np.power(level[alive], beta)
+                local[alive] = left[alive] * np.power(level[alive], beta - 1.0)
+        diffusion = left * power * sqrt_dt * shock_f
+        finite_step = np.isfinite(diffusion) & np.isfinite(local)
+        killed = alive & absorb & ((level < floor) | ~finite_step | (level + diffusion <= 0.0))
         stay = alive & ~killed
         updated = np.zeros(n_paths, dtype=float)
         if np.any(stay):
-            local = left[stay] * np.power(level[stay], beta - 1.0)
-            log_level = (
-                np.log(level[stay]) - 0.5 * local * local * dt + local * sqrt_dt * shock_f[stay]
+            stepped = np.exp(
+                np.log(level[stay])
+                - 0.5 * local[stay] * local[stay] * dt
+                + local[stay] * sqrt_dt * shock_f[stay]
             )
-            updated[stay] = np.exp(log_level)
+            updated[stay] = np.where(np.isfinite(stepped) & (stepped >= floor), stepped, 0.0)
         level = updated
         vol = np.exp(np.log(left) - 0.5 * nu * nu * dt + nu * sqrt_dt * mixed)
         Z[:, i] = level
         alpha[:, i] = vol
     return Z, alpha
+
+
+def integrated_black_mixture(
+    model: SABR,
+    F,
+    K,
+    T,
+    df=1.0,
+    *,
+    n_paths: int,
+    n_steps: int,
+    seed: int,
+) -> PriceResult:
+    """Average of Black prices over the integrated variance of ``alpha``.
+
+    Exact when ``beta = 1`` and ``rho = 0``. ``alpha`` is geometric
+    Brownian and does not see the forward. The conditional variance is the
+    left Riemann sum of ``alpha_t^2`` on ``n_steps`` equal steps, divided
+    by ``T``. One normal per step, from one child of ``seed``. The
+    standard error is across paths, at each strike.
+    """
+    started = time.perf_counter()
+    if model.beta != 1.0 or model.rho != 0.0:
+        raise ValueError("the integrated-variance mixture needs beta = 1 and rho = 0")
+    T = float(T)
+    n_paths = int(n_paths)
+    n_steps = int(n_steps)
+    if n_steps < 1:
+        raise ValueError(f"n_steps must be at least 1, got {n_steps}")
+    K_in = np.asarray(K, dtype=float)
+    K_flat = np.atleast_1d(K_in)
+    forward = float(F)
+    if T == 0.0:
+        value = _intrinsic(forward, K_flat, float(df), "call")
+        return PriceResult(
+            value=value.reshape(K_in.shape),
+            stderr=np.zeros(K_in.shape),
+            n_evals=0,
+            wall_time=time.perf_counter() - started,
+        )
+    dt = T / n_steps
+    sqrt_dt = np.sqrt(dt)
+    rng = generator(spawn(seed, 1)[0])
+    alpha = np.full(n_paths, float(model.alpha))
+    integrated = np.zeros(n_paths, dtype=float)
+    nu = float(model.nu)
+    for _ in range(n_steps):
+        integrated += alpha * alpha * dt
+        shock = rng.standard_normal(n_paths)
+        alpha = alpha * np.exp(-0.5 * nu * nu * dt + nu * sqrt_dt * shock)
+    sigma = np.sqrt(integrated / T)
+    call = _black_call_rows(forward, K_flat, T, float(df), sigma)
+    value = call.mean(axis=0)
+    stderr = call.std(axis=0, ddof=1) / np.sqrt(n_paths)
+    return PriceResult(
+        value=value.reshape(K_in.shape),
+        stderr=stderr.reshape(K_in.shape),
+        n_evals=n_paths,
+        wall_time=time.perf_counter() - started,
+    )
+
+
+def _black_call_rows(forward, strike, maturity, df, sigma):
+    """Black calls, shape ``(n_paths, n_strikes)``, one volatility per path."""
+    from scipy.stats import norm
+
+    sig = np.asarray(sigma, dtype=float)[:, None]
+    width = sig * np.sqrt(maturity)
+    width = np.maximum(width, 1e-12)
+    log_m = np.log(forward / strike)[None, :]
+    d1 = (log_m + 0.5 * width * width) / width
+    d2 = d1 - width
+    return df * (forward * norm.cdf(d1) - strike[None, :] * norm.cdf(d2))
 
 
 def _intrinsic(F: float, K: np.ndarray, df: float, kind) -> np.ndarray:

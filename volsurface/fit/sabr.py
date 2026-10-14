@@ -1,13 +1,18 @@
-"""Calibrate SABR with ``beta`` held fixed.
+"""Calibrate SABR with ``beta`` held fixed, one parameter set per expiry.
 
 ``alpha`` and ``beta`` trade off in the leading factor ``alpha / F^(1 - beta)``,
 so a joint search does not identify both. The fitter takes ``beta`` as given
 and minimises a vega-weighted price residual in ``(alpha, rho, nu)``. Bounds
 are the corresponding rows of :meth:`~volsurface.models.sabr.SABR.param_spec`.
 
-Several starts are tried. The smallest sum of squares wins. The returned
-surface is a :class:`~volsurface.surface.model.ModelSurface` of the fitted
-model on the rectangle of the quotes.
+Each expiry is its own search. ``slice_report`` has one row per expiry, indexed
+by ``T``. ``surface`` is the fit at the expiry nearest one year, for a caller
+that wants a single model. The parameters of the other expiries are only in
+the report.
+
+Several starts are tried on each expiry. The smallest sum of squares wins.
+Rows marked with an exercise other than European are refused. The pricer is
+European. ``allow_american=True`` drops those rows and records the count.
 """
 
 from __future__ import annotations
@@ -18,17 +23,32 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 
-from volsurface import bs
-from volsurface.core.params import from_unconstrained, to_unconstrained, to_unconstrained_value
-from volsurface.core.types import Curves, Domain, FitResult, MarketData
+from volsurface.core.params import from_unconstrained, to_unconstrained
+from volsurface.core.types import FitResult, MarketData
+from volsurface.fit._price_fit import (
+    black_vega,
+    gaussian_starts,
+    in_spread,
+    model_prices,
+    outside_spread,
+    quote_frame,
+    rectangle,
+    unconstrained_bounds,
+)
 from volsurface.models.sabr import SABR, free_spec
-from volsurface.surface.model import ModelSurface
 
 
 class SABRFitter:
-    """Multi-start least squares for ``alpha``, ``rho`` and ``nu`` at one ``beta``."""
+    """Multi-start least squares for ``alpha``, ``rho`` and ``nu`` on each expiry."""
 
-    def __init__(self, beta: float = 1.0, n_starts: int = 4, loss: str = "vega", seed: int = 0):
+    def __init__(
+        self,
+        beta: float = 1.0,
+        n_starts: int = 4,
+        loss: str = "vega",
+        seed: int = 0,
+        allow_american: bool = False,
+    ):
         if not 0.0 <= beta <= 1.0:
             raise ValueError(f"beta must lie in [0, 1], got {beta}")
         if n_starts < 1:
@@ -39,53 +59,100 @@ class SABRFitter:
         self.n_starts = int(n_starts)
         self.loss = loss
         self.seed = int(seed)
+        self.allow_american = bool(allow_american)
 
     def fit(self, data: MarketData) -> FitResult:
         started = time.perf_counter()
-        frame = _frame(data)
-        market = frame["price"].to_numpy(dtype=float)
-        vega = _vega(frame)
-        specs = free_spec()
-        bounds = _bounds(specs)
-        base = _origin(self.beta)
-        starts = _starts(base, specs, self.n_starts, self.seed)
-        best = None
-        best_cost = np.inf
-        for start in starts:
-            result = least_squares(
-                lambda x: _residual(x, specs, self.beta, frame, market, vega, self.loss),
-                start,
-                bounds=bounds,
-                method="trf",
+        frame, n_american = quote_frame(
+            data,
+            fitter="SABRFitter",
+            allow_american=self.allow_american,
+        )
+        residuals = np.empty(len(frame), dtype=float)
+        rows = []
+        worst = 0.0
+        representative = None
+        distance = np.inf
+        for maturity, index in frame.groupby("T").groups.items():
+            part = frame.loc[index].reset_index(drop=True)
+            fitted, part_residual, cost = _fit_slice(
+                part,
+                self.beta,
+                self.n_starts,
+                self.loss,
+                self.seed,
             )
-            if result.cost < best_cost:
-                best = result
-                best_cost = float(result.cost)
-        assert best is not None
-        fitted = _model_from(best.x, specs, self.beta)
-        model_price = _prices(fitted, frame)
-        residuals = model_price - market
-        surface = _surface(fitted, data, frame)
-        report = pd.DataFrame(
-            [
+            residuals[frame.index.get_indexer(index)] = part_residual
+            rows.append(
                 {
+                    "T": float(maturity),
                     "alpha": fitted.alpha,
                     "beta": fitted.beta,
                     "rho": fitted.rho,
                     "nu": fitted.nu,
-                    "rmse_price": float(np.sqrt(np.mean(residuals**2))),
-                    "max_abs_price": float(np.max(np.abs(residuals))),
+                    "rmse_price": float(np.sqrt(np.mean(part_residual**2))),
+                    "max_abs_price": float(np.max(np.abs(part_residual))),
+                    "n_american": n_american,
                 }
-            ]
-        )
+            )
+            worst = max(worst, cost)
+            gap = abs(float(maturity) - 1.0)
+            if gap < distance:
+                distance = gap
+                representative = fitted
+        assert representative is not None
+        report = pd.DataFrame(rows).sort_values("T").reset_index(drop=True)
         return FitResult(
-            surface=surface,
+            surface=rectangle(representative, data, frame),
             residuals=residuals,
-            in_spread=_in_spread(frame, model_price),
+            in_spread=_book_in_spread(frame, report, self.beta),
             wall_time=time.perf_counter() - started,
-            solver_status=f"{best.message} cost={best.cost:.3e} starts={self.n_starts}",
+            solver_status=f"{len(rows)} slices cost<={worst:.3e} starts={self.n_starts}",
             slice_report=report,
         )
+
+
+def _book_in_spread(frame: pd.DataFrame, report: pd.DataFrame, beta: float) -> float:
+    """Fraction of two-sided quotes inside the spread, each expiry its own model."""
+    if "bid" not in frame.columns or "ask" not in frame.columns:
+        return float("nan")
+    priced = np.empty(len(frame), dtype=float)
+    maturity = frame["T"].to_numpy(dtype=float)
+    for row in report.itertuples(index=False):
+        mask = np.isclose(maturity, row.T)
+        model = SABR(alpha=row.alpha, beta=beta, rho=row.rho, nu=row.nu)
+        part = frame.loc[mask].reset_index(drop=True)
+        priced[mask] = model_prices(model, part)
+    return in_spread(frame, priced)
+
+
+def _fit_slice(frame, beta, n_starts, loss, seed):
+    market = frame["price"].to_numpy(dtype=float)
+    vega = black_vega(frame)
+    specs = free_spec()
+    bounds = unconstrained_bounds(specs)
+    base = _origin(beta)
+    origin = to_unconstrained(
+        {"alpha": base.alpha, "rho": base.rho, "nu": base.nu},
+        specs,
+    )
+    starts = gaussian_starts(origin, specs, n_starts, seed)
+    best = None
+    best_cost = np.inf
+    for start in starts:
+        result = least_squares(
+            lambda x: _residual(x, specs, beta, frame, market, vega, loss),
+            start,
+            bounds=bounds,
+            method="trf",
+        )
+        if result.cost < best_cost:
+            best = result
+            best_cost = float(result.cost)
+    assert best is not None
+    fitted = _model_from(best.x, specs, beta)
+    priced = model_prices(fitted, frame)
+    return fitted, priced - market, best_cost
 
 
 def _origin(beta: float) -> SABR:
@@ -100,126 +167,10 @@ def _model_from(x: np.ndarray, specs, beta: float) -> SABR:
     return SABR(**values)
 
 
-def _frame(data: MarketData) -> pd.DataFrame:
-    quotes = data.quotes
-    if "price" not in quotes.columns:
-        raise ValueError("SABRFitter needs a working price column")
-    frame = quotes.dropna(subset=["price", "K", "T", "F", "df"]).copy()
-    frame = frame[np.isfinite(frame["price"].to_numpy(dtype=float))]
-    if frame.empty:
-        raise ValueError("no quote had a finite price")
-    if "k" not in frame.columns:
-        frame["k"] = np.log(frame["K"].to_numpy(dtype=float) / frame["F"].to_numpy(dtype=float))
-    return frame.reset_index(drop=True)
-
-
-def _vega(frame: pd.DataFrame) -> np.ndarray:
-    """Black vega at the quote's implied vol, floored so a wing still has a weight."""
-    iv = frame["iv"].to_numpy(dtype=float) if "iv" in frame.columns else np.full(len(frame), np.nan)
-    missing = ~np.isfinite(iv) | (iv <= 0.0)
-    if missing.any():
-        filled = bs.implied_vol(
-            frame.loc[missing, "price"].to_numpy(dtype=float),
-            frame.loc[missing, "F"].to_numpy(dtype=float),
-            frame.loc[missing, "K"].to_numpy(dtype=float),
-            frame.loc[missing, "T"].to_numpy(dtype=float),
-            frame.loc[missing, "df"].to_numpy(dtype=float),
-            frame.loc[missing, "kind"].to_numpy() if "kind" in frame.columns else "call",
-        )
-        iv = iv.copy()
-        iv[missing] = filled
-    iv = np.where(np.isfinite(iv) & (iv > 0.0), iv, 0.2)
-    raw = np.asarray(
-        bs.vega(
-            frame["F"].to_numpy(dtype=float),
-            frame["K"].to_numpy(dtype=float),
-            frame["T"].to_numpy(dtype=float),
-            iv,
-            frame["df"].to_numpy(dtype=float),
-        ),
-        dtype=float,
-    )
-    floor = 1e-4 * frame["df"].to_numpy(dtype=float) * frame["F"].to_numpy(dtype=float)
-    return np.maximum(raw, floor)
-
-
-def _prices(model: SABR, frame: pd.DataFrame) -> np.ndarray:
-    out = np.empty(len(frame), dtype=float)
-    for maturity, index in frame.groupby("T").groups.items():
-        rows = frame.loc[index]
-        kind = rows["kind"].to_numpy() if "kind" in rows.columns else "call"
-        priced = model.price(
-            float(rows["F"].iloc[0]),
-            rows["K"].to_numpy(dtype=float),
-            float(maturity),
-            float(rows["df"].iloc[0]),
-            kind,
-        )
-        out[frame.index.get_indexer(index)] = np.asarray(priced, dtype=float)
-    return out
-
-
 def _residual(x, specs, beta, frame, market, vega, loss: str) -> np.ndarray:
     model = _model_from(x, specs, beta)
-    priced = _prices(model, frame)
+    priced = model_prices(model, frame)
     gap = priced - market
-    if loss == "in_spread" and "bid" in frame.columns and "ask" in frame.columns:
-        bid = frame["bid"].to_numpy(dtype=float)
-        ask = frame["ask"].to_numpy(dtype=float)
-        two_sided = np.isfinite(bid) & np.isfinite(ask) & (ask > bid)
-        outside = np.maximum(bid - priced, 0.0) + np.maximum(priced - ask, 0.0)
-        gap = np.where(two_sided, outside, gap)
+    if loss == "in_spread":
+        gap = outside_spread(priced, frame, gap)
     return gap / vega
-
-
-def _bounds(specs) -> tuple[list[float], list[float]]:
-    lower: list[float] = []
-    upper: list[float] = []
-    for spec in specs:
-        lo, hi = spec.lower, spec.upper
-        if spec.transform == "logit":
-            pad = 1e-9 * (hi - lo)
-            lo, hi = lo + pad, hi - pad
-        lower.append(to_unconstrained_value(lo, spec))
-        upper.append(to_unconstrained_value(hi, spec))
-    return lower, upper
-
-
-def _starts(base: SABR, specs, n_starts: int, seed: int) -> list[np.ndarray]:
-    """The spec default at this beta, then Gaussian kicks in unconstrained space."""
-    rng = np.random.default_rng(seed)
-    values = {"alpha": base.alpha, "rho": base.rho, "nu": base.nu}
-    origin = to_unconstrained(values, specs)
-    lower, upper = _bounds(specs)
-    starts = [np.clip(origin, lower, upper)]
-    for _ in range(n_starts - 1):
-        kicked = origin + rng.normal(scale=0.4, size=origin.size)
-        starts.append(np.clip(kicked, lower, upper))
-    return starts
-
-
-def _surface(model: SABR, data: MarketData, frame: pd.DataFrame) -> ModelSurface:
-    k = frame["k"].to_numpy(dtype=float)
-    t = frame["T"].to_numpy(dtype=float)
-    domain = Domain(
-        t_min=float(np.min(t)),
-        t_max=float(np.max(t)),
-        k_min=float(np.min(k)),
-        k_max=float(np.max(k)),
-    )
-    return ModelSurface(model, Curves(data.F, data.df), domain)
-
-
-def _in_spread(frame: pd.DataFrame, model_price: np.ndarray) -> float:
-    if "bid" not in frame.columns or "ask" not in frame.columns:
-        return float("nan")
-    bid = frame["bid"].to_numpy(dtype=float)
-    ask = frame["ask"].to_numpy(dtype=float)
-    two_sided = np.isfinite(bid) & np.isfinite(ask) & (ask > bid)
-    if not two_sided.any():
-        return float("nan")
-    slack = 1e-8
-    inside = (model_price[two_sided] >= bid[two_sided] - slack) & (
-        model_price[two_sided] <= ask[two_sided] + slack
-    )
-    return float(np.mean(inside))

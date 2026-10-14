@@ -1,4 +1,4 @@
-"""Fitters. Raw SVI is slice by slice. Heston and SABR are one parameter set for the book."""
+"""Fitters. Raw SVI and SABR are slice by slice. Heston is one parameter set for the book."""
 
 from volsurface.fit.heston import HestonFitter
 from volsurface.fit.sabr import SABRFitter

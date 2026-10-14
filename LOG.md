@@ -21,22 +21,30 @@ passes. Across seeds `10000` onward, 200 further grids: pass rate
 `200/200`. Median max |z| `1.92`, 95th percentile `2.73`, largest `3.65`.
 Mean of the per-grid mean z is `-0.027` (sample sd `0.29`).
 
-Outside that regime the formula and the simulation separate. `nu = 1`,
-`T = 2`, `nu^2 T = 2`, `beta = 1`, `rho = 0`, `alpha = 0.25`, 20,000 paths,
-64 steps, seed 3, nine strikes sharing the paths. Implied-vol gaps (Monte
-Carlo minus Hagan) run from `-561` bp to `-380` bp. The implied-vol
-standard errors on those strikes are `66` to `90` bp. The same comparison
-at `nu^2 T = 0.0225` (8,000 paths, 32 steps, seed 11, strikes sharing
-paths) has a largest gap of `28` bp against standard errors of `26` to
-`90` bp. The large-gap panel is not a test.
+With `beta = 1` and `rho = 0` the price is an average of Black prices over
+the integrated variance of `alpha`. On the panel `alpha = 0.25`, `nu = 1`,
+`T = 2` (`nu^2 T = 2`), that mixture at 100,000 paths and 1,000 steps
+(seed 20) has implied vol `0.2733` at the money and `0.2913` at
+`k = ±0.2`. The standard error is `7.6` to `7.9` bp. Hagan minus that
+mixture is `+184` bp at the money and `+271` bp at `k = ±0.2`. The
+20,000-path, 64-step log-Euler (seed 3) minus the mixture runs from
+`-290` bp to `-187` bp. Monte Carlo minus Hagan, `-561` bp to `-380` bp,
+is those two errors added. It is not the size of the formula's error.
+The small-regime panel (`nu^2 T = 0.0225`, 8,000 paths, 32 steps, seed 11,
+strikes sharing paths) still has a largest Monte Carlo minus Hagan gap of
+`28` bp against standard errors of `26` to `90` bp.
 
-`beta = 0.5`, `alpha = 0.8`, `nu = 0`, unit forward, 2,000 paths, four
-steps, seed 2. 116 paths hit 0. None of them leave 0. The terminal mean of
-`Z` is `0.987`.
+`beta = 0.5`, `alpha = 0.8`, `nu = 0`, unit forward. The hitting
+probability is `exp(-2 / 0.64) = 0.04394`. At 64 steps, 20,000 paths, seed
+2, the estimate is `0.0433` (standard error `0.00144`, four standard
+errors is `0.0058`). The terminal mean of `Z` is `1.0020` (standard error
+`0.0057`). No absorbed path leaves 0. A level below `1e-12` is absorbed,
+so the step does not leave a positive underflow.
 
-Synthetic book, `beta` fixed at 1, truth `alpha = 0.22`, `rho = -0.45`,
-`nu = 0.35`. Four starts, 0.13 seconds. Parameter errors are about `1e-15`
-to `1e-13`. Largest price residual `2.3e-13`.
+Synthetic book, `beta` fixed at 1, one fit per expiry, truth
+`alpha = 0.22`, `rho = -0.45`, `nu = 0.35`. Four starts, 0.18 seconds.
+Each of `T = 0.5`, `1` and `1.5` recovers the parameters. The largest
+price residual is `4.6e-10`, on `T = 1.5`.
 
 `check_surface` on Hagan prices, `alpha = 0.3`, `beta = 1`, `rho = -0.3`,
 `nu = 1.5`, `T = 10`, `k` from `-1.5` to `0.5`. The report is not ok, and

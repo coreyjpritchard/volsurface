@@ -102,8 +102,13 @@ def test_hagan_matches_log_euler_when_nu_squared_t_is_small():
         reference = model.price(100.0, strike, float(maturity))
         for j, one in enumerate(strike):
             result = euler_price(
-                model, 100.0, np.array([one]), float(maturity),
-                n_paths=8_000, n_steps=32, seed=50 + node,
+                model,
+                100.0,
+                np.array([one]),
+                float(maturity),
+                n_paths=8_000,
+                n_steps=32,
+                seed=50 + node,
             )
             estimates.append(result.value[0])
             errors.append(result.stderr[0])
@@ -116,18 +121,30 @@ def test_hagan_matches_log_euler_when_nu_squared_t_is_small():
     assert failure is None, failure
 
 
-def test_beta_below_one_absorbs_at_zero_and_stays_there():
-    """Unit forward, alpha = 0.8, beta = 0.5, nu = 0, four steps, seed 2.
+def test_beta_below_one_absorbs_at_the_bessel_rate():
+    """Unit forward, alpha = 0.8, beta = 0.5, nu = 0, 64 steps, seed 2.
 
-    Log-Euler would stay positive. The normal predictor absorbs, and a later
-    positive shock does not bring the forward back.
+    With nu = 0 the hitting probability is exp(-2 / (a^2 T)) = exp(-3.125).
+    a = alpha, because the forward starts at 1. 20,000 paths. The estimate
+    has to sit within 4 standard errors of that probability, and the terminal
+    mean of Z within 4 standard errors of 1. A path that has hit 0 does not
+    leave it.
     """
     model = SABR(alpha=0.8, beta=0.5, rho=0.0, nu=0.0)
-    paths = model.simulate(2_000, np.linspace(0.0, 1.0, 5), seed=2)
-    hit = np.any(paths.Z == 0.0, axis=1)
-    assert hit.mean() > 0.01
+    n_paths = 20_000
+    paths = model.simulate(n_paths, np.linspace(0.0, 1.0, 65), seed=2)
+    terminal = paths.Z[:, -1]
+    hit_terminal = terminal == 0.0
+    probability = float(hit_terminal.mean())
+    se_p = float(np.sqrt(probability * (1.0 - probability) / n_paths))
+    exact = float(np.exp(-2.0 / (0.8**2)))
+    assert abs(probability - exact) < 4.0 * se_p, (probability, exact, se_p)
+    mean_z = float(terminal.mean())
+    se_z = float(terminal.std(ddof=1) / np.sqrt(n_paths))
+    assert abs(mean_z - 1.0) < 4.0 * se_z, (mean_z, se_z)
     revived = 0
-    for row in paths.Z[hit]:
+    ever = np.any(paths.Z == 0.0, axis=1)
+    for row in paths.Z[ever]:
         seen = False
         for value in row:
             if value == 0.0:
@@ -138,16 +155,17 @@ def test_beta_below_one_absorbs_at_zero_and_stays_there():
     assert revived == 0
 
 
-def test_synthetic_calibration_recovers_alpha_rho_and_nu():
-    """beta is fixed at 1. The other three return to the prices that built the book."""
+def test_synthetic_calibration_recovers_each_expiry():
+    """beta is fixed at 1. Each expiry recovers the prices that built that slice."""
     truth = SABR(alpha=0.22, beta=1.0, rho=-0.45, nu=0.35)
     fitted = SABRFitter(beta=1.0, n_starts=4, seed=0).fit(_quotes_from(truth))
-    row = fitted.slice_report.iloc[0]
-    assert row["beta"] == pytest.approx(1.0)
-    assert row["alpha"] == pytest.approx(0.22, abs=1e-8)
-    assert row["rho"] == pytest.approx(-0.45, abs=1e-8)
-    assert row["nu"] == pytest.approx(0.35, abs=1e-8)
-    assert row["max_abs_price"] < 1e-10
+    assert list(fitted.slice_report["T"]) == [0.5, 1.0, 1.5]
+    for row in fitted.slice_report.itertuples(index=False):
+        assert row.beta == pytest.approx(1.0)
+        assert row.alpha == pytest.approx(0.22, abs=1e-8)
+        assert row.rho == pytest.approx(-0.45, abs=1e-8)
+        assert row.nu == pytest.approx(0.35, abs=1e-8)
+        assert row.max_abs_price < 1e-9
     assert fitted.wall_time < 5.0
 
 

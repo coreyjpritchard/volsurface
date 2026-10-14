@@ -23,7 +23,7 @@ import pandas as pd
 
 from volsurface import bs
 from volsurface.core.types import Curves, Domain
-from volsurface.models.sabr import SABR, euler_price
+from volsurface.models.sabr import SABR, euler_price, integrated_black_mixture
 from volsurface.surface.model import ModelSurface
 from volsurface.surface_export import write_surface_preset
 
@@ -93,7 +93,13 @@ def density_panel() -> dict:
     axes[1].axhline(0.0, color="k", lw=0.6)
     if np.any(negative):
         axes[1].fill_between(
-            k, density, 0.0, where=negative, color="C3", alpha=0.35, interpolate=True,
+            k,
+            density,
+            0.0,
+            where=negative,
+            color="C3",
+            alpha=0.35,
+            interpolate=True,
         )
     axes[1].set_xlabel("k")
     axes[1].set_ylabel("density of log-moneyness")
@@ -150,16 +156,44 @@ def monte_carlo_panel() -> dict:
     for ax, (name, model, maturity, n_paths, n_steps, seed) in zip(axes, specs, strict=True):
         hagan = model.implied_vol(100.0, strike, maturity)
         result = euler_price(
-            model, 100.0, strike, maturity, n_paths=n_paths, n_steps=n_steps, seed=seed,
+            model,
+            100.0,
+            strike,
+            maturity,
+            n_paths=n_paths,
+            n_steps=n_steps,
+            seed=seed,
         )
         iv = bs.implied_vol(result.value, 100.0, strike, maturity, 1.0)
         vega = bs.vega(100.0, strike, maturity, hagan, 1.0)
         se_iv = result.stderr / vega
         ax.plot(k, 100.0 * hagan, color="C0", lw=1.2, label="Hagan")
         ax.errorbar(
-            k, 100.0 * iv, yerr=100.0 * se_iv, fmt="o", color="C1", ms=3.5, lw=0.8,
+            k,
+            100.0 * iv,
+            yerr=100.0 * se_iv,
+            fmt="o",
+            color="C1",
+            ms=3.5,
+            lw=0.8,
             label="log-Euler",
         )
+        iv_exact = np.full(k.shape, np.nan)
+        se_exact = np.full(k.shape, np.nan)
+        if model.beta == 1.0 and model.rho == 0.0:
+            mixture = integrated_black_mixture(
+                model,
+                100.0,
+                strike,
+                maturity,
+                n_paths=100_000,
+                n_steps=1_000,
+                seed=seed + 17,
+            )
+            iv_exact = bs.implied_vol(mixture.value, 100.0, strike, maturity, 1.0)
+            exact_vega = bs.vega(100.0, strike, maturity, iv_exact, 1.0)
+            se_exact = mixture.stderr / exact_vega
+            ax.plot(k, 100.0 * iv_exact, color="C2", lw=1.2, label="exact mixture")
         ax.set_xlabel("k")
         ax.grid(True, alpha=0.3)
         ax.legend(frameon=False, fontsize=7)
@@ -175,6 +209,10 @@ def monte_carlo_panel() -> dict:
                     "iv_mc": float(iv[j]),
                     "se_iv": float(se_iv[j]),
                     "gap_bp": float(gap_bp[j]),
+                    "iv_exact": float(iv_exact[j]),
+                    "se_exact": float(se_exact[j]),
+                    "hagan_minus_exact_bp": float((hagan[j] - iv_exact[j]) * 1e4),
+                    "mc_minus_exact_bp": float((iv[j] - iv_exact[j]) * 1e4),
                     "nu2_T": float(nu2t),
                     "n_paths": n_paths,
                     "n_steps": n_steps,
@@ -186,9 +224,14 @@ def monte_carlo_panel() -> dict:
             "max_abs_gap_bp": float(np.max(np.abs(gap_bp))),
             "gap_bp": [float(v) for v in gap_bp],
             "se_iv_bp": [float(v * 1e4) for v in se_iv],
+            "hagan_minus_exact_bp": [float(v) for v in (hagan - iv_exact) * 1e4],
+            "mc_minus_exact_bp": [float(v) for v in (iv - iv_exact) * 1e4],
+            "se_exact_bp": [float(v * 1e4) for v in se_exact],
         }
     axes[0].set_ylabel("implied volatility (%)")
-    fig.suptitle("Strikes share paths. Bars are one standard error of the implied vol.")
+    fig.suptitle(
+        "Right-hand panel: the mixture is exact (beta = 1, rho = 0). Bars are one standard error."
+    )
     fig.tight_layout()
     fig.savefig(FIG / "p2f_hagan_vs_mc.png", dpi=140)
     plt.close(fig)
