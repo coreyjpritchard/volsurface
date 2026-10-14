@@ -32,9 +32,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import linprog
 
 from volsurface.core.types import ArbReport, ArbTol, MarketData
+from volsurface.fit._lp import ConstraintList, solve_linear
 
 _VIOLATION_COLUMNS = ["kind", "T", "k", "magnitude", "magnitude_in_spreads"]
 # HiGHS returns constraints feasible to roughly 1e-7. Slacks below that are noise.
@@ -113,11 +113,35 @@ def check_surface(surface, T, k, *, tol: ArbTol | None = None) -> ArbReport:
     )
 
 
+def linprog(
+    c,
+    A_ub=None,
+    b_ub=None,
+    A_eq=None,
+    b_eq=None,
+    bounds=None,
+    method="highs",
+    dense: bool = False,
+):
+    """The solver ``check_quotes`` calls. Tests replace this name."""
+    return solve_linear(
+        c,
+        A_ub=A_ub,
+        b_ub=b_ub,
+        A_eq=A_eq,
+        b_eq=b_eq,
+        bounds=bounds,
+        method=method,
+        dense=dense,
+    )
+
+
 def check_quotes(
     data: MarketData,
     *,
     side: str = "bidask",
     tol: ArbTol | None = None,
+    dense: bool = False,
 ) -> ArbReport:
     """Linear-program feasibility of the quotes. ``side`` is ``"bidask"`` or ``"mid"``.
 
@@ -140,7 +164,7 @@ def check_quotes(
             note=note,
             n_checked=0,
         )
-    result = _solve(expiries, tol, n_checked)
+    result = _solve(expiries, tol, n_checked, dense=dense)
     result_note = (
         f"{result.note} Dropped {dropped} quotes with no two-sided market. "
         "Puts entered through put-call parity. That identity holds for European "
@@ -260,11 +284,12 @@ def _butterfly_tolerance(surface, tol: ArbTol) -> float:
     return tol.price
 
 
-def _solve(books: dict, tol: ArbTol, n_checked: int) -> ArbReport:
+def _solve(books: dict, tol: ArbTol, n_checked: int, *, dense: bool = False) -> ArbReport:
     """Minimise total slack. Equalities are the two martingale constraints per expiry.
 
     Each expiry's unknowns are ``q`` on ``{0}`` union the quoted strikes, then
-    ``Q`` and ``M``. See the module note for the tail.
+    ``Q`` and ``M``. See the module note for the tail. Rows are sparse.
+    ``dense=True`` solves the same coefficients as a dense matrix.
     """
     names = list(books)
     supports = []
@@ -275,11 +300,11 @@ def _solve(books: dict, tol: ArbTol, n_checked: int) -> ArbReport:
 
     # q on the support, then Q, then M.
     block = [s.size + 2 for s in supports]
-    offsets = np.cumsum([0, *block[:-1]])
+    offsets = np.cumsum([0, *block[:-1]]).astype(int)
     n_q = int(sum(block))
     n_quotes = int(sum(len(books[name]) for name in names))
     calendar_knots = _calendar_knots(books, names)
-    n_cal = sum(z.size for _, _, z in calendar_knots)
+    n_cal = sum(int(z.size) for _, _, z in calendar_knots)
     n_slack = 2 * n_quotes + n_cal
     n_var = n_q + n_slack
 
@@ -287,53 +312,39 @@ def _solve(books: dict, tol: ArbTol, n_checked: int) -> ArbReport:
     cost[n_q:] = 1.0
     bounds = [(0.0, None)] * n_var
 
-    a_eq = []
-    b_eq = []
-    a_ub = []
-    b_ub = []
+    equalities = ConstraintList()
+    inequalities = ConstraintList()
     for offset, support in zip(offsets, supports, strict=True):
-        n_atom = support.size
-        mass = np.zeros(n_var)
-        mean = np.zeros(n_var)
-        mass[offset : offset + n_atom] = 1.0
-        mass[offset + n_atom] = 1.0  # Q
-        mean[offset : offset + n_atom] = support
-        mean[offset + n_atom + 1] = 1.0  # M
-        a_eq.append(mass)
-        b_eq.append(1.0)
-        a_eq.append(mean)
-        b_eq.append(1.0)
+        n_atom = int(support.size)
+        equalities.add(np.arange(offset, offset + n_atom + 1), np.ones(n_atom + 1), 1.0)
+        equalities.add(
+            np.concatenate([np.arange(offset, offset + n_atom), [offset + n_atom + 1]]),
+            np.concatenate([support, [1.0]]),
+            1.0,
+        )
         # x_max Q <= M <= cap Q.
         x_max = float(support[-1])
-        lower_tail = np.zeros(n_var)
-        lower_tail[offset + n_atom] = x_max
-        lower_tail[offset + n_atom + 1] = -1.0
-        a_ub.append(lower_tail)
-        b_ub.append(0.0)
-        upper_tail = np.zeros(n_var)
-        upper_tail[offset + n_atom] = -_TAIL_CAP
-        upper_tail[offset + n_atom + 1] = 1.0
-        a_ub.append(upper_tail)
-        b_ub.append(0.0)
+        inequalities.add([offset + n_atom, offset + n_atom + 1], [x_max, -1.0], 0.0)
+        inequalities.add([offset + n_atom, offset + n_atom + 1], [-_TAIL_CAP, 1.0], 0.0)
 
     # Quote slacks. Layout: [lo_0, hi_0, lo_1, hi_1, ...] then calendar slacks.
     slack_cursor = n_q
     quote_meta = []
     for name, support, offset in zip(names, supports, offsets, strict=True):
         book = books[name]
-        quoted = book["x"].to_numpy(dtype=float)
         for i in range(book.shape[0]):
-            coeff = _tail_call(support, float(quoted[i]))
-            row_lo = np.zeros(n_var)
-            row_hi = np.zeros(n_var)
-            row_lo[offset : offset + coeff.size] = -coeff
-            row_hi[offset : offset + coeff.size] = coeff
-            row_lo[slack_cursor] = -1.0
-            row_hi[slack_cursor + 1] = -1.0
-            a_ub.append(row_lo)
-            b_ub.append(-float(book["bid"].iloc[i]))
-            a_ub.append(row_hi)
-            b_ub.append(float(book["ask"].iloc[i]))
+            coeff = _tail_call(support, float(book["x"].iloc[i]))
+            cols = np.arange(offset, offset + coeff.size)
+            inequalities.add(
+                np.concatenate([cols, [slack_cursor]]),
+                np.concatenate([-coeff, [-1.0]]),
+                -float(book["bid"].iloc[i]),
+            )
+            inequalities.add(
+                np.concatenate([cols, [slack_cursor + 1]]),
+                np.concatenate([coeff, [-1.0]]),
+                float(book["ask"].iloc[i]),
+            )
             quote_meta.append(
                 {
                     "lo": slack_cursor,
@@ -347,29 +358,35 @@ def _solve(books: dict, tol: ArbTol, n_checked: int) -> ArbReport:
     cal_meta = []
     for e, _, z in calendar_knots:
         for strike in z:
-            row = np.zeros(n_var)
             left = _tail_call(supports[e], float(strike))
             right = _tail_call(supports[e + 1], float(strike))
-            row[offsets[e] : offsets[e] + left.size] = left
-            row[offsets[e + 1] : offsets[e + 1] + right.size] = -right
-            row[slack_cursor] = -1.0
             # C_right - C_left + slack >= 0  =>  C_left - C_right - slack <= 0.
-            a_ub.append(row)
-            b_ub.append(0.0)
-            maturity = float(books[names[e + 1]]["T"].iloc[0])
-            cal_meta.append(
-                {"slack": slack_cursor, "T": maturity, "k": float(np.log(strike))}
+            inequalities.add(
+                np.concatenate(
+                    [
+                        np.arange(offsets[e], offsets[e] + left.size),
+                        np.arange(offsets[e + 1], offsets[e + 1] + right.size),
+                        [slack_cursor],
+                    ]
+                ),
+                np.concatenate([left, -right, [-1.0]]),
+                0.0,
             )
+            maturity = float(books[names[e + 1]]["T"].iloc[0])
+            cal_meta.append({"slack": slack_cursor, "T": maturity, "k": float(np.log(strike))})
             slack_cursor += 1
 
+    a_ub, b_ub = inequalities.to_csr(n_var)
+    a_eq, b_eq = equalities.to_csr(n_var)
     solved = linprog(
         cost,
-        A_ub=np.vstack(a_ub) if a_ub else None,
-        b_ub=np.array(b_ub) if b_ub else None,
-        A_eq=np.vstack(a_eq),
-        b_eq=np.array(b_eq),
+        A_ub=a_ub,
+        b_ub=b_ub,
+        A_eq=a_eq,
+        b_eq=b_eq,
         bounds=bounds,
         method="highs",
+        dense=dense,
     )
     if not solved.success or solved.x is None:
         # A solver failure is not a violation and not a pass. ``ok is None``

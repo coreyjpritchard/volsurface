@@ -2,7 +2,29 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Phase 3 interfaces are specified in `docs/DESIGN.md` sections 17 to 22. No Phase 3 numerical result yet. **Next:** the sparse quote linear program.
+**Current state:** The quote linear program is sparse. All 40 SPX expiries are feasible. **Next:** SANOS at `eta = 0`.
+
+## 2026-10-14 Library P3a: sparse quote linear program
+
+The coefficients are the ones in section 6.2. The rows are a CSR matrix.
+`dense=True` solves that same matrix as an array.
+
+First 24 expiries, 4,398 quotes. Sparse and dense both return `ok` true,
+objective 0, and an empty violation set. In a fresh process the sparse run
+took 2.87 s with peak RSS 0.709 GB. The dense run took 8.56 s with peak
+RSS 6.178 GB. The two shortest expiries, 278 quotes, agree the same way.
+A planted ask of 0.1 at normalised strike 0.5 is short of the intrinsic
+0.5 by 0.4.
+
+All 40 expiries, 8,973 quotes. HiGHS status optimal, objective 0, `ok`
+true, 0 violations. Fresh-process wall time 6.64 s, peak RSS 1.552 GB.
+That is under the 2 GB bar. At 32 expiries, 6,189 quotes, the sparse peak
+is 0.969 GB. The figure is `docs/figures/p3a_lp_memory.png`.
+
+**Hypothesis:** the 15.6 GB kill was the dense allocation. These RSS
+numbers are what that hypothesis predicted. The full book having objective
+0 is a property of this snapshot and this program, not a claim about every
+pre-open file.
 
 ## 2026-10-14 Library P3-0: Phase 3 interfaces
 
