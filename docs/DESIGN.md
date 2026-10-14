@@ -205,9 +205,13 @@ Black-Scholes and Heston implement `Model`, `Parametric`, and
 Gatheral form already in `volsurface/heston.py`. Its first cumulant is the
 closed form `-1/2 * integral E[v_t] dt`. The second and fourth are
 derivatives of `log phi` at the origin, read from a fixed polynomial
-stencil (see the method docstring). Heston does not implement
-`SupportsSimulate`: the Euler scheme in `heston.simulate` has a different
-signature and stays where it is until a later phase wraps it.
+stencil (see the method docstring). Heston also implements
+`SupportsSimulate`. The scheme is Euler full truncation on an arbitrary
+time grid. Draw order is in the class docstring: one forward normal and
+one variance normal per step. `price` stays the Lewis integral.
+`cos_price` is the Fang and Oosterlee cosine expansion of section 14.
+The function `heston.simulate` keeps its old signature; the protocol
+method is the one on the class.
 
 `volsurface/plugins.py` holds an in-tree registry, `@register("name")`,
 and resolves `volsurface.models` entry points the same way. A plugin in
@@ -664,3 +668,33 @@ those stages will call, not a fit to the market.
 SSVI and eSSVI are out of scope as well. The fitter in `volsurface/fit/svi.py`
 is raw SVI, one parameter set per expiry. A surface SVI would tie the slices
 together and change the arbitrage counts this phase reports.
+
+## 14. Heston cosine price, Euler scheme, calibration
+
+`Heston.cos_price` expands the put in a Fourier cosine series on the
+log-forward and recovers the call by put-call parity. The put payoff is
+bounded. The call payoff grows like the forward, and its cosine coefficients
+decay slowly, so the same truncation that is accurate for the put is not
+accurate for the call. Parity uses `E[F_T] = F`, which the characteristic
+function satisfies, and does not add a second truncation.
+
+The interval is `[c1 - L sqrt(c2 + sqrt(c4)), c1 + L sqrt(c2 + sqrt(c4))]`
+with `L = 10` and `N = 256` terms. `c1`, `c2`, `c4` are `cumulants`. A
+negative `c4`, or one larger than `80 c2^2`, is replaced by 0 before the
+square root: that is the degree-8 stencil sitting in round-off, which
+happens as `xi` approaches 0. The replacement is recorded in the method
+docstring. Puts are integrated with the Fang and Oosterlee `chi` and `psi`
+weights. `k = 0` in the sum is halved.
+
+`Heston.simulate` is Euler full truncation (Lord, Koekkoek and van Dijk
+2010). The variance used in the drift and the diffusion is `max(v, 0)`.
+The updated variance is allowed to go negative and is stored that way.
+`Z` is the unit-mean forward. One `SeedSequence` child covers the run.
+Each step draws the forward normal, then the variance normal.
+
+`HestonFitter` minimises a vega-weighted price residual, or the distance
+outside the bid-ask spread when `loss="in_spread"`. The search is in the
+unconstrained coordinates of `param_spec`, with bounds taken from that
+spec. Several starts are tried. The Feller ratio `2 kappa theta / xi^2`
+is reported and not constrained. The returned surface is a `ModelSurface`
+around the fitted model, so `check_surface` can read it.

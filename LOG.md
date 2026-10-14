@@ -4,6 +4,53 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
+## 2026-10-14 Library P2c: Heston cosine price, Euler, calibration
+
+Lewis and the cosine expansion both price the Fang and Oosterlee at-the-money
+one-year call to `1e-7`. Lewis is `5.785155434` (`-1.56e-8` against
+`5.785155450`). COS with `N = 256` and `L = 10` is `5.785155373`
+(`-7.66e-8`). On the same parameters, `k` from `-1` to `1` and maturities
+from one week to two years, the largest |Lewis minus COS| on the heatmap is
+`7.4e-8`. The Feller ratio there is `0.38`. A second violating set (ratio
+`0.32`) stays within `1e-6`. With `v0 = theta` and `xi = 1e-4` both prices
+sit within `5e-4` of Black. The fourth-cumulant stencil is unusable below
+that, so the test stops there.
+
+Euler full truncation, 8,000 paths, 64 steps, 24 independent nodes (six
+strikes, four maturities). The z-rule bound at `n = 24` is max |z| below
+`4.10`, fraction |z| < 2 inside `[0.792, 1]`, |mean z| below `0.71`. The
+fixed seed in the test passes. Across 200 further seeds the pass rate is
+`200/200`. The median max |z| is `2.23`. The mean of the per-grid mean z is
+`-0.013` (sample sd `0.20`). Bias at 64 steps on 240,000 paths is `-0.035`,
+`-0.023`, `-0.013` at strikes 90, 100, 110, against 8,000-path standard
+errors of about `0.17`, `0.13`, `0.10`.
+
+Synthetic recovery, four starts, vega-weighted prices: parameters return to
+better than `1e-8` and the largest price residual is `9.6e-12`. Wall time
+about `0.4` seconds. The Feller ratio is reported (`0.75` on that set) and
+not enforced. `check_surface` on a Heston `ModelSurface`, five expiries by
+nine strikes, returns no violations.
+
+SPY last trades of 7 October 2026, 264 quotes, 24 expiries, `|k| <= 0.4`, at
+most 11 strikes each. Four starts, 16.1 seconds. `v0 = 0.00784`,
+`kappa = 9.25`, `theta = 0.0433`, `xi = 2.18`, `rho = -0.639`, Feller ratio
+`0.17`. Root-mean-square price residual `0.58`, largest `2.40`. ATM skew at
+`T = 0.0027`: market `-1.56`, model `-2.65`. At `T = 0.981`: market `-0.28`,
+model `-0.24`. The short end is too steep and the long end is a little flat.
+
+**Hypothesis:** that pattern is this loss and this thinning, not the only
+thing Heston can do. Session 00, fitting ATM level and skew with `kappa`
+capped at 20, got the opposite short-end error (model flatter). A fit aimed
+at the skew, or a cap on `xi`, is the next specification.
+
+Phase 1 follow-ups in the same branch. One-sided SVI quotes take the median
+two-sided weight. A HiGHS failure sets `ok` to None and keeps the message.
+Over seeds `10000` to `10199`, finite-difference standard-error ratios are
+`1.073` (forward delta), `0.976` (sigma) and `1.020` (forward gamma), inside
+`[0.9, 1.1]`, `[0.9, 1.1]` and `[0.8, 1.2]`. Heston `c2` and `c4` are pinned
+to the mpmath values `0.031571152013` and `7.486782e-3`. SSVI and eSSVI are
+listed as out of scope.
+
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
