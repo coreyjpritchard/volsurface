@@ -2,7 +2,19 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the spot filter. The windowed realised-variance filter is observable and is not the price. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. The constant-`nu` ratio and the equally spaced grid stay open. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+
+## 2026-10-14 Review: the forward curve, and the differenced window
+
+The forward curve at `H = 0.1` was using the closed-form diagonal as a ratio. That diagonal drops the hybrid near field, so the curve sat above `xi0`. A later date is now the closed form, and the diagonal is `v_t`. Constant `nu`, eight runs of 500 paths, clock index 8. The mean of the curve after the clock, divided by `xi0`, is 1.019 at `nu = 1.5` and 1.031 at `nu = 3`. Both pass the z-rule.
+
+`y_rv` is `v` at the start of the step plus chi-squared noise on 21 degrees. It is not integrated variance. The windowed filter reads the change in that level, emitted by the regime two steps back. On 4,000 pre-registered paths its Brier skill at clocks 5, 10 and 20 is 0.2079, 0.2071 and 0.2089.
+
+Six hundred paths, clock index 10, and the same draw at 4,000 paths. Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. Spot skill -0.0505 and -0.0292. Windowed skill 0.0035 and 0.0094. Latent skill 0.4355 and 0.4785. Calibration errors at 600 paths are 0.0713, 0.0295 and 0.0221. Implied-vol root-mean-square error on 35,032 nodes is 0.005348, 0.005232 and 0.003915.
+
+Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. Spot skill 0.1565 and 0.1178. Windowed skill 0.2838 and 0.2071. Latent skill 0.3330 and 0.2849. Calibration errors at 600 paths are 0.0632, 0.0255 and 0.0487. Implied-vol root-mean-square error on 31,684 nodes is 0.02069, 0.01906 and 0.01805. Prices still read the spot filter. The surface seed is `spawn_key + (4, regime)`, the same at every hedge date.
+
+**Hypothesis:** on a fresh 4,000-path pre-registered draw the windowed Brier skill at clocks 5, 10 and 20 stays inside 0.02 of 0.207. The quantity to report is those three skills, next to 0.2079, 0.2071 and 0.2089.
 
 ## 2026-10-14 Review: windowed variance, and the latent benchmark
 

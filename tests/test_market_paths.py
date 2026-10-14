@@ -19,7 +19,9 @@ from volsurface.markets.regime import (
     _kernel_weights,
     _log_variance_increments,
     _stochastic,
+    _surface_seed,
     bergomi_forward_variance,
+    filter_differenced_realised_variance,
     filter_log_realised_variance,
     filter_log_variance,
     hybrid_increment_variance,
@@ -460,8 +462,52 @@ def test_simulated_variance_uses_the_nu_in_force_on_the_step():
     assert not np.allclose(paths.state["v"], wrong)
 
 
+def test_forward_curve_uses_the_closed_form_off_the_diagonal():
+    """Later dates are the closed form. The diagonal is the path's variance.
+
+    The closed-form diagonal is the kernel integral against ``dW``. It drops
+    the hybrid near field. Multiplying the path's variance by the ratio of
+    that closed form would lift the curve. This draw does not.
+    """
+    hurst = 0.1
+    nu = np.array([1.5])
+    times = np.linspace(0.0, 1.0, 5)
+    dW = np.array([[0.2, -0.1, 0.05, 0.03]])
+    variance = np.array([[0.04, 0.05, 0.03, 0.06, 0.045]])
+    weights = np.ones((1, 5, 1))
+    curve = trader_forward_variance(hurst, nu, variance, weights, 0.04, times, dW)
+    closed = bergomi_forward_variance(hurst, float(nu[0]), 0.04, times, dW)
+    assert curve[0, 2, 2] == pytest.approx(variance[0, 2])
+    assert curve[0, 2, 4] == pytest.approx(closed[0, 2, 4])
+    lifted = variance[0, 2] * closed[0, 2, 4] / closed[0, 2, 2]
+    assert curve[0, 2, 4] != pytest.approx(lifted)
+
+
+def test_constant_nu_mean_forward_curve_matches_xi0():
+    """Eight runs, 500 paths, H = 0.1, clock index 8. The z-rule is the test.
+
+    ``nu`` is 1.5 and then 3. The mean of the forward curve, over the
+    dates after the clock, is ``xi0``. The diagonal is ``v_t`` and is not
+    in this average. The surface log contract against the variance swap
+    is not this test: both sides integrate the same curve.
+    """
+    pytest.importorskip("roughvol")
+    times = np.linspace(0.0, 1.0, 17)
+    clock = 8
+    for nu in (1.5, 3.0):
+        model = _single_regime(nu, n_mc=2, H=0.1, n_pilot=2)
+        scores = []
+        for replication in range(8):
+            paths = model.simulate_market(500, times, seed=run_seed(80 + replication, 2))
+            future = paths.state["xi"][:, clock, clock + 1 :]
+            path_mean = future.mean(axis=1)
+            se = path_mean.std(ddof=1) / math.sqrt(path_mean.size)
+            scores.append((path_mean.mean() - model.xi0) / se)
+        assert check_z(np.asarray(scores)) is None
+
+
 def test_trader_curve_follows_the_filter_not_the_label():
-    """At H other than 1/2 the tenor slope is a mixture of the filter weights."""
+    """At H other than 1/2 a later date is the mixture of the closed forms."""
     hurst = 0.25
     nus = np.array([0.4, 1.1])
     times = np.linspace(0.0, 1.0, 5)
@@ -562,7 +608,7 @@ def test_prices_read_the_spot_filter_not_the_latent_benchmark():
     assert paths.meta["price_filter"] == "spot"
     assert np.allclose(paths.regime_prob, paths.state["regime_prob_spot"])
     steps = [_stochastic_step(model, float(times[i] - times[i - 1])) for i in range(1, times.size)]
-    window = filter_log_realised_variance(
+    window = filter_differenced_realised_variance(
         paths.state["y_rv"], steps, paths.meta["rv_means"], paths.meta["rv_vars"], _spec().p0
     )
     latent = filter_log_realised_variance(
@@ -629,8 +675,103 @@ def test_market_does_not_call_the_half_gaussian_likelihood(monkeypatch):
     assert not np.allclose(paths.meta["latent_means"][:, 0], paths.meta["latent_means"][:, 1])
 
 
+def test_differenced_rv_filter_uses_the_regime_two_steps_back():
+    """The change at date 2 is about the regime at date 0, then two transitions.
+
+    The level is ``[nan, 0, 0.4]``. The change is 0.4. Means are -1 and 1,
+    variances are 1, and the prior is (0.6, 0.4). Date 1 is the prior moved
+    once, with no observation. Date 2 is the posterior moved twice.
+    """
+    from scipy.stats import norm
+
+    level = np.array([[np.nan, 0.0, 0.4]])
+    means = np.array([-1.0, 1.0])
+    variances = np.array([1.0, 1.0])
+    prior = np.array([0.6, 0.4])
+    like = np.exp(norm.logpdf(0.4, means, np.sqrt(variances)))
+    posterior = prior * like
+    posterior = posterior / posterior.sum()
+    first = np.array([[0.8, 0.2], [0.3, 0.7]])
+    second = np.array([[0.9, 0.1], [0.4, 0.6]])
+    got = filter_differenced_realised_variance(level, [first, second], means, variances, prior)
+    assert got[0, 0] == pytest.approx(prior)
+    assert got[0, 1] == pytest.approx(prior @ first)
+    assert got[0, 2] == pytest.approx(posterior @ first @ second)
+    assert got[0, 1] != pytest.approx(posterior @ first)
+
+
+def test_differenced_rv_filter_does_not_use_a_later_change():
+    """Changing the last level moves only the last probability.
+
+    Dates 0 and 1 have no change yet, so they stay put when any later
+    level moves. The first change uses the level at date 1, so moving
+    that level moves every probability from date 2 on.
+    """
+    level = np.array([[np.nan, 0.0, 1.0, -2.0, 0.5]])
+    step = np.array([[0.9, 0.1], [0.2, 0.8]])
+    means = np.array([0.0, 0.5])
+    variances = np.array([1.0, 1.0])
+    prior = np.array([0.5, 0.5])
+    steps = [step, step, step, step]
+    first = filter_differenced_realised_variance(level, steps, means, variances, prior)
+    changed = level.copy()
+    changed[0, -1] = 10.0
+    second = filter_differenced_realised_variance(changed, steps, means, variances, prior)
+    assert np.allclose(first[0, :-1], second[0, :-1])
+    assert not np.allclose(first[0, -1], second[0, -1])
+    early = level.copy()
+    early[0, 1] = 4.0
+    third = filter_differenced_realised_variance(early, steps, means, variances, prior)
+    assert np.allclose(first[0, :2], third[0, :2])
+    assert not np.allclose(first[0, 2:], third[0, 2:])
+
+
+def _reliability_bands(predicted: np.ndarray, truth: np.ndarray) -> int:
+    """Count bins whose hits sit inside the 0.1 and 99.9 percent binomial quantiles."""
+    checked = 0
+    edges = np.linspace(0.0, 1.0, 6)
+    for band in range(5):
+        if band < 4:
+            mask = (predicted >= edges[band]) & (predicted < edges[band + 1])
+        else:
+            mask = (predicted >= edges[band]) & (predicted <= edges[band + 1])
+        count = int(mask.sum())
+        if count < 40:
+            continue
+        hits = int(truth[mask].sum())
+        centre = float(np.clip(predicted[mask].mean(), 1e-6, 1.0 - 1e-6))
+        lo = float(binom.ppf(0.001, count, centre))
+        hi = float(binom.ppf(0.999, count, centre))
+        assert lo <= hits <= hi
+        checked += 1
+    return checked
+
+
+def test_differenced_rv_filter_is_calibrated_at_three_clocks():
+    """Clocks 5, 10 and 20. Predicted probability of the high regime versus hits.
+
+    Pre-registered settings, 1,600 paths, 21 times, seed entropy 12, test
+    split. Bins with at least 40 paths. The bands are the 0.1 and 99.9
+    percent binomial quantiles of the mean predicted probability.
+    """
+    pytest.importorskip("roughvol")
+    spec = RegimeSpec(
+        generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+        params=[{"nu": 1.5}, {"nu": 3.0}],
+        p0=np.array([0.7, 0.3]),
+        switch="nu",
+    )
+    model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=0.1)
+    times = np.linspace(0.0, 1.0, 21)
+    paths = model.simulate_market(1600, times, seed=run_seed(12, 2))
+    for clock in (5, 10, 20):
+        predicted = paths.state["regime_prob_rv"][:, clock, 1]
+        truth = paths.regime[:, clock] == 1
+        assert _reliability_bands(predicted, truth) >= 1
+
+
 def test_rv_filter_does_not_use_a_later_return():
-    """Changing the last log-RV moves only the last probability."""
+    """Changing the last log realised variance moves only the last probability."""
     y = np.array([[np.nan, 0.0, 1.0, -2.0]])
     step = np.array([[0.9, 0.1], [0.2, 0.8]])
     means = np.array([0.0, 0.0])
@@ -752,8 +893,8 @@ def _mixture_gaps(model, paths, clock_index):
 def test_market_test_filters_are_scored_against_the_base_rate():
     """H = 1/2, nu 0.4 and 1.1. Integer counts are the pin. Floats sit at 1e-9.
 
-    The spot filter has no Brier skill. The windowed filter's hit rate is
-    above the base rate and its Brier skill is still negative. The latent
+    The spot filter has no Brier skill. The differenced windowed filter is
+    right on 345 of 600 paths. Its Brier skill is 0.0035. The latent
     benchmark is the pilot table, right on 487 of 600 paths. Prices read
     the spot filter. The variance swap does not depend on the weights.
     """
@@ -764,30 +905,30 @@ def test_market_test_filters_are_scored_against_the_base_rate():
     window = regime_scores(paths.state["regime_prob_rv"][:, 10], labels)
     latent = regime_scores(paths.state["regime_prob_latent"][:, 10], labels)
     assert spot["confusion"].tolist() == [[129, 148], [165, 158]]
-    assert window["confusion"].tolist() == [[209, 68], [166, 157]]
+    assert window["confusion"].tolist() == [[109, 168], [87, 236]]
     assert latent["confusion"].tolist() == [[223, 54], [59, 264]]
     assert int(spot["confusion"].sum()) == 600
     assert spot["base_rate"] == pytest.approx(323 / 600)
     assert spot["brier_skill"] < 0.0
-    assert window["brier_skill"] < 0.0
+    assert window["brier_skill"] > spot["brier_skill"]
     assert latent["brier_skill"] > 0.0
     assert spot["brier"] == pytest.approx(0.5221569169178578, abs=1e-9)
-    assert window["brier"] == pytest.approx(0.5152963456122025, abs=1e-9)
+    assert window["brier"] == pytest.approx(0.4953107970789739, abs=1e-9)
     assert latent["brier"] == pytest.approx(0.2805716276927648, abs=1e-9)
     assert spot["log_score"] == pytest.approx(-0.7184579069520304, abs=1e-9)
-    assert window["log_score"] == pytest.approx(-0.7265316948384318, abs=1e-9)
+    assert window["log_score"] == pytest.approx(-0.6892768575340644, abs=1e-9)
     assert latent["log_score"] == pytest.approx(-0.4411708645577869, abs=1e-9)
     assert spot["base_brier"] == pytest.approx(0.4970611111111111, abs=1e-9)
     assert spot["base_log_score"] == pytest.approx(-0.6902054058581284, abs=1e-9)
 
     gaps = _mixture_gaps(model, paths, 10)
-    assert int(gaps["finite"].sum()) == 35016
+    assert int(gaps["finite"].sum()) == 35032
     clock = float(times[10])
     assert clock == pytest.approx(0.5)
     for name, call_gap, variance_gap, iv_error in (
-        ("regime_prob_spot", 0.0002973824424503753, 0.0004635244302312637, 0.0053663837216426985),
-        ("regime_prob_rv", 0.00024964505926035346, 0.00038953401145281106, 0.0052640550779876226),
-        ("regime_prob_latent", 0.00015957636977995975, 0.0002451333270678601, 0.003855812446369273),
+        ("regime_prob_spot", 0.0002897885217583061, 0.00045257763306333343, 0.005348033582997692),
+        ("regime_prob_rv", 0.0002834313623806424, 0.0004396162668406603, 0.005232047160575295),
+        ("regime_prob_latent", 0.00015488813465253245, 0.00024342840743678254, 0.00391528681479051),
     ):
         batch = gaps[name]
         iv = gaps["iv_" + name]
@@ -829,24 +970,24 @@ def test_preregistered_filters_are_scored_against_the_base_rate(monkeypatch):
     window = regime_scores(paths.state["regime_prob_rv"][:, 10], labels)
     latent = regime_scores(paths.state["regime_prob_latent"][:, 10], labels)
     assert spot["confusion"].tolist() == [[176, 101], [89, 234]]
-    assert window["confusion"].tolist() == [[227, 50], [87, 236]]
+    assert window["confusion"].tolist() == [[207, 70], [78, 245]]
     assert latent["confusion"].tolist() == [[207, 70], [66, 257]]
     assert spot["brier_skill"] > 0.0
     assert window["brier_skill"] > 0.0
     assert latent["brier_skill"] > window["brier_skill"] > spot["brier_skill"]
     assert spot["brier"] == pytest.approx(0.41927448869043304, abs=1e-9)
-    assert window["brier"] == pytest.approx(0.34729313232387965, abs=1e-9)
+    assert window["brier"] == pytest.approx(0.35601895170282283, abs=1e-9)
     assert latent["brier"] == pytest.approx(0.33155110233077373, abs=1e-9)
     assert spot["log_score"] == pytest.approx(-0.6156778597945741, abs=1e-9)
-    assert window["log_score"] == pytest.approx(-0.5428351870378959, abs=1e-9)
+    assert window["log_score"] == pytest.approx(-0.540600014719739, abs=1e-9)
     assert latent["log_score"] == pytest.approx(-0.5098968565249987, abs=1e-9)
 
     gaps = _mixture_gaps(model, paths, 10)
-    assert int(gaps["finite"].sum()) == 31508
+    assert int(gaps["finite"].sum()) == 31684
     for name, call_gap, iv_error in (
-        ("regime_prob_spot", 0.005650842641547755, 0.06934422499248466),
-        ("regime_prob_rv", 0.003678213834494267, 0.05538732082611836),
-        ("regime_prob_latent", 0.00435803106464533, 0.06040905254812784),
+        ("regime_prob_spot", 0.0016502145362395097, 0.020694890419512047),
+        ("regime_prob_rv", 0.001452224971440912, 0.01906455429095802),
+        ("regime_prob_latent", 0.0013103675485724878, 0.018047992510532688),
     ):
         batch = gaps[name]
         iv = gaps["iv_" + name]
@@ -856,6 +997,48 @@ def test_preregistered_filters_are_scored_against_the_base_rate(monkeypatch):
         )
         got = float(np.sqrt(np.mean((iv[finite] - gaps["iv_true"][finite]) ** 2)))
         assert got == pytest.approx(iv_error, abs=1e-9)
+
+
+def test_four_thousand_path_filter_scores():
+    """Clock index 10, seed entropy 12, test split, 4,000 paths. Both settings.
+
+    The integer confusion counts are the pin. The market-test windowed
+    skill is 0.0094. The pre-registered windowed skill is 0.2071. The
+    pilot size is the default 1,024.
+    """
+    pytest.importorskip("roughvol")
+    market = _score_draw((0.4, 1.1), 0.5, 4000)
+    assert market["regime_prob_spot"]["confusion"].tolist() == [[894, 953], [1038, 1115]]
+    assert market["regime_prob_rv"]["confusion"].tolist() == [[677, 1170], [613, 1540]]
+    assert market["regime_prob_latent"]["confusion"].tolist() == [[1561, 286], [396, 1757]]
+    assert market["regime_prob_spot"]["brier"] == pytest.approx(0.5116058140559726, abs=1e-9)
+    assert market["regime_prob_rv"]["brier"] == pytest.approx(0.4924174573005298, abs=1e-9)
+    assert market["regime_prob_latent"]["brier"] == pytest.approx(0.2592191835470902, abs=1e-9)
+    rough = _score_draw((1.5, 3.0), 0.1, 4000)
+    assert rough["regime_prob_spot"]["confusion"].tolist() == [[1174, 673], [684, 1469]]
+    assert rough["regime_prob_rv"]["confusion"].tolist() == [[1336, 511], [670, 1483]]
+    assert rough["regime_prob_latent"]["confusion"].tolist() == [[1394, 453], [572, 1581]]
+    assert rough["regime_prob_spot"]["brier"] == pytest.approx(0.4385066651896362, abs=1e-9)
+    assert rough["regime_prob_rv"]["brier"] == pytest.approx(0.39412496974823874, abs=1e-9)
+    assert rough["regime_prob_latent"]["brier"] == pytest.approx(0.3554459765106517, abs=1e-9)
+
+
+def _score_draw(nus, H, n_paths):
+    spec = RegimeSpec(
+        generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+        params=[{"nu": float(nu)} for nu in nus],
+        p0=np.array([0.7, 0.3]),
+        switch="nu",
+    )
+    model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=H, n_mc=2)
+    times = np.linspace(0.0, 1.0, 21)
+    paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2))
+    labels = paths.regime[:, 10]
+    return {name: regime_scores(paths.state[name][:, 10], labels) for name in (
+        "regime_prob_spot",
+        "regime_prob_rv",
+        "regime_prob_latent",
+    )}
 
 
 def _single_regime(nu: float, n_mc: int, **kwargs) -> RegimeSwitchingBergomi:
@@ -914,12 +1097,24 @@ def test_surface_mixes_the_filter_and_repeats():
     assert np.array_equal(mixed, low.surface_at(replace(paths, regime_prob=mixed_weights), 2).call)
 
 
+def test_surface_seed_is_common_across_hedge_dates():
+    """The clock is not in the seed. Two dates share shocks. Two regimes do not."""
+    times = np.linspace(0.0, 0.4, 5)
+    paths = _model().simulate_market(2, times, seed=run_seed(3, 2))
+    early = _surface_seed(paths, 1, 0)
+    late = _surface_seed(paths, 3, 0)
+    assert early.entropy == late.entropy
+    assert tuple(early.spawn_key) == tuple(late.spawn_key)
+    other = _surface_seed(paths, 1, 1)
+    assert tuple(other.spawn_key) != tuple(early.spawn_key)
+
+
 def test_half_smile_is_not_flat_and_moves_with_nu():
     """H = 1/2, one path, 32 steps, 8,192 Monte Carlo copies, seed entropy 7.
 
-    The implied-vol span at nu = 1.5 is 0.04387, against 0.000390 at nu = 0.01.
-    With rho = -0.4 the low-strike implied vol is 0.2117 and the high-strike
-    implied vol is 0.1681. The control removes the Monte Carlo smile that a
+    The implied-vol span at nu = 1.5 is 0.04358, against 0.000383 at nu = 0.01.
+    With rho = -0.4 the low-strike implied vol is 0.2107 and the high-strike
+    implied vol is 0.1676. The control removes the Monte Carlo smile that a
     raw mean left at nu = 0.01.
     """
     paths = _quoted_paths(0.04, 32, np.array([1.0]))
@@ -968,7 +1163,7 @@ def test_rough_surface_requires_the_forward_driver():
 def test_surface_standard_error_is_below_the_raw_monte_carlo_noise():
     """One path, nu = 1.1, H = 1/2, 32 steps, 1,024 copies, seed entropy 7.
 
-    The at-the-money relative standard error at expiry 1 is 0.0187. The raw
+    The at-the-money relative standard error at expiry 1 is 0.0207. The raw
     mean at 256 copies was about 8 percent of the price. The coefficient on
     each half of the copies is fit on the other half.
     """
@@ -1006,12 +1201,13 @@ def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     """H = 0.1, eight paths, clock 0.5, maturity 1, 4,096 copies.
 
     The flat anchor ``v_t (T - t)`` misses the variance swap by a median
-    relative gap of 0.258 on the last expiry. The surface log contract
+    relative gap of 0.281 on the last expiry. The surface log contract
     ``-2 E[log Z]`` stays inside 4 standard errors of that swap on every
-    expiry. The largest absolute z-score on this draw is 1.50. The
-    out-of-the-money strip, on log-moneyness from -0.8 to 0.8, stays inside
-    4 standard errors of the same swap on the last expiry. Its largest
-    absolute z-score is 1.31.
+    expiry, with an extra ``1e-8`` for the one-step expiry, whose control
+    residual is numerical noise. The largest absolute z-score on a later
+    expiry is 1.80. The out-of-the-money strip, on log-moneyness from -0.8
+    to 0.8, stays inside 4 standard errors of the same swap on the last
+    expiry. Its largest absolute z-score is 1.56.
     """
     pytest.importorskip("roughvol")
     smile = np.linspace(-0.8, 0.8, 161)

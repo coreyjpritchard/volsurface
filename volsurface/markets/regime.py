@@ -59,7 +59,8 @@ At ``H = 1/2`` each regime-conditional expectation equals
 ``surface_at`` prices the call by Monte Carlo under the same mixture.
 Each regime holds ``nu`` fixed. The variance level is that regime's
 forward curve ``xi_t(u)``: at ``H = 1/2`` it is flat at ``v_t``, and at
-any other ``H`` it is ``v_t`` times the constant-``nu`` rough ratio. The
+any other ``H`` a later date is the closed-form constant-``nu`` curve
+and the clock entry is ``v_t``. The
 future noise is a fresh kernel, independent of the past given that
 curve. The past Volterra integral sits in ``xi_t(u)`` and is not drawn
 again. Weights are ``regime_prob`` at the clock. The true label is not
@@ -80,16 +81,19 @@ is the controlled log contract ``-2 E[log Z]`` on those paths, which is
 the variance-swap strike, and ``total_variance_se`` is its standard error.
 
 The Monte Carlo seed is a ``SeedSequence`` with the path's entropy and
-``spawn_key + (i_t, 4, regime)``. It is not one of the four simulation
+``spawn_key + (4, regime)``. The clock is not in the key, so every hedge
+date draws the same shocks. It is not one of the four simulation
 children. At ``H = 1/2`` each step draws ``dW`` for every path and every
 copy, then the orthogonal shock. At any other ``H`` the plugin consumes
 the vol child and the spot child draws the orthogonal shock. The unit
 forward is 1 and the strike is ``exp(k)``.
 
-Three Hamilton filters share one timing. Column 0 is ``p0``. The
-observation on the step that ends at ``t_i`` is emitted by the regime at
-the left endpoint. The probability stored at ``t_i`` is the updated
-belief moved one transition forward. A later observation does not enter.
+The spot filter and the latent-variance benchmark share one timing.
+Column 0 is ``p0``. The observation on the step that ends at ``t_i`` is
+emitted by the regime at the left endpoint. The probability stored at
+``t_i`` is the updated belief moved one transition forward. A later
+observation does not enter. The windowed filter is timed two steps
+back, as below.
 
 The spot filter reads one-step log realised variance of the simulated spot,
 
@@ -108,19 +112,29 @@ read ``regime_prob``. They do not read the other two filters.
 The windowed realised-variance filter is observable. Inside each clock
 step the spot's Brownian increment is refined to ``n_sub`` sub-steps,
 default 21, by a Brownian bridge. The bridge sums to the coarse
-increment, so the stored ``Z`` and ``v`` do not depend on ``n_sub``. The
-observation is the log of the sum of the squared sub-returns, divided by
-the clock step,
+increment, so the stored ``Z`` and ``v`` do not depend on ``n_sub``.
+Variance is frozen at the start of the step, so the sub-returns share
+that variance. The level
 
-    y_i = log( sum_k (log Z_{i,k} - log Z_{i,k-1})^2 / dt_i ).
+    y_i = log( sum_k (log Z_{i,k} - log Z_{i,k-1})^2 / dt_i )
 
-The emission mean and variance are a table, one row per clock step and
-one column per regime. The table is the sample mean and variance of this
-observation on pilot paths that each stay in one regime. The pilot seed
-is ``SeedSequence(entropy=101, spawn_key=(7, regime))``. It is not a
-market seed. The pilot statistic is ``y`` above. It does not read ``v``.
-A sample variance below ``1e-8`` is floored there so the Gaussian
-likelihood stays finite. The probabilities sit in
+is ``log v`` at the start of the step plus the log of a chi-squared on
+21 degrees, scaled by 21, up to the drift and the bridge constraint. It
+is not the log of integrated variance: ``v`` does not move inside the
+step. The filter does not read that level. The same level at every date
+would count one piece of information again, and the probabilities would
+tighten as the clock moves. The observation at date ``i >= 2`` is the
+change ``y_i - y_{i-1}``. That change is the move from the variance at
+date ``i-2`` to the variance at date ``i-1``, so it is emitted by the
+regime two steps back. Dates 0 and 1 have no change yet.
+
+The emission mean and variance are a table, one row per change and one
+column per regime. The table is the sample mean and variance of this
+change on pilot paths that each stay in one regime. The pilot seed is
+``SeedSequence(entropy=101, spawn_key=(7, regime))``. It is not a
+market seed. The pilot statistic is the change in ``y``. It does not
+read ``v``. A sample variance below ``1e-8`` is floored there so the
+Gaussian likelihood stays finite. The probabilities sit in
 ``state["regime_prob_rv"]``. ``price_filter="rv"`` makes ``regime_prob``
 this filter. The default does not, because the spot filter is the one
 the prices were built on. Both are observable. The latent benchmark is
@@ -262,7 +276,7 @@ class RegimeSwitchingBergomi:
         means, variances = self._emission(nus)
         spot_prob = filter_log_realised_variance(observed, steps, means, variances, p0)
         tables = self._calibrated_emissions(grid, nus)
-        rv_prob = filter_log_realised_variance(
+        rv_prob = filter_differenced_realised_variance(
             y_rv, steps, tables["rv_means"], tables["rv_vars"], p0
         )
         y_latent = _log_variance_increments(v)
@@ -399,11 +413,13 @@ class RegimeSwitchingBergomi:
 
         The plugin draws the vol child. ``xi`` already holds the path's
         past, so the factor is a fresh kernel with mean near 1. The grid
-        from the clock to the last expiry has to be equally spaced. The
-        tenor shape of ``xi`` is the constant-``nu`` ratio of the raw
-        driver, anchored at ``v_t`` and mixed by the filter. It is not
-        the conditional curve of a path whose past ``nu`` switched: that
-        curve would read the latent regime, and a price does not.
+        from the clock to the last expiry has to be equally spaced. A
+        later date on ``xi`` is the closed-form constant-``nu`` curve.
+        The clock entry is ``v_t``. Dividing by the closed-form diagonal
+        would drop the hybrid near field and lift the curve. The curve
+        is still not the conditional curve of a path whose past ``nu``
+        switched: that curve would read the latent regime, and a price
+        does not.
         """
         m = xi.shape[0]
         n_mc = self.n_mc
@@ -487,17 +503,19 @@ class RegimeSwitchingBergomi:
         """Pilot mean and variance of the windowed RV and of the log-v increment.
 
         Each regime is its own pilot and stays in that regime. The windowed
-        table is computed from ``y_rv`` only. The latent table is computed
-        from ``log v``. The two samples are not mixed. Repeated calls on
-        the same grid reuse the tables stored on this model.
+        table is the change in ``y_rv``, one row per change. The latent
+        table is the change in ``log v``, one row per step. The two samples
+        are not mixed. Repeated calls on the same grid reuse the tables
+        stored on this model.
         """
         key = (np.asarray(grid, dtype=float).tobytes(), tuple(np.asarray(nus, dtype=float)))
         cached = self._emission_cache.get(key)
         if cached is not None:
             return cached
         n_steps = grid.size - 1
-        rv_samples = np.empty((self.n_pilot, n_steps, nus.size))
-        latent_samples = np.empty_like(rv_samples)
+        n_diff = max(grid.size - 2, 0)
+        rv_samples = np.empty((self.n_pilot, n_diff, nus.size))
+        latent_samples = np.empty((self.n_pilot, n_steps, nus.size))
         for r, nu in enumerate(nus):
             spec = RegimeSpec(
                 generator=np.zeros((1, 1)),
@@ -518,11 +536,19 @@ class RegimeSwitchingBergomi:
                 entropy=_PILOT_ENTROPY, spawn_key=_PILOT_SPAWN + (int(r),)
             )
             drawn = pilot._paths(self.n_pilot, grid, seed)
-            rv_samples[:, :, r] = drawn["y_rv"][:, 1:]
+            if n_diff:
+                level = drawn["y_rv"]
+                rv_samples[:, :, r] = level[:, 2:] - level[:, 1:-1]
             latent_samples[:, :, r] = _log_variance_increments(drawn["v"])[:, 1:]
+        if n_diff:
+            rv_means = rv_samples.mean(axis=0)
+            rv_vars = np.maximum(rv_samples.var(axis=0, ddof=1), _EMISSION_VAR_FLOOR)
+        else:
+            rv_means = np.empty((0, nus.size))
+            rv_vars = np.empty((0, nus.size))
         tables = {
-            "rv_means": rv_samples.mean(axis=0),
-            "rv_vars": np.maximum(rv_samples.var(axis=0, ddof=1), _EMISSION_VAR_FLOOR),
+            "rv_means": rv_means,
+            "rv_vars": rv_vars,
             "latent_means": latent_samples.mean(axis=0),
             "latent_vars": np.maximum(latent_samples.var(axis=0, ddof=1), _EMISSION_VAR_FLOOR),
         }
@@ -754,10 +780,12 @@ def trader_forward_variance(
 
     The true regime label is not an argument. At ``H = 1/2`` every regime
     has the same conditional expectation, ``v_t`` when ``xi0`` is flat, so
-    the mixture does not depend on the weights. At any other ``H`` the
-    curve in the tenor is the constant-``nu`` rough ratio for each regime,
-    anchored at the path's ``v_t``, then mixed. Behind the clock the entry
-    is NaN. On the clock it is ``v_t``.
+    the mixture does not depend on the weights. At any other ``H`` a later
+    date is the closed-form constant-``nu`` curve for that regime. The
+    diagonal of that closed form is the kernel integral against ``dW``. It
+    drops the hybrid near field, so dividing by it lifts the whole curve.
+    The diagonal of the mixture is the path's ``v_t``. Behind the clock
+    the entry is NaN.
     """
     variance = np.asarray(v, dtype=float)
     grid = np.asarray(times, dtype=float)
@@ -775,11 +803,15 @@ def trader_forward_variance(
         )
     mixed = np.zeros((m, n, n))
     increments = np.asarray(dW, dtype=float)
+    finite = np.where(ahead, 1.0, 0.0)
     for r, nu in enumerate(vol_of_vol):
         component = bergomi_forward_variance(float(H), float(nu), xi0, grid, increments)
-        diag = np.diagonal(component, axis1=1, axis2=2)
-        ratio = np.where(ahead[None, :, :], component / diag[:, :, None], 0.0)
-        mixed += probs[:, :, r][:, :, None] * variance[:, :, None] * ratio
+        # NaN behind the clock must not enter the sum. The diagonal is
+        # overwritten below: that closed-form diagonal drops the near field.
+        usable = np.where(np.isfinite(component), component, 0.0) * finite[None, :, :]
+        mixed += probs[:, :, r][:, :, None] * usable
+    diagonal = np.arange(n)
+    mixed[:, diagonal, diagonal] = variance
     return np.where(ahead[None, :, :], mixed, np.nan)
 
 
@@ -868,6 +900,53 @@ def filter_log_realised_variance(
     filtered = hamilton_filter(observations, transition, means, variances, prior)
     for i in range(1, n_times):
         out[:, i, :] = filtered[:, i - 1, :] @ steps[i - 1]
+    return out
+
+
+def filter_differenced_realised_variance(
+    y: np.ndarray,
+    steps: list[np.ndarray],
+    means: np.ndarray,
+    variances: np.ndarray,
+    p0: np.ndarray,
+) -> np.ndarray:
+    """Hamilton filter of the change in log realised variance.
+
+    ``y`` is the level, shape ``(m, n_times)``. Column 0 is unused. The
+    observation at date ``i >= 2`` is ``y_i - y_{i-1}``. That change is
+    emitted by the regime at date ``i - 2``, two steps back: it is the
+    move from the variance at ``i - 2`` to the variance at ``i - 1``.
+    Dates 0 and 1 have no change yet, so the probability there is ``p0``
+    moved by the transitions that have happened and by no observation.
+    The probability at date ``i >= 2`` is the posterior about date
+    ``i - 2``, moved forward two transitions. A later change does not
+    enter. ``means`` and ``variances`` have one row per change, in the
+    order the changes arrive, or one row shared by every change.
+    """
+    series = np.asarray(y, dtype=float)
+    if series.ndim != 2:
+        raise ValueError(f"y must have shape (m, n_times), got {series.shape}")
+    m, n_times = series.shape
+    prior = np.asarray(p0, dtype=float).reshape(-1)
+    out = np.empty((m, n_times, prior.size))
+    out[:, 0, :] = prior
+    n_steps = n_times - 1
+    if n_steps == 0:
+        return out
+    if len(steps) != n_steps:
+        raise ValueError(f"expected {n_steps} transition matrices, got {len(steps)}")
+    out[:, 1, :] = out[:, 0, :] @ steps[0]
+    n_obs = n_times - 2
+    if n_obs <= 0:
+        return out
+    changes = series[:, 2:] - series[:, 1:-1]
+    if changes.shape[1] != n_obs:
+        raise ValueError(f"expected {n_obs} changes, got {changes.shape[1]}")
+    transition = np.eye(prior.size) if n_obs == 1 else steps[: n_obs - 1]
+    filtered = hamilton_filter(changes, transition, means, variances, prior)
+    for i in range(2, n_times):
+        belief = filtered[:, i - 2, :] @ steps[i - 2] @ steps[i - 1]
+        out[:, i, :] = belief
     return out
 
 
@@ -1032,11 +1111,18 @@ def _expiry_indices(n_times: int, i_t: int) -> np.ndarray:
 
 
 def _surface_seed(paths: MarketPaths, i_t: int, regime: int) -> np.random.SeedSequence:
-    """Monte Carlo seed for one clock and one regime. Not a simulation child."""
+    """Monte Carlo seed for one regime, shared by every clock.
+
+    ``i_t`` is not in the key. Two hedge dates then draw the same shocks,
+    so a comparison across clocks is not a second Monte Carlo contrast.
+    The regime stays in the key. This is not a simulation child.
+    """
     meta = paths.meta
     if "seed_entropy" not in meta or "spawn_key" not in meta:
         raise ValueError("surface_at draws from paths.meta seed_entropy and spawn_key")
-    key = tuple(int(part) for part in meta["spawn_key"]) + (int(i_t), 4, int(regime))
+    # The clock is not hashed. Two dates then share shocks.
+    _ = int(i_t)
+    key = tuple(int(part) for part in meta["spawn_key"]) + (4, int(regime))
     return np.random.SeedSequence(entropy=meta["seed_entropy"], spawn_key=key)
 
 
@@ -1062,19 +1148,21 @@ def _forward_driver(paths: MarketPaths, H: float) -> np.ndarray | None:
 def _regime_forward(H, nu, v_now, xi0, times, dW, i_t) -> np.ndarray:
     """Regime-conditional forward variance. Shape ``(m, n_times)``.
 
-    At ``H = 1/2`` the curve is flat at ``v_now``. At any other ``H`` it is
-    ``v_now`` times the constant-``nu`` rough ratio ``xi_t(u) / xi_t(t)``.
-    Entries before the clock are NaN. The true regime label is not an argument.
+    At ``H = 1/2`` the curve is flat at ``v_now``. At any other ``H`` a
+    later date is the closed-form constant-``nu`` curve. The diagonal of
+    that closed form drops the hybrid near field, so the clock entry is
+    ``v_now`` and not that diagonal. Entries before the clock are NaN.
+    The true regime label is not an argument.
     """
     m = int(v_now.shape[0])
     out = np.full((m, times.size), np.nan)
+    out[:, i_t] = np.maximum(v_now, 0.0)
     if float(H) == 0.5:
         out[:, i_t:] = np.maximum(v_now, 0.0)[:, None]
         return out
     curve = bergomi_forward_variance(float(H), float(nu), xi0, times, dW)
-    level = curve[:, i_t, i_t]
-    ratio = curve[:, i_t, i_t:] / level[:, None]
-    out[:, i_t:] = np.maximum(v_now, 0.0)[:, None] * ratio
+    if i_t + 1 < times.size:
+        out[:, i_t + 1 :] = curve[:, i_t, i_t + 1 :]
     return out
 
 
@@ -1213,10 +1301,13 @@ def bergomi_forward_variance(H: float, nu, xi0, times: np.ndarray, dW: np.ndarra
         I_t(u) = int_0^t (u - s)^{H - 1/2} dW_s,
         xi_t(u) = xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2).
 
-    On the clock the entry is ``v_t``. Behind the clock it is NaN. At
-    ``H = 1/2`` the kernel is 1, so ``I_t(u) = W_t`` and the exponent does
-    not depend on ``u``. This is the constant-``nu`` curve. A regime path
-    uses :func:`increment_variance` and :func:`trader_forward_variance`.
+    On the clock the entry is the same formula at ``u = t``. That diagonal
+    is the kernel integral against ``dW`` and drops the hybrid near field,
+    so it is not the simulated ``v_t``. Behind the clock the entry is NaN.
+    At ``H = 1/2`` the kernel is 1, so ``I_t(u) = W_t`` and the exponent
+    does not depend on ``u``. This is the constant-``nu`` curve. A regime
+    path uses :func:`increment_variance` and :func:`trader_forward_variance`,
+    which writes the simulated ``v_t`` onto the diagonal.
     """
     grid = np.asarray(times, dtype=float)
     increments = np.asarray(dW, dtype=float)
