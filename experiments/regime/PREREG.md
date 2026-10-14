@@ -147,19 +147,43 @@ of three.
 
 ## Not the gate
 
-H4 is exploratory. The Hamilton filter is run on one-step log realised
-variance of the simulated paths, `log((d log Z)^2 / dt)`. It is not run
-on a synthetic observation drawn from the latent regime. The emission
-mean is the same in every regime, because the return's variance is the
-spot variance and not `nu`. The variance of `log(chi^2_1)` is `pi^2 / 2`,
+H4 is exploratory. Two Hamilton filters are defined. `pi_filt` sees the
+spot filter and not the latent regime. The spot filter reads one-step
+log realised variance, `log((d log Z)^2 / dt)`. It is not run on a
+synthetic observation drawn from the latent regime. The emission mean is
+the same in every regime, because the return's variance is the spot
+variance and not `nu`. The variance of `log(chi^2_1)` is `pi^2 / 2`,
 which dwarfs the gap in `nu^2` between the two regimes, so this
 observation does not separate them. A trailing window that still sits
 inside one regime visit has the same problem, and a longer window mixes
-the regimes. The exploratory summary is the filter's hit rate minus the
-unconditional base rate, the larger marginal frequency of the latent
-regime. Prices, including the I2 variance swap and `surface_at`, do not
-determine the latent regime: a price bin contains more than one regime.
+the regimes. Prices, including the I2 variance swap and `surface_at`,
+read this filter. They do not read the latent label.
+
+The log-variance filter is an oracle upper bound, in the same sense as
+`pi_oracle`. It reads `log v_i - log v_{i-1}`, the true latent log
+variance. At `H = 1/2` that increment is
+`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
+It is not a deployable policy and it is not `pi_filt`. At any other `H`
+that Gaussian is not the rough likelihood.
+
+On the market-test draw, 600 paths, clock index 10, seed entropy 12,
+test split, `nu` is 0.4 and 1.1. That pair is not the pilot pair 1.5
+and 3. The generator, initial law `(0.7, 0.3)`, `rho = -0.4`, and flat
+`xi0 = 0.04` are the pins above. The spot cost `1e-4` is not an input
+to either filter. The base rate is 0.5383. The spot filter's modal hit
+rate is 0.4783, lift -0.0600, confusion `[[129, 148], [165, 158]]`,
+Brier score 0.5222, log score -0.7185. Quoting the base rate scores
+Brier 0.4971 and log score -0.6902. The log-variance filter's modal
+hit rate is 0.8067, lift 0.2683, confusion `[[219, 58], [58, 265]]`,
+Brier score 0.2832, log score -0.4444. The call-bin accuracy 0.6600 on
+this draw is the price bin, not the spot filter. With 1,024 copies the
+mean absolute call gap against the true-regime mixture is 0.0002966
+for the spot filter and 0.0001595 for the log-variance filter.
+Implied-vol root-mean-square error on 35,060 finite nodes is 0.005305
+and 0.003815. The variance swap does not move at `H = 1/2`.
+
 H5, a link between the filter and minimal DYSANOS, is exploratory.
-Neither is a hypothesis this draft freezes. Statements about DYSANOS that
-were the motivation for H5 remain UNVERIFIED. The dynamic surface in
-this repository is minimal DYSANOS. The full v3 baseline is future work.
+Neither H4 nor H5 is a hypothesis this draft freezes. Statements about
+DYSANOS that were the motivation for H5 remain UNVERIFIED. The dynamic
+surface in this repository is minimal DYSANOS. The full v3 baseline is
+future work.
