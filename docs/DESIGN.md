@@ -781,8 +781,14 @@ The formula is an expansion in small `nu^2 T`. The Monte Carlo test uses
 `beta = 1` and `rho = 0` the price is the average of Black prices over
 the integrated variance of `alpha`. On the panel with `nu^2 T = 2` that
 mixture is the reference: Hagan is about 184 to 271 bp high, and the
-20,000-path log-Euler is about 187 to 290 bp low. `SABRFitter` holds
-`beta` fixed and fits `alpha`, `rho` and `nu` once per expiry.
+20,000-path log-Euler is about 187 to 290 bp low. With `beta = 0.5`,
+`alpha = 0.8` and `nu = 0`, the exact absorption probability is 0.04394.
+At 64 steps and 200,000 paths the estimate is 0.04551 (seed 2) and
+0.04542 (seed 3). At 256 steps, seed 2, it is 0.04420. `SABRFitter` holds
+`beta` fixed and fits `alpha`, `rho` and `nu` once per expiry. On the
+thinned SPXW book that fit has median price RMSE 2.82 index points. The
+expiry nearest one year has `alpha = 0.161`, `rho = -0.669`, `nu = 0.932`.
+Through `T = 0.056`, `nu` sits on its upper bound of 4.
 
 `check_surface` on Hagan prices at `T = 10`, `nu = 1.5`, `beta = 1` reports
 a butterfly. The implied vol on that window stays positive. The negative

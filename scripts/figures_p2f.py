@@ -21,8 +21,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import bs
+from volsurface import bs, chains
+from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import Curves, Domain
+from volsurface.fit.sabr import SABRFitter
 from volsurface.models.sabr import SABR, euler_price, integrated_black_mixture
 from volsurface.surface.model import ModelSurface
 from volsurface.surface_export import write_surface_preset
@@ -239,6 +241,70 @@ def monte_carlo_panel() -> dict:
     return summaries
 
 
+def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
+    """Up to 11 strikes per expiry inside |k| <= 0.4, the same cut as the Heston fit."""
+    kept = []
+    for _, group in quotes.groupby("expiry", sort=True):
+        group = group[np.abs(group["k"]) <= 0.4].dropna(subset=["iv", "price"])
+        if len(group) < 5:
+            continue
+        if len(group) > 11:
+            order = np.argsort(group["k"].to_numpy())
+            pick = np.linspace(0, len(order) - 1, 11).round().astype(int)
+            group = group.iloc[order[pick]]
+        kept.append(group)
+    return pd.concat(kept, ignore_index=True)
+
+
+def spx_fit() -> dict:
+    """One SABR parameter set per SPXW expiry. beta is fixed at 1."""
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    full = market_data_from_snapshot(chain)
+    data = full.__class__(
+        asof=full.asof,
+        quotes=_thin(full.quotes),
+        F=full.F,
+        df=full.df,
+        F_err=full.F_err,
+        day_count=full.day_count,
+    )
+    fitted = SABRFitter(beta=1.0, n_starts=4, loss="vega", seed=0).fit(data)
+    report = fitted.slice_report
+    report.to_csv(FIG / "p2f_spx_sabr.csv", index=False)
+
+    fig, axes = plt.subplots(2, 1, figsize=(6.8, 6.0), sharex=True)
+    axes[0].plot(report["T"], report["alpha"], marker="o", ms=3, label="alpha")
+    axes[0].plot(report["T"], report["nu"], marker="o", ms=3, label="nu")
+    axes[0].plot(report["T"], report["rho"], marker="o", ms=3, label="rho")
+    axes[0].set_ylabel("parameter")
+    axes[0].legend(frameon=False, fontsize=8)
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_title("SABR on SPX mids, one expiry at a time, beta = 1")
+    axes[1].plot(report["T"], report["rmse_price"], marker="o", ms=3, color="0.2")
+    axes[1].set_xlabel("maturity T (year fraction)")
+    axes[1].set_ylabel("price RMSE (index points)")
+    axes[1].grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(FIG / "p2f_spx_sabr.png", dpi=140)
+    plt.close(fig)
+
+    summary = {
+        "n_quotes": int(len(data.quotes)),
+        "n_expiries": int(len(report)),
+        "solver_status": fitted.solver_status,
+        "rmse_median": float(report["rmse_price"].median()),
+        "rmse_max": float(report["rmse_price"].max()),
+        "T_at_rmse_max": float(report.loc[report["rmse_price"].idxmax(), "T"]),
+        "alpha_at_T1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["alpha"]),
+        "rho_at_T1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["rho"]),
+        "nu_at_T1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["nu"]),
+        "T_nearest_1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["T"]),
+    }
+    (FIG / "p2f_spx_sabr.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    summary["wall_time"] = fitted.wall_time
+    return summary
+
+
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     (ROOT / "data" / "presets").mkdir(parents=True, exist_ok=True)
@@ -246,6 +312,7 @@ def main() -> None:
         "smiles": smile_panel(),
         "density": density_panel(),
         "monte_carlo": monte_carlo_panel(),
+        "spx": spx_fit(),
     }
     print(json.dumps(summary, indent=2))
 

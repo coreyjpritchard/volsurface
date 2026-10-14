@@ -61,4 +61,20 @@ the plain Euler predictor `Z + a Z^beta sqrt(dt) Z_F`. A predictor that is
 not strictly positive sets `Z` to 0 for the rest of the path. So does a
 level below `1e-12`, and a power that overflowed. With `nu = 0`,
 `alpha = 0.8` and a unit forward, `P(Z_T = 0) = exp(-2 / 0.64) = 0.04394`.
-At 64 steps and 20,000 paths the estimate is `0.0433`.
+At 64 steps and 20,000 paths, seed 2, the estimate is `0.0433`. That
+sample sits inside four standard errors, and the test stops there. A
+larger sample shows the step is biased high. At 200,000 paths and 64
+steps, seed 2 gives `0.04551` (standard error `0.000466`, `z = +3.4`)
+and seed 3 gives `0.04542` (`z = +3.2`), against `0.04394`. The same
+seed at 256 steps gives `0.04420` (`z = +0.57`). Across seeds 10000 to
+10029, the 20,000-path test has mean `z = +0.55` (standard error of
+that mean `0.17`) and mean probability `0.04476`.
+
+Calibration holds `beta` fixed and fits `alpha`, `rho` and `nu` on each
+expiry. On the thinned SPXW book, 440 quotes and 40 expiries, four starts
+and seed 0, the fit takes 5.94 seconds. Median price RMSE is 2.82 index
+points. The largest is 3.84, at `T = 0.371`. The expiry nearest one year
+(`T = 0.963`) has `alpha = 0.161`, `rho = -0.669`, `nu = 0.932` and RMSE
+1.62. The front expiry has `alpha = 0.161`, `rho = -0.999`, `nu = 4` and
+RMSE 0.37. `nu` is on its upper bound of 4 for the 15 expiries through
+`T = 0.056`. `rho` is on its lower bound of `-0.999` for the first three.

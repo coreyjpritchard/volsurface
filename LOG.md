@@ -39,12 +39,25 @@ probability is `exp(-2 / 0.64) = 0.04394`. At 64 steps, 20,000 paths, seed
 2, the estimate is `0.0433` (standard error `0.00144`, four standard
 errors is `0.0058`). The terminal mean of `Z` is `1.0020` (standard error
 `0.0057`). No absorbed path leaves 0. A level below `1e-12` is absorbed,
-so the step does not leave a positive underflow.
+so the step does not leave a positive underflow. The 20,000-path test
+does not see the step bias. At 200,000 paths and 64 steps, seed 2 is
+`0.04551` (`z = +3.4`) and seed 3 is `0.04542` (`z = +3.2`). Seed 2 at
+256 steps is `0.04420` (`z = +0.57`). Seeds 10000 to 10029 of the
+20,000-path test have mean `z = +0.55`.
 
 Synthetic book, `beta` fixed at 1, one fit per expiry, truth
 `alpha = 0.22`, `rho = -0.45`, `nu = 0.35`. Four starts, 0.18 seconds.
 Each of `T = 0.5`, `1` and `1.5` recovers the parameters. The largest
 price residual is `4.6e-10`, on `T = 1.5`.
+
+The same fitter on the thinned SPXW book (440 quotes, 40 expiries,
+`beta = 1`, four starts, seed 0) takes 5.94 seconds. Median price RMSE
+is `2.82` index points. The largest is `3.84`, at `T = 0.371`. The
+expiry nearest one year (`T = 0.963`) has `alpha = 0.161`,
+`rho = -0.669`, `nu = 0.932`, RMSE `1.62`. The front expiry has
+`alpha = 0.161`, `rho = -0.999`, `nu = 4`, RMSE `0.37`. `nu` is on its
+upper bound of 4 for the 15 expiries through `T = 0.056`, and `rho` is
+on its lower bound of `-0.999` for the first three.
 
 `check_surface` on Hagan prices, `alpha = 0.3`, `beta = 1`, `rho = -0.3`,
 `nu = 1.5`, `T = 10`, `k` from `-1.5` to `0.5`. The report is not ok, and
