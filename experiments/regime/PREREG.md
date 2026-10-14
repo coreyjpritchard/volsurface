@@ -143,44 +143,62 @@ Regime durations of 5 times maturity and of 0.5 times maturity are a
 design axis. They replace the pinned transition matrix. The ratio grid
 `{1, 1.5, 2}` is a sensitivity around the primary ratio 2. Those values
 are settings. They are not measurements, and they are outside the family
-of three.
+of three. These residual pins stay open. This draft does not close them.
 
 ## Not the gate
 
-H4 is exploratory. Two Hamilton filters are defined. `pi_filt` sees the
-spot filter and not the latent regime. The spot filter reads one-step
-log realised variance, `log((d log Z)^2 / dt)`. It is not run on a
-synthetic observation drawn from the latent regime. The emission mean is
-the same in every regime, because the return's variance is the spot
-variance and not `nu`. The variance of `log(chi^2_1)` is `pi^2 / 2`,
-which dwarfs the gap in `nu^2` between the two regimes, so this
-observation does not separate them. A trailing window that still sits
-inside one regime visit has the same problem, and a longer window mixes
-the regimes. Prices, including the I2 variance swap and `surface_at`,
-read this filter. They do not read the latent label.
+H4 is exploratory. Three Hamilton filters are defined. `pi_filt` sees
+the spot filter and not the latent regime. Prices, including the I2
+variance swap and `surface_at`, read that filter. The windowed
+realised-variance filter is observable and is not `pi_filt`. The
+latent-variance benchmark is not a deployable policy and it is not
+`pi_oracle`. `pi_oracle` still sees the latent regime label.
 
-The log-variance filter is an oracle upper bound, in the same sense as
-`pi_oracle`. It reads `log v_i - log v_{i-1}`, the true latent log
-variance. At `H = 1/2` that increment is
-`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
-It is not a deployable policy and it is not `pi_filt`. At any other `H`
-that Gaussian is not the rough likelihood.
+The spot filter reads one-step log realised variance,
+`log((d log Z)^2 / dt)`. It is not run on a synthetic observation drawn
+from the latent regime. The emission mean is the same in every regime,
+because the return's variance is the spot variance and not `nu`. The
+variance of `log(chi^2_1)` is `pi^2 / 2`. At `nu` of 0.4 and 1.1 that
+term dwarfs the gap in `nu^2`, and the filter has no Brier skill. At
+the pre-registered `nu` of 1.5 and 3 the same emission does have skill.
+The claim depends on the settings. There is no single lift band.
 
-On the market-test draw, 600 paths, clock index 10, seed entropy 12,
-test split, `nu` is 0.4 and 1.1. That pair is not the pilot pair 1.5
-and 3. The generator, initial law `(0.7, 0.3)`, `rho = -0.4`, and flat
-`xi0 = 0.04` are the pins above. The spot cost `1e-4` is not an input
-to either filter. The base rate is 0.5383. The spot filter's modal hit
-rate is 0.4783, lift -0.0600, confusion `[[129, 148], [165, 158]]`,
-Brier score 0.5222, log score -0.7185. Quoting the base rate scores
-Brier 0.4971 and log score -0.6902. The log-variance filter's modal
-hit rate is 0.8067, lift 0.2683, confusion `[[219, 58], [58, 265]]`,
-Brier score 0.2832, log score -0.4444. The call-bin accuracy 0.6600 on
-this draw is the price bin, not the spot filter. With 1,024 copies the
-mean absolute call gap against the true-regime mixture is 0.0002966
-for the spot filter and 0.0001595 for the log-variance filter.
-Implied-vol root-mean-square error on 35,060 finite nodes is 0.005305
-and 0.003815. The variance swap does not move at `H = 1/2`.
+The windowed filter reads log realised variance from 21 sub-steps
+inside each clock step. The emission table is fit on pilot paths that
+each stay in one regime. That fit does not read `v`.
+
+The latent-variance benchmark reads `log v_i - log v_{i-1}` through a
+pilot table, at every `H`. At `H = 1/2` the table estimates
+`Normal(-nu^2 dt / 2, nu^2 dt)`. At `H = 0.1` that Gaussian is not the
+rough likelihood, so the benchmark does not use it and it is not an
+oracle.
+
+Six hundred paths, clock index 10, seed entropy 12, test split. The
+generator, initial law `(0.7, 0.3)`, `rho = -0.4`, and flat `xi0 = 0.04`
+are the pins above. The spot cost `1e-4` is not an input to any filter.
+The chain does not depend on `H` or on `nu`: 277 paths in the low regime
+and 323 in the high regime. The base rate is 0.5383. Quoting it scores
+Brier 0.4971 and log score -0.6902. Brier skill is
+`1 - Brier / Brier_base`.
+
+Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. Spot: 287 of 600,
+confusion `[[129, 148], [165, 158]]`, Brier 0.5222, log score -0.7185,
+skill -0.0505. Windowed: 366 of 600, confusion
+`[[209, 68], [166, 157]]`, Brier 0.5153, log score -0.7265, skill
+-0.0367. Latent benchmark: 487 of 600, confusion
+`[[223, 54], [59, 264]]`, Brier 0.2806, log score -0.4412, skill 0.4355.
+Implied-vol root-mean-square error on 35,016 finite nodes is 0.005366,
+0.005264, and 0.003856. The call-bin accuracy 0.6600 on this draw is
+the price bin, not a filter hit rate. The variance swap does not move
+at `H = 1/2`.
+
+Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. Spot: 410 of 600,
+hit rate 0.6833, confusion `[[176, 101], [89, 234]]`, Brier 0.4193,
+log score -0.6157, skill 0.1565. Windowed: 463 of 600, confusion
+`[[227, 50], [87, 236]]`, Brier 0.3473, log score -0.5428, skill 0.3013.
+Latent benchmark: 464 of 600, confusion `[[207, 70], [66, 257]]`, Brier
+0.3316, log score -0.5099, skill 0.3330. Implied-vol root-mean-square
+error on 31,508 finite nodes is 0.06934, 0.05539, and 0.06041.
 
 H5, a link between the filter and minimal DYSANOS, is exploratory.
 Neither H4 nor H5 is a hypothesis this draft freezes. Statements about
