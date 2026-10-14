@@ -25,7 +25,7 @@ onto the Wiener increment. At `H = 0.1` that regression keeps `5/9` of
 exact one. The Cholesky of the hybrid scheme is not in this repository.
 A missing method raises, and a stand-in is not labelled rBergomi.
 `H = 1/2` does not call the plugin. The dev extra pins rough-volatility
-`37eb89ba`, the commit that returns the near field.
+`2aca346571ccfaaab0b6af8730e90d43a57a35ab`, the commit that returns the near field.
 
 The spot step freezes `v` on the left of the interval and multiplies `Z`
 by `exp(sqrt(v) dW_spot - v dt / 2)`, with
