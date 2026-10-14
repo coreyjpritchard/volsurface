@@ -1,12 +1,18 @@
 """Implied-vol gallery for the models on the committed SPX book.
 
-One grid covers the quoted log-moneyness and the quoted expiries. Implied-vol
-panels share a colour scale, a vertical range, and a view angle. That range
-is the market's, plus a margin: ``[0.05, 0.90]``. A cell outside it is left
-off the mesh and drawn as a cross at the near edge, so it cannot rescale the
-axis. Faces outside that expiry's own quotes are faint, not a solid grey
-sheet. Dupire local volatility keeps its own axis, ``[0.00, 2.80]``, and the
-same rule: cells outside that window are marked and do not set the scale.
+The figures use standardised moneyness ``k / sqrt(T)`` on ``[-3, 1.5]``.
+Expiries under seven days are left out of the pictures and kept in the
+JSON error tables. A cell is drawn only when that expiry quotes the
+strike: there is no extrapolated sheet. Implied-vol panels share one
+colour scale, ``[0.05, 0.90]``, unless a drawn cell sits a little outside
+it, in which case the scale grows to cover the cell. A cell above 1.25
+is left off the mesh and marked. Dupire local volatility keeps its own
+vertical scale, set to the values actually drawn.
+
+The market surface in the picture is a light Gaussian smooth along
+``k / sqrt(T)``. The smooth is display only. The raw quotes are the
+points, and the error tables use the unsmoothed interpolation on the
+full book, including the short expiries.
 
 Heston and SABR are fit on the smile, ``|k| <= 0.4`` and at most 11 strikes
 an expiry, the same cut as the calibration figures. Raw SVI uses every
@@ -57,9 +63,10 @@ FIG = ROOT / "docs" / "figures"
 HTML = ROOT / "docs" / "surfaces"
 
 # Shared by every panel. Matplotlib azim is degrees from the x axis.
-VIEW_ELEV = 25.0
-VIEW_AZIM = -60.0
-PLOTLY_EYE = {"x": 1.55, "y": -1.65, "z": 0.85}
+# The camera sits on the short-dated side and a little above the sheet.
+VIEW_ELEV = 24.0
+VIEW_AZIM = -58.0
+PLOTLY_EYE = {"x": 1.35, "y": -1.75, "z": 0.95}
 CMAP = plt.get_cmap("viridis")
 N_K = 41
 N_PATHS = 8_000
@@ -67,15 +74,17 @@ SEED = 2
 # The smile cut used by the Heston and SABR calibration figures.
 SMILE_ABS_K = 0.4
 SMILE_STRIKES = 11
-# Market quoted IV on this book is about 0.08 to 0.86. The axis is that
-# range plus a margin. Cells outside it are marked and do not set the scale.
+# Figures omit expiries shorter than a week. The JSON tables keep them.
+DISPLAY_MIN_DAYS = 7
+DISPLAY_T_MIN = DISPLAY_MIN_DAYS / 365.25
+# Common grid in standardised moneyness. The drawn cells are the quoted subset.
+M_LO = -3.0
+M_HI = 1.5
+M_STEP = 0.1
+# Implied-vol colour scale. A drawn cell above IV_CAP is marked, not scaled in.
 IV_LO = 0.05
 IV_HI = 0.90
-# Inside the quotes, Dupire local vol on this book runs to about 2.61.
-# The axis stops short of the short-dated extrapolated spikes.
-LOCAL_LO = 0.0
-LOCAL_HI = 2.80
-FAINT_FACE = (0.45, 0.45, 0.45, 0.22)
+IV_CAP = 1.25
 MARK_HIGH = "#9b2335"
 MARK_LOW = "#1f4e79"
 
@@ -162,6 +171,33 @@ def _otm_iv_row(cash: np.ndarray, forward: float, k: np.ndarray, maturity: float
     return bs.implied_vol(cash, forward, strike, maturity, df, kind)
 
 
+def _simulate_gbm(sigma: float, maturities: np.ndarray, n_paths: int, seed: int):
+    """Exact GBM paths. Column ``i + 1`` is the expiry ``maturities[i]``."""
+    model = GBM(sigma=sigma, scheme="exact", antithetic=False, control_variate=False)
+    times = np.concatenate(([0.0], np.asarray(maturities, dtype=float)))
+    return model.simulate(n_paths, times, seed=seed)
+
+
+def _gbm_one(data: MarketData, terminal: np.ndarray, maturity: float, k: np.ndarray) -> np.ndarray:
+    """Implied vol of one expiry. Blank where the price does not clear two standard errors."""
+    forward = float(np.asarray(data.F(maturity), dtype=float))
+    discount = float(np.asarray(data.df(maturity), dtype=float))
+    strike = forward * np.exp(k)
+    # Out of the money: a put when k < 0, a call when k >= 0.
+    kind = np.where(k < 0.0, "put", "call")
+    value, stderr = estimate_terminal(
+        terminal,
+        forward,
+        strike,
+        discount,
+        kind,
+        antithetic=False,
+        control_variate=False,
+    )
+    iv = _otm_iv_row(value, forward, k, maturity, discount)
+    return np.where(value > 2.0 * stderr, iv, np.nan)
+
+
 def gbm_iv(
     data: MarketData,
     maturities: np.ndarray,
@@ -170,35 +206,19 @@ def gbm_iv(
     *,
     n_paths: int,
     seed: int,
+    paths=None,
 ) -> np.ndarray:
     """Exact GBM at ``sigma``, one set of paths, inverted to implied vol.
 
     Each expiry uses its own forward. Strikes left of the money are puts.
     A price with no implied vol, which is a wing no path reached, is NaN.
+    Pass ``paths`` from :func:`_simulate_gbm` to reuse one simulation.
     """
-    model = GBM(sigma=sigma, scheme="exact", antithetic=False, control_variate=False)
-    times = np.concatenate(([0.0], maturities))
-    paths = model.simulate(n_paths, times, seed=seed)
+    if paths is None:
+        paths = _simulate_gbm(sigma, maturities, n_paths, seed)
     out = np.empty((maturities.size, k.size), dtype=float)
     for i, maturity in enumerate(maturities):
-        forward = float(np.asarray(data.F(maturity), dtype=float))
-        discount = float(np.asarray(data.df(maturity), dtype=float))
-        strike = forward * np.exp(k)
-        # Out of the money: a put when k < 0, a call when k >= 0.
-        kind = np.where(k < 0.0, "put", "call")
-        value, stderr = estimate_terminal(
-            paths.Z[:, i + 1],
-            forward,
-            strike,
-            discount,
-            kind,
-            antithetic=False,
-            control_variate=False,
-        )
-        iv = _otm_iv_row(value, forward, k, float(maturity), discount)
-        # A wing price that is one path in thousands inverts to a nonsense vol.
-        # Keep a node only when the price clears two standard errors.
-        out[i] = np.where(value > 2.0 * stderr, iv, np.nan)
+        out[i] = _gbm_one(data, paths.Z[:, i + 1], float(maturity), k)
     return out
 
 
@@ -286,6 +306,253 @@ def _quote_date(data: MarketData) -> str:
     return f"{stamp.day} {stamp.strftime('%B')} {stamp.year}"
 
 
+def standardised_axis() -> np.ndarray:
+    """Grid of ``k / sqrt(T)`` from ``M_LO`` to ``M_HI`` in steps of ``M_STEP``."""
+    count = int(round((M_HI - M_LO) / M_STEP))
+    return np.linspace(M_LO, M_HI, count + 1)
+
+
+def pillars_for_display(pillars: list[tuple[float, np.ndarray, np.ndarray]]):
+    """Expiries of at least seven days. Shorter ones stay in the error tables."""
+    return [row for row in pillars if row[0] >= DISPLAY_T_MIN]
+
+
+def quote_mask(pillars: list[tuple[float, np.ndarray, np.ndarray]], m: np.ndarray) -> np.ndarray:
+    """True where ``m * sqrt(T)`` lies inside that expiry's own quoted strikes."""
+    mask = np.zeros((len(pillars), m.size), dtype=bool)
+    for i, (maturity, k_obs, _iv) in enumerate(pillars):
+        k_query = m * np.sqrt(maturity)
+        mask[i] = (k_query >= k_obs[0]) & (k_query <= k_obs[-1])
+    return mask
+
+
+def market_on_moneyness(
+    pillars: list[tuple[float, np.ndarray, np.ndarray]], m: np.ndarray
+) -> np.ndarray:
+    """Quoted implied vol, linear in ``k``. Nothing is drawn past the quotes."""
+    out = np.full((len(pillars), m.size), np.nan)
+    for i, (maturity, k_obs, iv_obs) in enumerate(pillars):
+        if k_obs.size < 2:
+            continue
+        k_query = m * np.sqrt(maturity)
+        inside = (k_query >= k_obs[0]) & (k_query <= k_obs[-1])
+        out[i, inside] = np.interp(k_query[inside], k_obs, iv_obs)
+    return out
+
+
+def smooth_along_moneyness(z: np.ndarray, sigma_steps: float = 1.0) -> np.ndarray:
+    """Light Gaussian along standardised moneyness. NaN cells stay NaN.
+
+    The kernel uses finite neighbours only, and a cell outside the quotes is
+    not filled in. ``sigma_steps`` is in grid steps.
+    """
+    if sigma_steps <= 0.0 or z.size == 0:
+        return np.array(z, dtype=float, copy=True)
+    radius = int(np.ceil(3.0 * sigma_steps))
+    offsets = np.arange(-radius, radius + 1)
+    kernel = np.exp(-0.5 * (offsets / sigma_steps) ** 2)
+    finite = np.isfinite(z)
+    out = np.full(z.shape, np.nan, dtype=float)
+    for j in range(z.shape[1]):
+        acc = np.zeros(z.shape[0], dtype=float)
+        wsum = np.zeros(z.shape[0], dtype=float)
+        for offset, weight in zip(offsets, kernel, strict=True):
+            src = j + int(offset)
+            if src < 0 or src >= z.shape[1]:
+                continue
+            ok = finite[:, src]
+            acc[ok] += weight * z[ok, src]
+            wsum[ok] += weight
+        keep = finite[:, j] & (wsum > 0.0)
+        out[keep, j] = acc[keep] / wsum[keep]
+    return out
+
+
+def quote_cloud(pillars: list[tuple[float, np.ndarray, np.ndarray]]):
+    """Raw quotes on the display expiries, as ``(m, T, iv)``."""
+    ms: list[np.ndarray] = []
+    ts: list[np.ndarray] = []
+    ivs: list[np.ndarray] = []
+    for maturity, k_obs, iv_obs in pillars:
+        if maturity < DISPLAY_T_MIN:
+            continue
+        moneyness = k_obs / np.sqrt(maturity)
+        keep = (moneyness >= M_LO) & (moneyness <= M_HI) & np.isfinite(iv_obs)
+        if not np.any(keep):
+            continue
+        ms.append(moneyness[keep])
+        ts.append(np.full(int(np.sum(keep)), maturity))
+        ivs.append(iv_obs[keep])
+    if not ms:
+        empty = np.array([], dtype=float)
+        return empty, empty, empty
+    return np.concatenate(ms), np.concatenate(ts), np.concatenate(ivs)
+
+
+def _rows_of(maturities: np.ndarray, k_rows: np.ndarray, fn) -> np.ndarray:
+    """``fn(maturity, k)`` per expiry. ``k`` changes with ``T`` because ``k = m sqrt(T)``."""
+    out = np.empty(k_rows.shape, dtype=float)
+    for i, maturity in enumerate(maturities):
+        out[i] = np.asarray(fn(float(maturity), k_rows[i]), dtype=float).reshape(-1)
+    return out
+
+
+def _apply_quotes(z: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    out = np.array(z, dtype=float, copy=True)
+    out[~mask] = np.nan
+    return out
+
+
+def _view_m_limits(mask: np.ndarray, m: np.ndarray) -> tuple[float, float]:
+    """Frame the quoted columns, with a small pad, inside the sampling grid."""
+    columns = np.any(mask, axis=0)
+    if not np.any(columns):
+        return M_LO, M_HI
+    used = m[columns]
+    pad = 1.5 * M_STEP
+    lo = max(M_LO, float(used[0]) - pad)
+    hi = min(M_HI, float(used[-1]) + pad)
+    return round(lo, 2), round(hi, 2)
+
+
+def choose_iv_axis(sheets: list[Sheet]) -> tuple[float, float]:
+    """One implied-vol scale. Grow it to cover drawn cells, until ``IV_CAP``.
+
+    A cell above the cap is a blow-up and is marked later. A cell between
+    ``IV_HI`` and the cap widens the shared scale so it does not become a cross.
+    """
+    pieces = []
+    for sheet in sheets:
+        if sheet.quantity != "implied volatility":
+            continue
+        finite = sheet.z[np.isfinite(sheet.z)]
+        if finite.size:
+            pieces.append(finite)
+    if not pieces:
+        return IV_LO, IV_HI
+    values = np.concatenate(pieces)
+    kept = values[(values >= 0.0) & (values <= IV_CAP)]
+    if kept.size == 0:
+        return IV_LO, IV_HI
+    lo_data = float(np.min(kept))
+    hi_data = float(np.max(kept))
+    lo = IV_LO if lo_data >= IV_LO else max(0.0, lo_data - 0.01)
+    hi = IV_HI if hi_data <= IV_HI else hi_data + 0.02
+    return float(lo), float(hi)
+
+
+def _local_axis(z: np.ndarray) -> tuple[float, float]:
+    """Dupire's own scale, set just above the values drawn on this domain."""
+    finite = z[np.isfinite(z)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    hi = float(np.max(finite))
+    return 0.0, hi + 0.02 * max(hi, 1.0)
+
+
+def build_display(
+    data: MarketData,
+    pillars: list[tuple[float, np.ndarray, np.ndarray]],
+    maturities: np.ndarray,
+    paths,
+    *,
+    sigma: float,
+    heston: Heston,
+    sabr_report: pd.DataFrame,
+    svi_surface,
+    date: str,
+    n_paths: int,
+    seed: int,
+) -> dict:
+    """Surfaces on ``k / sqrt(T)``, expiries of at least seven days, quotes only."""
+    kept = pillars_for_display(pillars)
+    if not kept:
+        raise ValueError("no expiry is at least 7 days")
+    m = standardised_axis()
+    d_maturities = np.array([row[0] for row in kept], dtype=float)
+    positions = [i for i, maturity in enumerate(maturities) if float(maturity) >= DISPLAY_T_MIN]
+    if len(positions) != d_maturities.size:
+        raise ValueError("display expiries do not match the quote pillars")
+    k_rows = m[None, :] * np.sqrt(d_maturities)[:, None]
+    mask = quote_mask(kept, m)
+    market_raw = market_on_moneyness(kept, m)
+    market_smooth = smooth_along_moneyness(market_raw, sigma_steps=1.0)
+
+    def _heston_row(maturity: float, k: np.ndarray) -> np.ndarray:
+        return heston_iv(heston, data, np.array([maturity]), k)[0]
+
+    def _sabr_row(maturity: float, k: np.ndarray) -> np.ndarray:
+        return sabr_iv(sabr_report, data, np.array([maturity]), k)[0]
+
+    def _svi_row(maturity: float, k: np.ndarray) -> np.ndarray:
+        return np.asarray(svi_surface.iv(np.array([maturity]), k), dtype=float)[0]
+
+    def _dupire_row(maturity: float, k: np.ndarray) -> np.ndarray:
+        return local_vol(svi_surface, np.array([maturity]), k)[0]
+
+    gbm = np.empty(k_rows.shape, dtype=float)
+    for row, src in enumerate(positions):
+        gbm[row] = _gbm_one(data, paths.Z[:, src + 1], float(d_maturities[row]), k_rows[row])
+    flat = np.full(k_rows.shape, sigma, dtype=float)
+    svi = _rows_of(d_maturities, k_rows, _svi_row)
+    heston_surface = _rows_of(d_maturities, k_rows, _heston_row)
+    sabr_surface = _rows_of(d_maturities, k_rows, _sabr_row)
+    dupire = _rows_of(d_maturities, k_rows, _dupire_row)
+
+    smile_note = "fit on |k| <= 0.4"
+    sheets = [
+        Sheet("market", f"SPX market, display smooth, {date}", market_smooth, "implied volatility"),
+        Sheet(
+            "black_scholes",
+            f"Black-Scholes flat, sigma {sigma:.3f}, {date}",
+            _apply_quotes(flat, mask),
+            "implied volatility",
+        ),
+        Sheet(
+            "gbm_mc",
+            f"Monte Carlo GBM, {n_paths} paths, seed {seed}, {date}",
+            _apply_quotes(gbm, mask),
+            "implied volatility",
+        ),
+        Sheet("svi", f"raw SVI, {date}", _apply_quotes(svi, mask), "implied volatility"),
+        Sheet(
+            "heston",
+            f"Heston, {smile_note}, {date}",
+            _apply_quotes(heston_surface, mask),
+            "implied volatility",
+        ),
+        Sheet(
+            "sabr",
+            f"SABR, {smile_note}, {date}",
+            _apply_quotes(sabr_surface, mask),
+            "implied volatility",
+        ),
+        Sheet(
+            "dupire_localvol",
+            f"Dupire local volatility from raw SVI, not implied vol, {date}",
+            _apply_quotes(dupire, mask),
+            "local volatility",
+        ),
+    ]
+    quote_m, quote_t, quote_iv = quote_cloud(pillars)
+    m_lo, m_hi = _view_m_limits(mask, m)
+    local_lo, local_hi = _local_axis(sheets[-1].z)
+    return {
+        "maturities": d_maturities,
+        "m": m,
+        "k_rows": k_rows,
+        "quoted": mask,
+        "market_raw": market_raw,
+        "sheets": sheets,
+        "quote_m": quote_m,
+        "quote_t": quote_t,
+        "quote_iv": quote_iv,
+        "m_view": (m_lo, m_hi),
+        "iv_axis": choose_iv_axis(sheets),
+        "local_axis": (local_lo, local_hi),
+    }
+
+
 def build_sheets(
     data: MarketData,
     *,
@@ -316,7 +583,8 @@ def build_sheets(
     sabr_fit = SABRFitter(beta=1.0, n_starts=sabr_starts, loss="vega", seed=seed).fit(smile)
     svi_fit = SVIFitter().fit(data)
 
-    gbm = gbm_iv(data, maturities, k, sigma, n_paths=n_paths, seed=seed)
+    paths = _simulate_gbm(sigma, maturities, n_paths, seed)
+    gbm = gbm_iv(data, maturities, k, sigma, n_paths=n_paths, seed=seed, paths=paths)
     svi = np.asarray(svi_fit.surface.iv(maturities, k), dtype=float)
     heston_surface = heston_iv(heston, data, maturities, k)
     sabr_surface = sabr_iv(sabr_fit.slice_report, data, maturities, k)
@@ -367,6 +635,19 @@ def build_sheets(
         "sabr_report": sabr_fit.slice_report,
         "n_paths": n_paths,
         "seed": seed,
+        "display": build_display(
+            data,
+            pillars,
+            maturities,
+            paths,
+            sigma=sigma,
+            heston=heston,
+            sabr_report=sabr_fit.slice_report,
+            svi_surface=svi_fit.surface,
+            date=date,
+            n_paths=n_paths,
+            seed=seed,
+        ),
     }
 
 
@@ -468,23 +749,31 @@ def summary_numbers(built: dict) -> dict:
         "rho_on_lower": int(np.sum(report["rho"] < -0.998)),
         "rmse_median": float(report["rmse_price"].median()),
     }
+    display = built["display"]
+    omitted = [float(t) for t in built["maturities"] if float(t) < DISPLAY_T_MIN]
+    quoted_m = display["m"][np.any(display["quoted"], axis=0)]
     numbers["display"] = {
-        "implied_vol_axis": [IV_LO, IV_HI],
-        "local_vol_axis": [LOCAL_LO, LOCAL_HI],
+        "coordinate": "k/sqrt(T)",
+        "m_min": M_LO,
+        "m_max": M_HI,
+        "m_step": M_STEP,
+        "min_days": DISPLAY_MIN_DAYS,
+        "T_min_year": DISPLAY_T_MIN,
+        "T_min_drawn": float(display["maturities"][0]),
+        "T_max_drawn": float(display["maturities"][-1]),
+        "n_expiries_drawn": int(display["maturities"].size),
+        "n_expiries_omitted": len(omitted),
+        "omitted_T": omitted,
+        "quoted_m_min": None if quoted_m.size == 0 else float(quoted_m[0]),
+        "quoted_m_max": None if quoted_m.size == 0 else float(quoted_m[-1]),
+        "m_view": [float(display["m_view"][0]), float(display["m_view"][1])],
+        "n_quote_points": int(display["quote_iv"].size),
+        "market_smooth": "gaussian along k/sqrt(T), sigma one grid step, display only",
+        "implied_vol_axis": [float(display["iv_axis"][0]), float(display["iv_axis"][1])],
+        "local_vol_axis": [float(display["local_axis"][0]), float(display["local_axis"][1])],
+        "clips": _display_clips(display),
     }
-    clips = {}
-    for sheet in built["sheets"]:
-        lo, hi = _window(sheet.quantity)
-        clips[sheet.key] = clip_report(sheet.z, extrapolated, built["maturities"], k, lo, hi)
-    numbers["clips"] = clips
     return numbers
-
-
-def _window(quantity: str) -> tuple[float, float]:
-    """Locked vertical range. Implied vol shares one window. Local vol has its own."""
-    if quantity == "local volatility":
-        return LOCAL_LO, LOCAL_HI
-    return IV_LO, IV_HI
 
 
 def clipped_mask(z: np.ndarray, lo: float, hi: float) -> np.ndarray:
@@ -548,19 +837,79 @@ def clip_report(
     }
 
 
-def _face_colours(z: np.ndarray, norm: Normalize | None, rgba: tuple | None) -> np.ndarray:
+def _display_clips(display: dict) -> dict:
+    """Cells on the figure grid that fall outside the axis actually used."""
+    maturities = display["maturities"]
+    m = display["m"]
+    k_rows = display["k_rows"]
+    iv_lo, iv_hi = display["iv_axis"]
+    local_lo, local_hi = display["local_axis"]
+    clips = {}
+    for sheet in display["sheets"]:
+        if sheet.quantity == "local volatility":
+            lo, hi = local_lo, local_hi
+        else:
+            lo, hi = iv_lo, iv_hi
+        clips[sheet.key] = _clip_on_moneyness(sheet.z, maturities, m, k_rows, lo, hi)
+    return clips
+
+
+def _clip_on_moneyness(
+    z: np.ndarray,
+    maturities: np.ndarray,
+    m: np.ndarray,
+    k_rows: np.ndarray,
+    lo: float,
+    hi: float,
+    n_worst: int = 15,
+) -> dict:
+    finite = np.isfinite(z)
+    above = finite & (z > hi)
+    below = finite & (z < lo)
+    clipped = above | below
+    excess = np.full(z.shape, -np.inf)
+    excess[above] = z[above] - hi
+    excess[below] = lo - z[below]
+    worst = []
+    order = np.argsort(excess, axis=None)[::-1]
+    for flat in order:
+        if len(worst) >= n_worst:
+            break
+        i, j = np.unravel_index(int(flat), z.shape)
+        if not clipped[i, j]:
+            break
+        worst.append(
+            {
+                "T": float(maturities[i]),
+                "m": float(m[j]),
+                "k": float(k_rows[i, j]),
+                "z": float(z[i, j]),
+                "side": "above" if above[i, j] else "below",
+            }
+        )
+    raw = z[finite]
+    return {
+        "lo": float(lo),
+        "hi": float(hi),
+        "n_finite": int(finite.sum()),
+        "n_clipped": int(clipped.sum()),
+        "n_above": int(above.sum()),
+        "n_below": int(below.sum()),
+        "raw_min": None if raw.size == 0 else float(np.min(raw)),
+        "raw_max": None if raw.size == 0 else float(np.max(raw)),
+        "worst": worst,
+    }
+
+
+def _face_colours(z: np.ndarray, norm: Normalize, alpha: float = 1.0) -> np.ndarray:
     """One RGBA colour per face. A face is drawn only when all four corners are finite."""
     stack = np.stack([z[:-1, :-1], z[:-1, 1:], z[1:, :-1], z[1:, 1:]], axis=0)
     ok = np.all(np.isfinite(stack), axis=0)
     total = np.sum(np.where(np.isfinite(stack), stack, 0.0), axis=0)
     face_z = np.zeros(ok.shape, dtype=float)
     np.divide(total, 4.0, out=face_z, where=ok)
-    if rgba is None:
-        colours = CMAP(norm(np.where(ok, face_z, norm.vmin)))
-        colours[..., 3] = np.where(ok, 1.0, 0.0)
-    else:
-        colours = np.zeros(face_z.shape + (4,), dtype=float)
-        colours[ok] = rgba
+    colours = CMAP(norm(np.where(ok, face_z, norm.vmin)))
+    colours[..., 3] = np.where(ok, alpha, 0.0)
     return colours
 
 
@@ -603,45 +952,74 @@ def _mark_clipped(ax, k, maturities, z: np.ndarray, lo: float, hi: float, size: 
         )
 
 
-def _draw_surface(ax, k, maturities, sheet: Sheet, extrapolated, *, caption: bool) -> None:
-    lo, hi = _window(sheet.quantity)
-    finite = np.isfinite(sheet.z)
-    in_window = finite & ~clipped_mask(sheet.z, lo, hi)
-    quoted = layer_z(sheet.z, in_window & ~extrapolated)
-    faint = layer_z(sheet.z, in_window & extrapolated)
+def _axis_for(display: dict, sheet: Sheet) -> tuple[float, float]:
+    if sheet.quantity == "local volatility":
+        return display["local_axis"]
+    return display["iv_axis"]
+
+
+def _domain_caption(built: dict) -> str:
+    n_all = int(built["maturities"].size)
+    n_omit = n_all - int(built["display"]["maturities"].size)
+    return (
+        f"x is standardised moneyness k/√T, grid [{M_LO:.1f}, {M_HI:.1f}]. "
+        f"Expiries under {DISPLAY_MIN_DAYS} days are omitted from the figures "
+        f"({n_omit} of {n_all}) and kept in the JSON. "
+        "Each surface is drawn only inside that expiry's quotes."
+    )
+
+
+def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float, mark_size: float):
+    lo, hi = _axis_for(display, sheet)
+    m = display["m"]
+    maturities = display["maturities"]
+    drawn = layer_z(sheet.z, ~clipped_mask(sheet.z, lo, hi))
     norm = Normalize(vmin=lo, vmax=hi)
-    _plot_layer(ax, k, maturities, faint, _face_colours(faint, None, FAINT_FACE))
-    _plot_layer(ax, k, maturities, quoted, _face_colours(quoted, norm, None))
-    _mark_clipped(ax, k, maturities, sheet.z, lo, hi, size=14.0 if caption else 7.0)
+    alpha = 0.88 if points is not None else 1.0
+    _plot_layer(ax, m, maturities, drawn, _face_colours(drawn, norm, alpha))
+    if points is not None and points[0].size:
+        ax.scatter(
+            points[0],
+            points[1],
+            points[2],
+            c="black",
+            s=point_size,
+            alpha=0.4,
+            depthshade=False,
+            linewidths=0,
+        )
+    if int(clipped_mask(sheet.z, lo, hi).sum()):
+        _mark_clipped(ax, m, maturities, sheet.z, lo, hi, size=mark_size)
     ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)
-    ax.set_xlim(float(k[0]), float(k[-1]))
+    ax.set_xlim(float(display["m_view"][0]), float(display["m_view"][1]))
     ax.set_ylim(float(maturities[0]), float(maturities[-1]))
     ax.set_zlim(lo, hi)
-    ax.set_xlabel("k")
+    ax.set_xlabel("k / √T")
     ax.set_ylabel("T")
     ax.set_zlabel(sheet.quantity)
-    if caption:
-        n_marked = int(clipped_mask(sheet.z, lo, hi).sum())
-        ax.set_title(f"{sheet.title}\n[{lo:.2f}, {hi:.2f}], {n_marked} cells marked", fontsize=9)
-    else:
-        ax.set_title(sheet.title, fontsize=8)
+    ax.set_title(sheet.title, fontsize=9)
     ax.tick_params(labelsize=7)
 
 
 def write_pngs(built: dict, fig_dir: Path) -> None:
     """One PNG per surface, the seven-panel gallery, and the error heatmap."""
     fig_dir.mkdir(parents=True, exist_ok=True)
-    sheets = built["sheets"]
-    k = built["k"]
-    maturities = built["maturities"]
-    extrapolated = built["extrapolated"]
-    inside = ~extrapolated
+    display = built["display"]
+    points = (display["quote_m"], display["quote_t"], display["quote_iv"])
+    caption = _domain_caption(built)
 
-    for sheet in sheets:
-        fig = plt.figure(figsize=(7.4, 5.6))
+    for sheet in display["sheets"]:
+        fig = plt.figure(figsize=(7.6, 5.8))
         ax = fig.add_subplot(111, projection="3d")
-        _draw_surface(ax, k, maturities, sheet, extrapolated, caption=True)
-        lo, hi = _window(sheet.quantity)
+        _draw_surface(
+            ax,
+            display,
+            sheet,
+            points=points if sheet.key == "market" else None,
+            point_size=8.0,
+            mark_size=16.0,
+        )
+        lo, hi = _axis_for(display, sheet)
         fig.colorbar(
             ScalarMappable(norm=Normalize(vmin=lo, vmax=hi), cmap=CMAP),
             ax=ax,
@@ -649,52 +1027,68 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
             pad=0.08,
             label=f"{sheet.quantity} on [{lo:.2f}, {hi:.2f}]",
         )
-        fig.tight_layout()
+        note = caption
+        if sheet.key == "market":
+            note += " Points are raw quotes. The surface smooth is display only."
+        fig.text(0.5, 0.012, note, ha="center", va="bottom", fontsize=7.5)
+        fig.subplots_adjust(left=0.02, right=0.92, bottom=0.10, top=0.92)
         fig.savefig(fig_dir / f"p2_surface_{sheet.key}.png", dpi=140)
         plt.close(fig)
 
-    fig = plt.figure(figsize=(16.5, 9.2))
-    for i, sheet in enumerate(sheets):
+    iv_lo, iv_hi = display["iv_axis"]
+    local_lo, local_hi = display["local_axis"]
+    fig = plt.figure(figsize=(16.5, 9.4))
+    for i, sheet in enumerate(display["sheets"]):
         ax = fig.add_subplot(2, 4, i + 1, projection="3d")
-        _draw_surface(ax, k, maturities, sheet, extrapolated, caption=False)
+        _draw_surface(
+            ax,
+            display,
+            sheet,
+            points=points if sheet.key == "market" else None,
+            point_size=3.0,
+            mark_size=8.0,
+        )
     fig.suptitle(
-        f"SPX {built['date']}. Implied vol is drawn on [{IV_LO:.2f}, {IV_HI:.2f}]. "
-        "Crosses mark cells outside that window. Faint faces are outside the quotes. "
-        f"Dupire local vol is on its own axis [{LOCAL_LO:.2f}, {LOCAL_HI:.2f}].",
-        fontsize=11,
+        f"SPX {built['date']}. {caption} "
+        f"Implied-vol colour scale [{iv_lo:.2f}, {iv_hi:.2f}]. "
+        f"Dupire local vol is on its own scale [{local_lo:.2f}, {local_hi:.2f}].",
+        fontsize=10,
     )
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.88, wspace=0.08, hspace=0.28)
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.86, wspace=0.08, hspace=0.28)
     fig.savefig(fig_dir / "p2_surface_gallery.png", dpi=130)
     plt.close(fig)
 
-    _write_error_heatmap(built, fig_dir, inside)
+    _write_error_heatmap(built, fig_dir)
 
 
-def _write_error_heatmap(built: dict, fig_dir: Path, inside: np.ndarray) -> None:
-    sheets = {sheet.key: sheet for sheet in built["sheets"]}
-    market = sheets["market"].z
+def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
+    """Model minus unsmoothed market, on the same domain as the 3D figures."""
+    display = built["display"]
+    sheets = {sheet.key: sheet for sheet in display["sheets"]}
+    market = display["market_raw"]
+    quoted = display["quoted"]
     keys = ("svi", "heston", "sabr")
     gaps = []
     for key in keys:
         gap = 100.0 * (sheets[key].z - market)
-        gap = np.ma.array(gap, mask=~inside | ~np.isfinite(gap))
+        gap = np.ma.array(gap, mask=~quoted | ~np.isfinite(gap))
         gaps.append(gap)
     finite = np.concatenate([gap.compressed() for gap in gaps])
     limit = 1.0 if finite.size == 0 else float(np.max(np.abs(finite)))
     if limit == 0.0:
         limit = 1.0
-    fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.6), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.8), sharey=True)
     titles = {
         "svi": "SVI minus market",
         "heston": "Heston minus market",
         "sabr": "SABR minus market",
     }
-    k = built["k"]
-    maturities = built["maturities"]
+    m = display["m"]
+    maturities = display["maturities"]
     for ax, key, gap in zip(axes, keys, gaps, strict=True):
-        ax.set_facecolor("0.82")
+        ax.set_facecolor("white")
         mesh = ax.pcolormesh(
-            k,
+            m,
             maturities,
             gap,
             cmap="coolwarm",
@@ -702,17 +1096,16 @@ def _write_error_heatmap(built: dict, fig_dir: Path, inside: np.ndarray) -> None
             vmax=limit,
             shading="nearest",
         )
-        ax.set_xlabel("log-moneyness k")
+        ax.set_xlim(float(display["m_view"][0]), float(display["m_view"][1]))
+        ax.set_xlabel("standardised moneyness k/√T")
         ax.set_title(titles[key])
     axes[0].set_ylabel("maturity T (year fraction)")
     fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points")
     fig.suptitle(
-        f"Model minus SPX implied vol, {built['date']}. "
-        "Grey cells are outside that expiry's quotes. "
-        "Gaps use the unclipped model.",
-        fontsize=11,
+        f"Model minus unsmoothed SPX implied vol, {built['date']}. {_domain_caption(built)}",
+        fontsize=10,
     )
-    fig.subplots_adjust(left=0.06, right=0.90, bottom=0.16, top=0.82, wspace=0.18)
+    fig.subplots_adjust(left=0.06, right=0.90, bottom=0.18, top=0.78, wspace=0.16)
     fig.savefig(fig_dir / "p2_surface_iv_error.png", dpi=140)
     plt.close(fig)
 
@@ -725,8 +1118,8 @@ def _colourscale() -> list:
     return scale
 
 
-def _plotly_marks(k, maturities, z: np.ndarray, extrapolated, lo: float, hi: float) -> list:
-    """Marker traces at the window edge. Hover text carries the raw value."""
+def _plotly_marks(m, maturities, z: np.ndarray, lo: float, hi: float) -> list:
+    """Crosses at the axis edge. Added only when a drawn cell leaves the scale."""
     traces = []
     finite = np.isfinite(z)
     for mask, height, colour, name in (
@@ -737,20 +1130,18 @@ def _plotly_marks(k, maturities, z: np.ndarray, extrapolated, lo: float, hi: flo
         if rows.size == 0:
             continue
         raw = z[rows, cols]
-        where = np.where(extrapolated[rows, cols], "outside the quotes", "inside the quotes")
         traces.append(
             go.Scatter3d(
-                x=k[cols],
+                x=m[cols],
                 y=maturities[rows],
                 z=np.full(rows.shape, height),
                 mode="markers",
                 marker={"size": 3, "color": colour, "symbol": "x"},
                 name=name,
-                text=[f"raw {value:.4f}, {place}" for value, place in zip(raw, where, strict=True)],
+                text=[f"raw {value:.4f}" for value in raw],
                 hovertemplate=(
-                    "k=%{x:.4f}<br>T=%{y:.5f}<br>marked at %{z:.2f}<br>%{text}<extra>"
-                    + name
-                    + "</extra>"
+                    "k/√T=%{x:.3f}<br>T=%{y:.5f}<br>marked at %{z:.2f}"
+                    "<br>%{text}<extra>" + name + "</extra>"
                 ),
             )
         )
@@ -758,59 +1149,58 @@ def _plotly_marks(k, maturities, z: np.ndarray, extrapolated, lo: float, hi: flo
 
 
 def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
-    k = built["k"]
-    maturities = built["maturities"]
-    extrapolated = built["extrapolated"]
-    lo, hi = _window(sheet.quantity)
-    finite = np.isfinite(sheet.z)
-    in_window = finite & ~clipped_mask(sheet.z, lo, hi)
-    quoted = layer_z(sheet.z, in_window & ~extrapolated)
-    faint = layer_z(sheet.z, in_window & extrapolated)
+    display = built["display"]
+    lo, hi = _axis_for(display, sheet)
+    m = display["m"]
+    maturities = display["maturities"]
+    drawn = layer_z(sheet.z, ~clipped_mask(sheet.z, lo, hi))
     fig = go.Figure()
     fig.add_trace(
         go.Surface(
-            x=k,
+            x=m,
             y=maturities,
-            z=quoted,
+            z=drawn,
             cmin=lo,
             cmax=hi,
             colorscale=_colourscale(),
             colorbar={"title": sheet.quantity},
-            name="quoted",
+            name="surface",
             showscale=True,
         )
     )
-    if np.any(np.isfinite(faint)):
+    if sheet.key == "market" and display["quote_iv"].size:
         fig.add_trace(
-            go.Surface(
-                x=k,
-                y=maturities,
-                z=faint,
-                showscale=False,
-                opacity=0.22,
-                colorscale=[[0.0, "rgb(140,140,140)"], [1.0, "rgb(140,140,140)"]],
-                name="outside the quotes",
+            go.Scatter3d(
+                x=display["quote_m"],
+                y=display["quote_t"],
+                z=display["quote_iv"],
+                mode="markers",
+                marker={"size": 2, "color": "black", "opacity": 0.45},
+                name="raw quotes",
                 hovertemplate=(
-                    "k=%{x:.4f}<br>T=%{y:.5f}<br>value %{z:.4f}"
-                    "<br>outside the quotes<extra></extra>"
+                    "k/√T=%{x:.3f}<br>T=%{y:.4f}<br>quote %{z:.4f}<extra>raw quote</extra>"
                 ),
             )
         )
-    for trace in _plotly_marks(k, maturities, sheet.z, extrapolated, lo, hi):
+    for trace in _plotly_marks(m, maturities, sheet.z, lo, hi):
         fig.add_trace(trace)
-    own = " Own axis." if sheet.quantity == "local volatility" else ""
     n_marked = int(clipped_mask(sheet.z, lo, hi).sum())
+    marked = f" {n_marked} cells marked." if n_marked else ""
+    own = ""
+    if sheet.quantity == "local volatility":
+        own = " Own vertical scale, local volatility, not implied vol."
+    title = f"{sheet.title}.{own}{marked} {_domain_caption(built)}"
+    if sheet.key == "market":
+        title += " Points are raw quotes. The surface smooth is display only."
+    m_lo, m_hi = display["m_view"]
     fig.update_layout(
-        title=(
-            f"{sheet.title}.{own} Axis [{lo:.2f}, {hi:.2f}], {n_marked} cells marked. "
-            "Faint faces are outside the quotes."
-        ),
-        margin={"l": 0, "r": 0, "t": 64, "b": 0},
+        title={"text": title, "font": {"size": 12}},
+        margin={"l": 0, "r": 0, "t": 72, "b": 0},
         legend={"x": 0.01, "y": 0.99},
         scene={
             "xaxis": {
-                "title": "log-moneyness k",
-                "range": [float(k[0]), float(k[-1])],
+                "title": "k / √T",
+                "range": [float(m_lo), float(m_hi)],
                 "autorange": False,
             },
             "yaxis": {
@@ -820,12 +1210,12 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
             },
             "zaxis": {
                 "title": sheet.quantity,
-                "range": [lo, hi],
+                "range": [float(lo), float(hi)],
                 "autorange": False,
             },
             "camera": {"eye": PLOTLY_EYE},
             "aspectmode": "manual",
-            "aspectratio": {"x": 1.5, "y": 1.15, "z": 0.7},
+            "aspectratio": {"x": 1.6, "y": 1.15, "z": 0.65},
         },
     )
     return fig
@@ -834,7 +1224,7 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
 def write_html(built: dict, html_dir: Path) -> None:
     """One self-contained HTML file per surface. Drag rotates the view."""
     html_dir.mkdir(parents=True, exist_ok=True)
-    for sheet in built["sheets"]:
+    for sheet in built["display"]["sheets"]:
         fig = _plotly_surface(sheet, built)
         text = fig.to_html(
             full_html=True,

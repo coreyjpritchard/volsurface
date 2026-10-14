@@ -48,8 +48,31 @@ def test_clip_mask_blanks_cells_outside_the_window():
     assert report["n_clipped_inside"] == 1
     assert report["worst"][0]["z"] == 3.0
     assert report["worst"][0]["extrapolated"]
-    assert gallery._window("implied volatility") == (0.05, 0.90)
-    assert gallery._window("local volatility") == (0.0, 2.80)
+
+
+def test_display_grid_drops_short_expiries_and_unquoted_wings():
+    """Figures use k/sqrt(T) and do not draw past an expiry's own quotes."""
+    gallery = _gallery()
+    pillars = [
+        (0.01, np.array([-0.20, 0.0, 0.10]), np.array([0.30, 0.20, 0.25])),
+        (0.25, np.array([-0.20, 0.0, 0.10]), np.array([0.20, 0.16, 0.17])),
+    ]
+    m = np.array([-3.0, -0.40, 0.0, 1.5])
+    kept = gallery.pillars_for_display(pillars)
+    assert [row[0] for row in kept] == [0.25]
+    mask = gallery.quote_mask(kept, m)
+    # k = m * sqrt(0.25). Quotes cover k in [-0.20, 0.10], so m in [-0.40, 0.20].
+    assert mask.shape == (1, 4)
+    assert mask[0].tolist() == [False, True, True, False]
+    raw = gallery.market_on_moneyness(kept, m)
+    assert np.isnan(raw[0, 0]) and np.isnan(raw[0, 3])
+    assert np.isfinite(raw[0, 1]) and np.isfinite(raw[0, 2])
+    smooth = gallery.smooth_along_moneyness(raw, sigma_steps=1.0)
+    assert np.isnan(smooth[0, 0]) and np.isnan(smooth[0, 3])
+    assert np.isfinite(smooth[0, 2])
+    axis = gallery.standardised_axis()
+    assert axis[0] == -3.0 and axis[-1] == 1.5
+    assert gallery.DISPLAY_MIN_DAYS == 7
 
 
 def test_extrapolation_mask_is_outside_each_expiry():
@@ -115,11 +138,16 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     assert numbers["black_scholes"]["span"] == 0.0
     assert numbers["dupire_localvol"]["n_finite_inside"] > 0
     assert numbers["gbm_mc"]["n_missing"] < numbers["n_expiries"] * numbers["n_k"]
+    assert numbers["display"]["coordinate"] == "k/sqrt(T)"
+    assert numbers["display"]["m_min"] == -3.0
+    assert numbers["display"]["m_max"] == 1.5
+    assert numbers["display"]["min_days"] == 7
+    assert numbers["display"]["n_expiries_drawn"] == 2
+    assert numbers["display"]["n_expiries_omitted"] == 0
     assert numbers["display"]["implied_vol_axis"] == [0.05, 0.9]
-    assert numbers["display"]["local_vol_axis"] == [0.0, 2.8]
-    assert numbers["clips"]["heston"]["lo"] == 0.05
-    assert numbers["clips"]["heston"]["hi"] == 0.9
-    assert numbers["clips"]["dupire_localvol"]["hi"] == 2.8
+    local = numbers["display"]["clips"]["dupire_localvol"]
+    assert local["n_clipped"] == 0
+    assert local["raw_max"] is None or local["hi"] >= local["raw_max"]
 
     fig_dir = tmp_path / "figures"
     html_dir = tmp_path / "surfaces"
@@ -140,9 +168,11 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
         assert "plotly" in text
         assert 'name="viewport"' in text
         assert '"autorange":false' in text or '"autorange": false' in text
-        if key == "dupire_localvol":
-            assert "2.80" in text
-        else:
+        assert "7 days" in text
+        assert "standardised moneyness" in text
+        if key == "market":
+            assert "raw quotes" in text
+        if key != "dupire_localvol":
             assert "0.90" in text
     assert (fig_dir / "p2_surface_gallery.png").stat().st_size > 1000
     assert (fig_dir / "p2_surface_iv_error.png").stat().st_size > 1000
