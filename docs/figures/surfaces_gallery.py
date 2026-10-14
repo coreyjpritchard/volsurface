@@ -1,11 +1,12 @@
 """Implied-vol gallery for the models on the committed SPX book.
 
-One grid covers the quoted log-moneyness and the quoted expiries. A face is
-grey when that expiry does not quote the strike: the value there is an
-extrapolation. The six implied-vol panels share a colour scale, a vertical
-range, and a view angle. The seventh panel is Dupire local volatility from
-the raw SVI fit. It uses the same view and the same colour scale, and its
-axis says local volatility, not implied volatility.
+One grid covers the quoted log-moneyness and the quoted expiries. Implied-vol
+panels share a colour scale, a vertical range, and a view angle. That range
+is the market's, plus a margin: ``[0.05, 0.90]``. A cell outside it is left
+off the mesh and drawn as a cross at the near edge, so it cannot rescale the
+axis. Faces outside that expiry's own quotes are faint, not a solid grey
+sheet. Dupire local volatility keeps its own axis, ``[0.00, 2.80]``, and the
+same rule: cells outside that window are marked and do not set the scale.
 
 Heston and SABR are fit on the smile, ``|k| <= 0.4`` and at most 11 strikes
 an expiry, the same cut as the calibration figures. Raw SVI uses every
@@ -66,6 +67,17 @@ SEED = 2
 # The smile cut used by the Heston and SABR calibration figures.
 SMILE_ABS_K = 0.4
 SMILE_STRIKES = 11
+# Market quoted IV on this book is about 0.08 to 0.86. The axis is that
+# range plus a margin. Cells outside it are marked and do not set the scale.
+IV_LO = 0.05
+IV_HI = 0.90
+# Inside the quotes, Dupire local vol on this book runs to about 2.61.
+# The axis stops short of the short-dated extrapolated spikes.
+LOCAL_LO = 0.0
+LOCAL_HI = 2.80
+FAINT_FACE = (0.45, 0.45, 0.45, 0.22)
+MARK_HIGH = "#9b2335"
+MARK_LOW = "#1f4e79"
 
 
 @dataclass
@@ -456,50 +468,110 @@ def summary_numbers(built: dict) -> dict:
         "rho_on_lower": int(np.sum(report["rho"] < -0.998)),
         "rmse_median": float(report["rmse_price"].median()),
     }
+    numbers["display"] = {
+        "implied_vol_axis": [IV_LO, IV_HI],
+        "local_vol_axis": [LOCAL_LO, LOCAL_HI],
+    }
+    clips = {}
+    for sheet in built["sheets"]:
+        lo, hi = _window(sheet.quantity)
+        clips[sheet.key] = clip_report(sheet.z, extrapolated, built["maturities"], k, lo, hi)
+    numbers["clips"] = clips
     return numbers
 
 
-def _colour_limits(market: np.ndarray, inside: np.ndarray) -> tuple[float, float]:
-    finite = market[inside & np.isfinite(market)]
-    if finite.size == 0:
-        return 0.05, 0.50
-    lo = float(np.min(finite))
-    hi = float(np.max(finite))
-    if hi <= lo:
-        hi = lo + 1e-3
-    return lo, hi
+def _window(quantity: str) -> tuple[float, float]:
+    """Locked vertical range. Implied vol shares one window. Local vol has its own."""
+    if quantity == "local volatility":
+        return LOCAL_LO, LOCAL_HI
+    return IV_LO, IV_HI
 
 
-def _face_colours(z: np.ndarray, extrapolated: np.ndarray, norm: Normalize) -> np.ndarray:
-    """One RGBA colour per surface face. Grey faces sit outside the quotes."""
-    corners = np.stack(
-        [
-            extrapolated[:-1, :-1],
-            extrapolated[:-1, 1:],
-            extrapolated[1:, :-1],
-            extrapolated[1:, 1:],
-        ],
-        axis=0,
-    )
-    face_out = corners.sum(axis=0) >= 3
+def clipped_mask(z: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Finite cells outside ``[lo, hi]``. These must not set the axis."""
+    return np.isfinite(z) & ((z < lo) | (z > hi))
+
+
+def layer_z(z: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """Copy of ``z`` with every cell outside ``keep`` set to NaN."""
+    out = np.array(z, dtype=float, copy=True)
+    out[~keep] = np.nan
+    return out
+
+
+def clip_report(
+    z: np.ndarray,
+    extrapolated: np.ndarray,
+    maturities: np.ndarray,
+    k: np.ndarray,
+    lo: float,
+    hi: float,
+    n_worst: int = 25,
+) -> dict:
+    """How many cells sit outside the locked window, and the furthest ones."""
+    finite = np.isfinite(z)
+    above = finite & (z > hi)
+    below = finite & (z < lo)
+    clipped = above | below
+    excess = np.full(z.shape, -np.inf)
+    excess[above] = z[above] - hi
+    excess[below] = lo - z[below]
+    worst = []
+    order = np.argsort(excess, axis=None)[::-1]
+    for flat in order:
+        if len(worst) >= n_worst:
+            break
+        i, j = np.unravel_index(int(flat), z.shape)
+        if not clipped[i, j]:
+            break
+        worst.append(
+            {
+                "T": float(maturities[i]),
+                "k": float(k[j]),
+                "z": float(z[i, j]),
+                "extrapolated": bool(extrapolated[i, j]),
+                "side": "above" if above[i, j] else "below",
+            }
+        )
+    raw = z[finite]
+    return {
+        "lo": float(lo),
+        "hi": float(hi),
+        "n_clipped": int(clipped.sum()),
+        "n_above": int(above.sum()),
+        "n_below": int(below.sum()),
+        "n_clipped_inside": int((clipped & ~extrapolated).sum()),
+        "n_clipped_extrapolated": int((clipped & extrapolated).sum()),
+        "raw_min": None if raw.size == 0 else float(np.min(raw)),
+        "raw_max": None if raw.size == 0 else float(np.max(raw)),
+        "worst": worst,
+    }
+
+
+def _face_colours(z: np.ndarray, norm: Normalize | None, rgba: tuple | None) -> np.ndarray:
+    """One RGBA colour per face. A face is drawn only when all four corners are finite."""
     stack = np.stack([z[:-1, :-1], z[:-1, 1:], z[1:, :-1], z[1:, 1:]], axis=0)
-    count = np.sum(np.isfinite(stack), axis=0)
-    total = np.nansum(np.where(np.isfinite(stack), stack, 0.0), axis=0)
-    face_z = np.full(count.shape, np.nan, dtype=float)
-    np.divide(total, count, out=face_z, where=count > 0)
-    colours = CMAP(norm(face_z))
-    colours[face_out] = (0.75, 0.75, 0.75, 1.0)
-    colours[~np.isfinite(face_z)] = (1.0, 1.0, 1.0, 0.0)
+    ok = np.all(np.isfinite(stack), axis=0)
+    total = np.sum(np.where(np.isfinite(stack), stack, 0.0), axis=0)
+    face_z = np.zeros(ok.shape, dtype=float)
+    np.divide(total, 4.0, out=face_z, where=ok)
+    if rgba is None:
+        colours = CMAP(norm(np.where(ok, face_z, norm.vmin)))
+        colours[..., 3] = np.where(ok, 1.0, 0.0)
+    else:
+        colours = np.zeros(face_z.shape + (4,), dtype=float)
+        colours[ok] = rgba
     return colours
 
 
-def _draw_surface(ax, k, maturities, sheet: Sheet, extrapolated, norm, zlim) -> None:
+def _plot_layer(ax, k, maturities, z: np.ndarray, faces: np.ndarray) -> None:
+    if not np.any(np.isfinite(z)):
+        return
     kk, tt = np.meshgrid(k, maturities)
-    faces = _face_colours(sheet.z, extrapolated, norm)
     ax.plot_surface(
         kk,
         tt,
-        np.where(np.isfinite(sheet.z), sheet.z, np.nan),
+        z,
         facecolors=faces,
         rstride=1,
         cstride=1,
@@ -507,12 +579,52 @@ def _draw_surface(ax, k, maturities, sheet: Sheet, extrapolated, norm, zlim) -> 
         antialiased=False,
         shade=False,
     )
+
+
+def _mark_clipped(ax, k, maturities, z: np.ndarray, lo: float, hi: float, size: float) -> None:
+    """Crosses at the window edge. The raw value is not used as a height."""
+    finite = np.isfinite(z)
+    for mask, height, colour in (
+        (finite & (z > hi), hi, MARK_HIGH),
+        (finite & (z < lo), lo, MARK_LOW),
+    ):
+        rows, cols = np.nonzero(mask)
+        if rows.size == 0:
+            continue
+        ax.scatter(
+            k[cols],
+            maturities[rows],
+            np.full(rows.shape, height),
+            c=colour,
+            marker="x",
+            s=size,
+            depthshade=False,
+            linewidths=0.6,
+        )
+
+
+def _draw_surface(ax, k, maturities, sheet: Sheet, extrapolated, *, caption: bool) -> None:
+    lo, hi = _window(sheet.quantity)
+    finite = np.isfinite(sheet.z)
+    in_window = finite & ~clipped_mask(sheet.z, lo, hi)
+    quoted = layer_z(sheet.z, in_window & ~extrapolated)
+    faint = layer_z(sheet.z, in_window & extrapolated)
+    norm = Normalize(vmin=lo, vmax=hi)
+    _plot_layer(ax, k, maturities, faint, _face_colours(faint, None, FAINT_FACE))
+    _plot_layer(ax, k, maturities, quoted, _face_colours(quoted, norm, None))
+    _mark_clipped(ax, k, maturities, sheet.z, lo, hi, size=14.0 if caption else 7.0)
     ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)
-    ax.set_zlim(*zlim)
+    ax.set_xlim(float(k[0]), float(k[-1]))
+    ax.set_ylim(float(maturities[0]), float(maturities[-1]))
+    ax.set_zlim(lo, hi)
     ax.set_xlabel("k")
     ax.set_ylabel("T")
     ax.set_zlabel(sheet.quantity)
-    ax.set_title(sheet.title, fontsize=9)
+    if caption:
+        n_marked = int(clipped_mask(sheet.z, lo, hi).sum())
+        ax.set_title(f"{sheet.title}\n[{lo:.2f}, {hi:.2f}], {n_marked} cells marked", fontsize=9)
+    else:
+        ax.set_title(sheet.title, fontsize=8)
     ax.tick_params(labelsize=7)
 
 
@@ -523,31 +635,19 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
     k = built["k"]
     maturities = built["maturities"]
     extrapolated = built["extrapolated"]
-    market = next(sheet for sheet in sheets if sheet.key == "market").z
     inside = ~extrapolated
-    vmin, vmax = _colour_limits(market, inside)
-    norm = Normalize(vmin=vmin, vmax=vmax)
-    iv_zlim = (vmin, vmax)
-    local = next(sheet for sheet in sheets if sheet.key == "dupire_localvol")
-    local_finite = local.z[np.isfinite(local.z)]
-    if local_finite.size:
-        local_zlim = (float(np.min(local_finite)), float(np.max(local_finite)))
-        if local_zlim[1] <= local_zlim[0]:
-            local_zlim = iv_zlim
-    else:
-        local_zlim = iv_zlim
 
     for sheet in sheets:
         fig = plt.figure(figsize=(7.4, 5.6))
         ax = fig.add_subplot(111, projection="3d")
-        zlim = local_zlim if sheet.quantity == "local volatility" else iv_zlim
-        _draw_surface(ax, k, maturities, sheet, extrapolated, norm, zlim)
+        _draw_surface(ax, k, maturities, sheet, extrapolated, caption=True)
+        lo, hi = _window(sheet.quantity)
         fig.colorbar(
-            ScalarMappable(norm=norm, cmap=CMAP),
+            ScalarMappable(norm=Normalize(vmin=lo, vmax=hi), cmap=CMAP),
             ax=ax,
             fraction=0.046,
             pad=0.08,
-            label="volatility, shared scale",
+            label=f"{sheet.quantity} on [{lo:.2f}, {hi:.2f}]",
         )
         fig.tight_layout()
         fig.savefig(fig_dir / f"p2_surface_{sheet.key}.png", dpi=140)
@@ -556,14 +656,14 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
     fig = plt.figure(figsize=(16.5, 9.2))
     for i, sheet in enumerate(sheets):
         ax = fig.add_subplot(2, 4, i + 1, projection="3d")
-        zlim = local_zlim if sheet.quantity == "local volatility" else iv_zlim
-        _draw_surface(ax, k, maturities, sheet, extrapolated, norm, zlim)
+        _draw_surface(ax, k, maturities, sheet, extrapolated, caption=False)
     fig.suptitle(
-        f"SPX {built['date']}. Grey faces are outside that expiry's quotes. "
-        "Colour scale is the market implied-vol range.",
+        f"SPX {built['date']}. Implied vol is drawn on [{IV_LO:.2f}, {IV_HI:.2f}]. "
+        "Crosses mark cells outside that window. Faint faces are outside the quotes. "
+        f"Dupire local vol is on its own axis [{LOCAL_LO:.2f}, {LOCAL_HI:.2f}].",
         fontsize=11,
     )
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.90, wspace=0.08, hspace=0.22)
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.88, wspace=0.08, hspace=0.28)
     fig.savefig(fig_dir / "p2_surface_gallery.png", dpi=130)
     plt.close(fig)
 
@@ -608,7 +708,8 @@ def _write_error_heatmap(built: dict, fig_dir: Path, inside: np.ndarray) -> None
     fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points")
     fig.suptitle(
         f"Model minus SPX implied vol, {built['date']}. "
-        "Grey cells are outside that expiry's quotes.",
+        "Grey cells are outside that expiry's quotes. "
+        "Gaps use the unclipped model.",
         fontsize=11,
     )
     fig.subplots_adjust(left=0.06, right=0.90, bottom=0.16, top=0.82, wspace=0.18)
@@ -616,48 +717,112 @@ def _write_error_heatmap(built: dict, fig_dir: Path, inside: np.ndarray) -> None
     plt.close(fig)
 
 
-def _plotly_surface(sheet: Sheet, built: dict, norm: Normalize) -> go.Figure:
+def _colourscale() -> list:
+    scale = []
+    for stop in (0.0, 0.25, 0.5, 0.75, 1.0):
+        red, green, blue, _alpha = CMAP(stop)
+        scale.append([stop, f"rgb({int(red * 255)},{int(green * 255)},{int(blue * 255)})"])
+    return scale
+
+
+def _plotly_marks(k, maturities, z: np.ndarray, extrapolated, lo: float, hi: float) -> list:
+    """Marker traces at the window edge. Hover text carries the raw value."""
+    traces = []
+    finite = np.isfinite(z)
+    for mask, height, colour, name in (
+        (finite & (z > hi), hi, MARK_HIGH, "clipped above"),
+        (finite & (z < lo), lo, MARK_LOW, "clipped below"),
+    ):
+        rows, cols = np.nonzero(mask)
+        if rows.size == 0:
+            continue
+        raw = z[rows, cols]
+        where = np.where(extrapolated[rows, cols], "outside the quotes", "inside the quotes")
+        traces.append(
+            go.Scatter3d(
+                x=k[cols],
+                y=maturities[rows],
+                z=np.full(rows.shape, height),
+                mode="markers",
+                marker={"size": 3, "color": colour, "symbol": "x"},
+                name=name,
+                text=[f"raw {value:.4f}, {place}" for value, place in zip(raw, where, strict=True)],
+                hovertemplate=(
+                    "k=%{x:.4f}<br>T=%{y:.5f}<br>marked at %{z:.2f}<br>%{text}<extra>"
+                    + name
+                    + "</extra>"
+                ),
+            )
+        )
+    return traces
+
+
+def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
     k = built["k"]
     maturities = built["maturities"]
     extrapolated = built["extrapolated"]
-    quoted = np.where(extrapolated, np.nan, sheet.z)
-    outside = np.where(extrapolated, sheet.z, np.nan)
-    colourscale = []
-    for stop in (0.0, 0.25, 0.5, 0.75, 1.0):
-        red, green, blue, _alpha = CMAP(stop)
-        colourscale.append([stop, f"rgb({int(red * 255)},{int(green * 255)},{int(blue * 255)})"])
+    lo, hi = _window(sheet.quantity)
+    finite = np.isfinite(sheet.z)
+    in_window = finite & ~clipped_mask(sheet.z, lo, hi)
+    quoted = layer_z(sheet.z, in_window & ~extrapolated)
+    faint = layer_z(sheet.z, in_window & extrapolated)
     fig = go.Figure()
     fig.add_trace(
         go.Surface(
             x=k,
             y=maturities,
             z=quoted,
-            cmin=float(norm.vmin),
-            cmax=float(norm.vmax),
-            colorscale=colourscale,
-            colorbar={"title": "volatility"},
+            cmin=lo,
+            cmax=hi,
+            colorscale=_colourscale(),
+            colorbar={"title": sheet.quantity},
             name="quoted",
             showscale=True,
         )
     )
-    fig.add_trace(
-        go.Surface(
-            x=k,
-            y=maturities,
-            z=outside,
-            showscale=False,
-            colorscale=[[0.0, "rgb(191,191,191)"], [1.0, "rgb(191,191,191)"]],
-            name="outside the quotes",
-            hoverinfo="skip",
+    if np.any(np.isfinite(faint)):
+        fig.add_trace(
+            go.Surface(
+                x=k,
+                y=maturities,
+                z=faint,
+                showscale=False,
+                opacity=0.22,
+                colorscale=[[0.0, "rgb(140,140,140)"], [1.0, "rgb(140,140,140)"]],
+                name="outside the quotes",
+                hovertemplate=(
+                    "k=%{x:.4f}<br>T=%{y:.5f}<br>value %{z:.4f}"
+                    "<br>outside the quotes<extra></extra>"
+                ),
+            )
         )
-    )
+    for trace in _plotly_marks(k, maturities, sheet.z, extrapolated, lo, hi):
+        fig.add_trace(trace)
+    own = " Own axis." if sheet.quantity == "local volatility" else ""
+    n_marked = int(clipped_mask(sheet.z, lo, hi).sum())
     fig.update_layout(
-        title=sheet.title + ". Grey is outside that expiry's quotes.",
-        margin={"l": 0, "r": 0, "t": 48, "b": 0},
+        title=(
+            f"{sheet.title}.{own} Axis [{lo:.2f}, {hi:.2f}], {n_marked} cells marked. "
+            "Faint faces are outside the quotes."
+        ),
+        margin={"l": 0, "r": 0, "t": 64, "b": 0},
+        legend={"x": 0.01, "y": 0.99},
         scene={
-            "xaxis_title": "log-moneyness k",
-            "yaxis_title": "maturity T",
-            "zaxis_title": sheet.quantity,
+            "xaxis": {
+                "title": "log-moneyness k",
+                "range": [float(k[0]), float(k[-1])],
+                "autorange": False,
+            },
+            "yaxis": {
+                "title": "maturity T",
+                "range": [float(maturities[0]), float(maturities[-1])],
+                "autorange": False,
+            },
+            "zaxis": {
+                "title": sheet.quantity,
+                "range": [lo, hi],
+                "autorange": False,
+            },
             "camera": {"eye": PLOTLY_EYE},
             "aspectmode": "manual",
             "aspectratio": {"x": 1.5, "y": 1.15, "z": 0.7},
@@ -669,11 +834,8 @@ def _plotly_surface(sheet: Sheet, built: dict, norm: Normalize) -> go.Figure:
 def write_html(built: dict, html_dir: Path) -> None:
     """One self-contained HTML file per surface. Drag rotates the view."""
     html_dir.mkdir(parents=True, exist_ok=True)
-    market = next(sheet for sheet in built["sheets"] if sheet.key == "market").z
-    vmin, vmax = _colour_limits(market, ~built["extrapolated"])
-    norm = Normalize(vmin=vmin, vmax=vmax)
     for sheet in built["sheets"]:
-        fig = _plotly_surface(sheet, built, norm)
+        fig = _plotly_surface(sheet, built)
         text = fig.to_html(
             full_html=True,
             include_plotlyjs=True,

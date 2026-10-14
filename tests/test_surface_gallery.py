@@ -29,6 +29,29 @@ def _gallery():
     return module
 
 
+def test_clip_mask_blanks_cells_outside_the_window():
+    """A cell outside the locked window is marked and is not drawn at its raw height."""
+    gallery = _gallery()
+    z = np.array([[0.20, 3.00], [0.01, 0.40]])
+    extrapolated = np.array([[False, True], [False, False]])
+    maturities = np.array([0.10, 0.20])
+    k = np.array([-0.10, 0.10])
+    mask = gallery.clipped_mask(z, 0.05, 0.90)
+    assert mask.tolist() == [[False, True], [True, False]]
+    drawn = gallery.layer_z(z, ~mask)
+    assert drawn[0, 0] == 0.20 and drawn[1, 1] == 0.40
+    assert np.isnan(drawn[0, 1]) and np.isnan(drawn[1, 0])
+    report = gallery.clip_report(z, extrapolated, maturities, k, 0.05, 0.90)
+    assert report["n_clipped"] == 2
+    assert report["n_above"] == 1 and report["n_below"] == 1
+    assert report["n_clipped_extrapolated"] == 1
+    assert report["n_clipped_inside"] == 1
+    assert report["worst"][0]["z"] == 3.0
+    assert report["worst"][0]["extrapolated"]
+    assert gallery._window("implied volatility") == (0.05, 0.90)
+    assert gallery._window("local volatility") == (0.0, 2.80)
+
+
 def test_extrapolation_mask_is_outside_each_expiry():
     gallery = _gallery()
     pillars = [
@@ -92,6 +115,11 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     assert numbers["black_scholes"]["span"] == 0.0
     assert numbers["dupire_localvol"]["n_finite_inside"] > 0
     assert numbers["gbm_mc"]["n_missing"] < numbers["n_expiries"] * numbers["n_k"]
+    assert numbers["display"]["implied_vol_axis"] == [0.05, 0.9]
+    assert numbers["display"]["local_vol_axis"] == [0.0, 2.8]
+    assert numbers["clips"]["heston"]["lo"] == 0.05
+    assert numbers["clips"]["heston"]["hi"] == 0.9
+    assert numbers["clips"]["dupire_localvol"]["hi"] == 2.8
 
     fig_dir = tmp_path / "figures"
     html_dir = tmp_path / "surfaces"
@@ -111,6 +139,11 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
         text = html.read_text(encoding="utf-8")
         assert "plotly" in text
         assert 'name="viewport"' in text
+        assert '"autorange":false' in text or '"autorange": false' in text
+        if key == "dupire_localvol":
+            assert "2.80" in text
+        else:
+            assert "0.90" in text
     assert (fig_dir / "p2_surface_gallery.png").stat().st_size > 1000
     assert (fig_dir / "p2_surface_iv_error.png").stat().st_size > 1000
     local = html_dir / "dupire_localvol.html"
