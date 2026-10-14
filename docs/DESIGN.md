@@ -891,7 +891,9 @@ A second bar holds strikes out of the same snapshot. In each expiry, about
 out of the fit. The bar is that the share of held-out quotes whose model
 call lies inside that quote's bid and ask is at least the raw SVI share
 on the same held-out quotes, and that the fitted SANOS surface still has
-zero static-arbitrage violations on the dense grid.
+zero static-arbitrage violations on the dense grid. Corey has ratified
+this bar: SANOS held-out in-spread at least raw SVI held-out in-spread,
+with zero static-arbitrage violations.
 
 ## 19. Discrete local volatility
 
