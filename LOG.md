@@ -27,14 +27,20 @@ rate `200/200`. Median max |z| `1.86`, 95th percentile `2.89`, largest
 `3.71`. Mean of the per-grid mean z is `0.0097` (sample sd `0.29`).
 
 Heston local variance by finite difference, then the same stepper. Parameters
-`v0 = theta = 0.04`, `kappa = 2`, `xi = 0.15`, `rho = -0.3`. Grid `T` from
-`0.15` to `1.2` (8 points) and `k` from `-0.3` to `0.3` (13 points): no
-negative cell and nothing above the explode cap of 5. Strikes 95, 100, 105
-at `T = 1`, 16,000 paths, 48 steps, seed 4. Implied-vol gaps (Monte Carlo
-minus Heston) are `-29.9`, `-18.6` and `-13.1` bp. The implied-vol standard
-errors are `28.7`, `23.6` and `20.2` bp. The budget is 40 bp plus one
-standard error. Adding paths would shrink the standard error and leave the
-bias.
+`v0 = theta = 0.04`, `kappa = 2`, `xi = 0.15`, `rho = -0.3`. Four standard
+deviations of `log Z` at `T = 1` is about `0.8`, and that grid has 3
+negative cells and 1 exploding cell. The test uses `k` from `-0.5` to
+`0.5` (21 points), the widest grid that stays positive, and `T` from
+`0.15` to `1.2` (8 points). Queries past the edge use the edge cell.
+Strikes 95, 100, 105 at `T = 1`, 200,000 paths, 48 steps, seed 4.
+Implied-vol gaps (Monte Carlo minus Heston) are `-4.9`, `-2.2` and
+`+0.1` bp. Standard errors are `8.5`, `7.1` and `6.2` bp. The budget is
+15 bp plus three standard errors. 4,898 paths touch the edge. None hits
+a non-positive cell. The same draw on `k` in `[-0.3, 0.3]` is unchanged
+when `Domain` goes from `±0.4` to `±0.8`: the variance grids match and
+the gaps are `-5.0`, `-2.2` and `+0.1` bp. An earlier 16,000-path run on
+the narrow grid, before clipping, had gaps `-29.9`, `-18.6` and `-13.1`
+bp against standard errors `28.7`, `23.6` and `20.2` bp.
 
 SPXW mids, expiry nearest 23 calendar days (`T = 0.06427`, 6 November
 2026), quoted `k` from `-0.673` to `0.104`. On `k` from `-0.55` to `0.30`

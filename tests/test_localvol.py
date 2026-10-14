@@ -43,7 +43,9 @@ def test_registry_builds_localvol():
 def test_flat_black_scholes_local_vol_equals_sigma():
     """Analytic slopes. The gap is zero, the tolerance is 1e-4 on sigma."""
     surface = ModelSurface(
-        BlackScholes(0.2), _market(), Domain(0.0, 2.0, -1.0, 1.0),
+        BlackScholes(0.2),
+        _market(),
+        Domain(0.0, 2.0, -1.0, 1.0),
     )
     report = dupire(surface, np.array([0.25, 1.0]), np.linspace(-0.4, 0.4, 9))
     sigma = np.sqrt(report.variance)
@@ -53,18 +55,15 @@ def test_flat_black_scholes_local_vol_equals_sigma():
     # The expanded total-variance denominator is Durrleman's g.
     k = np.array([0.2])
     w, w_k, w_kk = np.array([[0.04]]), np.array([[0.01]]), np.array([[0.002]])
-    expanded = (
-        1.0
-        - (k / w) * w_k
-        + 0.25 * (-0.25 - 1.0 / w + k**2 / w**2) * w_k**2
-        + 0.5 * w_kk
-    )
+    expanded = 1.0 - (k / w) * w_k + 0.25 * (-0.25 - 1.0 / w + k**2 / w**2) * w_k**2 + 0.5 * w_kk
     np.testing.assert_allclose(expanded, durrleman_g(k, w, w_k, w_kk))
 
 
 def test_dupire_is_nan_outside_the_quoted_domain():
     surface = ModelSurface(
-        BlackScholes(0.2), _market(), Domain(0.2, 1.0, -0.2, 0.2),
+        BlackScholes(0.2),
+        _market(),
+        Domain(0.2, 1.0, -0.2, 0.2),
     )
     report = dupire(surface, np.array([0.5]), np.array([-0.5, 0.0, 0.5]))
     assert np.isnan(report.variance[0, 0])
@@ -81,7 +80,9 @@ def test_negative_denominator_is_flagged_on_the_vogt_slice():
     in the mask.
     """
     surface = SVISurface(
-        [(1.0, RawSVI.vogt())], _market(), Domain(0.5, 1.5, -0.2, 1.4),
+        [(1.0, RawSVI.vogt())],
+        _market(),
+        Domain(0.5, 1.5, -0.2, 1.4),
     )
     k = np.linspace(-0.2, 1.4, 161)
     report = dupire(surface, np.array([1.0]), k)
@@ -91,6 +92,22 @@ def test_negative_denominator_is_flagged_on_the_vogt_slice():
     near_zero = int(np.argmin(np.abs(k)))
     assert not report.bad_denominator[0, near_zero]
     assert report.denominator[0, near_zero] > 0.0
+
+
+def test_svi_local_var_matches_dupire_where_the_mask_keeps_it():
+    """Two expiries, so the calendar slope exists. The ratio is dupire's."""
+    slice_ = RawSVI.vogt()
+    surface = SVISurface(
+        [(0.5, slice_), (1.5, slice_)],
+        _market(),
+        Domain(0.4, 1.6, -0.2, 1.0),
+    )
+    k = np.linspace(-0.1, 0.4, 9)
+    direct = surface.local_var(np.array([1.0]), k)
+    report = dupire(surface, np.array([1.0]), k, mask_outside=False)
+    kept = np.isfinite(direct)
+    assert kept.any()
+    np.testing.assert_allclose(direct[kept], report.variance[kept])
 
 
 def test_flat_local_vol_monte_carlo_reprices_black():
@@ -103,7 +120,9 @@ def test_flat_local_vol_monte_carlo_reprices_black():
     pass the z-rule at n = 12.
     """
     surface = ModelSurface(
-        BlackScholes(0.2), _market(), Domain(0.0, 1.5, -1.5, 1.5),
+        BlackScholes(0.2),
+        _market(),
+        Domain(0.0, 1.5, -1.5, 1.5),
     )
     t_grid = np.linspace(0.0, 1.5, 4)
     k_grid = np.linspace(-1.5, 1.5, 13)
@@ -129,22 +148,25 @@ def test_flat_local_vol_monte_carlo_reprices_black():
 def test_heston_local_vol_monte_carlo_reprices_within_an_iv_budget():
     """Heston-generated surface, Dupire by finite difference, then log-Euler.
 
-    The grid is inside the domain and has no non-positive cell. The budget
-    is 40 bp of implied vol for the Euler bias and the difference stencil,
-    plus one standard error. Strikes 95, 100, 105 at T = 1, 16,000 paths,
-    48 steps, seed 4.
+    With variance near 0.04, four standard deviations of log Z at T = 1 is
+    about 0.8. The finite-difference Dupire grid is already negative there
+    (3 cells, and 1 exploding, on k in [-0.8, 0.8]). The widest grid that
+    stays positive is k in [-0.5, 0.5], about 2.5 standard deviations.
+    Queries past that edge use the edge cell. The budget is 15 bp of
+    implied vol plus three standard errors. Strikes 95, 100, 105 at T = 1,
+    200,000 paths, 48 steps, seed 4.
     """
     heston = Heston(v0=0.04, kappa=2.0, theta=0.04, xi=0.15, rho=-0.3)
-    surface = ModelSurface(heston, _market(), Domain(0.0, 1.5, -0.8, 0.8))
+    surface = ModelSurface(heston, _market(), Domain(0.0, 1.5, -1.2, 1.2))
     t_grid = np.linspace(0.15, 1.2, 8)
-    k_grid = np.linspace(-0.3, 0.3, 13)
+    k_grid = np.linspace(-0.5, 0.5, 21)
     report = dupire(surface, t_grid, k_grid)
     assert report.n_negative == 0
     assert report.n_exploding == 0
     assert np.nanmax(np.abs(report.variance)) < EXPLODE
     full_t = np.concatenate([[0.0], t_grid])
     variance = np.vstack([report.variance[0], report.variance])
-    model = LocalVol(full_t, k_grid, variance, n_paths=16_000, n_steps=48, seed=4)
+    model = LocalVol(full_t, k_grid, variance, n_paths=200_000, n_steps=48, seed=4)
     strike = np.array([95.0, 100.0, 105.0])
     result = model.price_with_error(100.0, strike, 1.0, seed=4)
     reference = heston.price(100.0, strike, 1.0)
@@ -152,5 +174,50 @@ def test_heston_local_vol_monte_carlo_reprices_within_an_iv_budget():
     iv_ref = bs.implied_vol(reference, 100.0, strike, 1.0, 1.0)
     vega = bs.vega(100.0, strike, 1.0, iv_ref, 1.0)
     se_iv = result.stderr / vega
-    gap = np.abs(iv_mc - iv_ref)
-    assert np.all(gap < 0.0040 + se_iv), (gap, se_iv)
+    gap = iv_mc - iv_ref
+    assert np.all(np.abs(gap) < 0.0015 + 3.0 * se_iv), (gap, se_iv)
+
+
+def test_queries_off_the_grid_use_the_edge_and_non_positive_cells_are_invalid():
+    """Flat extrapolation is a clip. A zero cell is invalid and adds no shock."""
+    from volsurface.models.localvol import _log_euler
+
+    class _Shock:
+        def __init__(self, value):
+            self.value = value
+
+        def standard_normal(self, n):
+            return np.full(n, self.value)
+
+    t_grid = np.array([0.0, 1.0])
+    k_grid = np.array([-0.2, 0.2])
+    variance = np.full((2, 2), 0.04)
+    _Z, invalid, clipped = _log_euler(
+        t_grid,
+        k_grid,
+        variance,
+        np.array([0.0, 0.5, 1.0]),
+        4,
+        _Shock(5.0),
+    )
+    assert int(clipped.sum()) > 0
+    assert int(invalid.sum()) == 0
+    _Z, invalid, clipped = _log_euler(
+        t_grid,
+        k_grid,
+        np.zeros((2, 2)),
+        np.array([0.0, 1.0]),
+        4,
+        _Shock(0.0),
+    )
+    assert int(invalid.sum()) == 4
+    assert int(clipped.sum()) == 0
+
+
+def test_heston_variance_slopes_are_absent_rather_than_a_type_error():
+    surface = ModelSurface(
+        Heston(v0=0.04, kappa=1.5, theta=0.04, xi=0.3, rho=-0.5),
+        _market(),
+        Domain(0.0, 1.0, -0.3, 0.3),
+    )
+    assert surface.variance_slopes(np.array([0.5]), np.array([0.0])) is None

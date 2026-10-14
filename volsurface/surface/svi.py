@@ -124,12 +124,20 @@ class SVISurface(SurfaceMixin):
         return w, w_k, w_kk, w_T
 
     def local_var(self, T, k) -> np.ndarray:
-        """``(dw/dT) / g(k)``. NaN where a single expiry gives no ``dw/dT``."""
-        _, k, w, w_k, w_kk, w_T, calendar = self._parts(T, k)
-        g = durrleman_g(k[None, :], w, w_k, w_kk)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            local = w_T / g
-        return np.where(calendar & (w > 0.0) & (np.abs(g) > 1e-12), local, np.nan)
+        """``(dw/dT) / g(k)`` from :func:`~volsurface.models.localvol.dupire`.
+
+        NaN where a single expiry gives no ``dw/dT``, where ``w`` is not
+        positive, or where ``|g|`` is too small to divide by. The domain
+        mask stays off: ``dupire`` applies that when it builds a grid.
+        """
+        from volsurface.models.localvol import dupire
+
+        T_axis, k_axis = as_axes(T, k)
+        report = dupire(self, T_axis, k_axis, mask_outside=False)
+        _, _, w, _, _, _, calendar = self._parts(T_axis, k_axis)
+        g = report.denominator
+        small = ~np.isfinite(g) | (np.abs(g) <= 1e-12)
+        return np.where(calendar & (w > 0.0) & ~small, report.variance, np.nan)
 
     def g(self, T, k) -> np.ndarray:
         """Durrleman's ``g`` on the blended total variance."""
@@ -225,4 +233,3 @@ def slices_from_quotes(quotes: pd.DataFrame) -> list[tuple[float, np.ndarray, np
         w = group["iv"].to_numpy(dtype=float) ** 2 * T
         out.append((T, k, w))
     return out
-

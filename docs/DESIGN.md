@@ -737,17 +737,24 @@ In expanded form
 g = 1 - (k/w) w_k + (1/4) (-1/4 - 1/w + k^2/w^2) (w_k)^2 + (1/2) w_kk.
 ```
 
-`dupire` uses analytic `variance_slopes` when the surface has them (raw
-SVI, the implied-vol spline, flat Black-Scholes) and the mixin steps
-otherwise. Cells outside `extrapolated` are NaN. A denominator `g <= 0`
-is `bad_denominator` and is counted. A finite |local variance| above 5
-is `exploding` and is counted. Neither is clipped.
+`dupire` uses analytic `variance_slopes` when the surface returns them
+(raw SVI, the implied-vol spline, flat Black-Scholes). `None` means there
+is no closed form, and the mixin steps are used. A `TypeError` is not
+that signal. `SVISurface.local_var` and `SplineSurface.local_var` call
+`dupire` for the ratio and then apply their own NaN mask (no calendar,
+non-positive `w`, or a tiny `g`). Cells outside `extrapolated` are NaN
+on the `dupire` grid. A denominator `g <= 0` is `bad_denominator` and is
+counted. A finite |local variance| above 5 is `exploding` and is counted.
+Neither is clipped.
 
 `LocalVol` simulates `Z` by log-Euler. Local variance is bilinear in
-`(t, k)` with `k = log Z`. One normal per step, forward shock only. A
-sample that is not strictly positive adds no shock on that step. For a
-flat variance the step is the exact lognormal transition, so the Euler
-bias is zero. On a variance that depends on `k` the bias remains as the
-path count grows. The Heston test allows 40 bp of implied vol for that
-bias and for the finite-difference local variance, plus one standard
-error of the implied vol.
+`(t, k)` with `k = log Z`. A query outside the grid is clipped to the
+edge. `state["clipped"]` counts those samples. `state["invalid"]` counts
+cells that are not strictly positive, and those add no shock. One normal
+per step, forward shock only. For a flat variance the step is the exact
+lognormal transition, so the Euler bias is zero. On a variance that
+depends on `k` the bias remains as the path count grows. The Heston test
+uses `k` in `[-0.5, 0.5]`, the widest finite-difference grid that stays
+positive for those parameters, 200,000 paths and 48 steps. The budget is
+15 bp of implied vol plus three standard errors. Widening `Domain` while
+the grid stays inside it does not change that variance grid.

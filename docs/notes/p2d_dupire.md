@@ -38,9 +38,27 @@ calendar interpolant. It is visible on the SVI and spline surfaces of
 the SPX snapshot, at fixed `k`, as a step from one expiry to the next.
 
 The Monte Carlo reads that grid by bilinear interpolation and steps
-`log Z` with the sampled variance. Adding paths shrinks the standard
-error and leaves the time-step bias where it is. Flat variance is the
-exception: the log-Euler step is the exact lognormal transition, and
-the only error is sampling. A variance that depends on `k` is not
-exact. The Heston test allows 40 bp of implied vol for that bias and
-for the finite-difference estimate of `g`, plus one standard error.
+`log Z` with the sampled variance. A query outside the grid is clipped
+to the edge cell, and that sample is counted as clipped. A cell that is
+not strictly positive is counted as invalid and adds no shock. Adding
+paths shrinks the standard error and leaves the time-step bias where it
+is. Flat variance is the exception: the log-Euler step is the exact
+lognormal transition, and the only error is sampling. A variance that
+depends on `k` is not exact.
+
+On the Heston parameters `v0 = theta = 0.04`, `kappa = 2`, `xi = 0.15`,
+`rho = -0.3`, four standard deviations of `log Z` at `T = 1` is about
+`0.8`. The finite-difference grid on `k` in `[-0.8, 0.8]` has 3 negative
+cells and 1 exploding cell, so a path clipped onto that edge would stop.
+The widest grid that stays positive is `k` in `[-0.5, 0.5]` (minimum
+local variance `0.014`). At 200,000 paths, 48 steps, seed 4, strikes 95,
+100 and 105, the implied-vol gaps are `-4.9`, `-2.2` and `+0.1` bp.
+Standard errors are `8.5`, `7.1` and `6.2` bp. The budget is 15 bp plus
+three standard errors. 4,898 of the 200,000 paths touch the edge at least
+once, and none hit a non-positive cell.
+
+The same `k` grid in `[-0.3, 0.3]`, with `Domain` `±0.4` and with
+`Domain` `±0.8`, produces identical local-variance arrays (maximum
+absolute difference 0) and the same gaps, `-5.0`, `-2.2` and `+0.1` bp,
+on that 200,000-path draw. Once the grid sits inside the domain, the
+domain width is not a second extrapolation.

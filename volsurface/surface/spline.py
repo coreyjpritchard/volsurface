@@ -91,16 +91,21 @@ class SplineSurface(SurfaceMixin):
         return w, w_k, w_kk, w_T
 
     def local_var(self, T, k, h: float = 1e-4) -> np.ndarray:
-        """``(dw/dT) / g``. NaN with one expiry, where ``dw/dT`` is not observed."""
-        from volsurface.surface.black import durrleman_g
+        """``(dw/dT) / g`` from :func:`~volsurface.models.localvol.dupire`.
+
+        NaN with one expiry, where ``dw/dT`` is not observed, and where
+        ``w`` is not positive or ``|g|`` is too small to divide by. ``h``
+        is accepted and ignored: the spline slopes are analytic.
+        """
+        from volsurface.models.localvol import dupire
 
         T, k = as_axes(T, k)
-        w, w_k, w_kk, w_T, _ = self._w_derivs(T, k)
-        g = durrleman_g(k[None, :], w, w_k, w_kk)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            local = w_T / g
+        report = dupire(self, T, k, mask_outside=False)
+        w, _, _, _, _ = self._w_derivs(T, k)
+        g = report.denominator
         observed = np.array([self._has_calendar(float(t)) for t in T])
-        return np.where(observed[:, None] & (w > 0.0) & (np.abs(g) > 1e-12), local, np.nan)
+        small = ~np.isfinite(g) | (np.abs(g) <= 1e-12)
+        return np.where(observed[:, None] & (w > 0.0) & ~small, report.variance, np.nan)
 
     def extrapolated(self, T, k) -> np.ndarray:
         T, k = as_axes(T, k)

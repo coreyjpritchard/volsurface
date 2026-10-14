@@ -21,12 +21,14 @@ cap. ``g <= 0`` is the flag ``bad_denominator``. A huge but finite ratio is
 ``exploding``.
 
 The Monte Carlo is log-Euler on ``Z``, the unit-mean forward. Local variance
-is bilinear in ``(t, k)`` with ``k = log Z``. Draw order: one child of the
-seed, then one standard normal per step (the forward shock only). A sample
-that is not strictly positive, including anything off the grid, contributes
-no diffusion on that step. The path is not moved by a made-up variance.
-That count is ``state["invalid"]``. The Euler bias does not shrink when
-more paths are added. The flat-Black test states the bias it allows.
+is bilinear in ``(t, k)`` with ``k = log Z``. A query outside the grid is
+clipped to the edge, which is flat extrapolation in ``t`` and in ``k``.
+Draw order: one child of the seed, then one standard normal per step (the
+forward shock only). A sample that is not strictly positive contributes no
+diffusion on that step. That count is ``state["invalid"]``. A query that
+was clipped is ``state["clipped"]``, whether or not the edge cell was
+usable. The Euler bias does not shrink when more paths are added. The
+flat-Black test states the bias it allows.
 """
 
 from __future__ import annotations
@@ -110,7 +112,8 @@ class LocalVol:
     """Log-Euler Monte Carlo on a precomputed local-variance grid.
 
     ``variance`` has shape ``(len(t_grid), len(k_grid))``. Non-positive
-    entries are skipped by the stepper, as is any query off the grid.
+    entries are skipped by the stepper. A query off the grid uses the
+    edge cell.
     ``n_paths`` is the batch count. ``n_steps`` is how ``price`` divides
     ``[0, T]``. ``simulate`` uses the caller's ``times`` and ignores
     ``n_steps``.
@@ -131,8 +134,7 @@ class LocalVol:
             raise ValueError("t_grid and k_grid must be 1-d")
         if variance.shape != (t_grid.size, k_grid.size):
             raise ValueError(
-                f"variance shape {variance.shape} does not match "
-                f"({t_grid.size}, {k_grid.size})"
+                f"variance shape {variance.shape} does not match ({t_grid.size}, {k_grid.size})"
             )
         if np.any(np.diff(t_grid) <= 0.0) or np.any(np.diff(k_grid) <= 0.0):
             raise ValueError("grids must be strictly increasing")
@@ -149,8 +151,16 @@ class LocalVol:
         return self.price_with_error(F, K, T, df, kind, state=state).value
 
     def price_with_error(
-        self, F, K, T, df=1.0, kind="call", *, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        F,
+        K,
+        T,
+        df=1.0,
+        kind="call",
+        *,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> PriceResult:
         """Mean and standard error at one maturity. Strikes share the paths."""
         started = time.perf_counter()
@@ -171,8 +181,13 @@ class LocalVol:
         times = np.linspace(0.0, T, steps + 1)
         paths = self.simulate(n_paths, times, seed=seed, state0=state)
         value, stderr = estimate_terminal(
-            paths.Z[:, -1], float(F), K_flat, float(df), kind,
-            antithetic=False, control_variate=False,
+            paths.Z[:, -1],
+            float(F),
+            K_flat,
+            float(df),
+            kind,
+            antithetic=False,
+            control_variate=False,
         )
         return PriceResult(
             value=value.reshape(K_in.shape),
@@ -182,8 +197,12 @@ class LocalVol:
         )
 
     def simulate(
-        self, n_paths: int, times: np.ndarray, *,
-        seed: int | np.random.SeedSequence, state0: State | None = None,
+        self,
+        n_paths: int,
+        times: np.ndarray,
+        *,
+        seed: int | np.random.SeedSequence,
+        state0: State | None = None,
     ) -> Paths:
         """Unit-mean ``Z``. One normal per step. See the module note."""
         if state0:
@@ -195,17 +214,28 @@ class LocalVol:
             raise ValueError("times must be strictly increasing")
         n_paths = int(n_paths)
         rng = generator(spawn(seed, 1)[0])
-        Z, invalid = _log_euler(self.t_grid, self.k_grid, self.variance, times, n_paths, rng)
-        return Paths(times=times, Z=Z, state={"invalid": invalid})
+        Z, invalid, clipped = _log_euler(
+            self.t_grid,
+            self.k_grid,
+            self.variance,
+            times,
+            n_paths,
+            rng,
+        )
+        return Paths(times=times, Z=Z, state={"invalid": invalid, "clipped": clipped})
 
 
 def _slopes(surface, T, k):
+    """Analytic slopes, or finite differences when the surface returns None.
+
+    ``None`` means the surface has no closed form. A ``TypeError`` from a
+    bad argument is not that signal and is not caught here.
+    """
     method = getattr(surface, "variance_slopes", None)
     if method is not None:
-        try:
-            return method(T, k)
-        except TypeError:
-            pass
+        slopes = method(T, k)
+        if slopes is not None:
+            return slopes
     return _finite_difference_slopes(surface, T, k)
 
 
@@ -215,14 +245,8 @@ def _finite_difference_slopes(surface, T, k):
     h = 1e-4
     h2 = 1e-3
     w = surface.total_variance(T, k)
-    w_k = (
-        surface.total_variance(T, k + h) - surface.total_variance(T, k - h)
-    ) / (2.0 * h)
-    w_kk = (
-        surface.total_variance(T, k + h2)
-        - 2.0 * w
-        + surface.total_variance(T, k - h2)
-    ) / h2**2
+    w_k = (surface.total_variance(T, k + h) - surface.total_variance(T, k - h)) / (2.0 * h)
+    w_kk = (surface.total_variance(T, k + h2) - 2.0 * w + surface.total_variance(T, k - h2)) / h2**2
     up = T + h
     down = np.maximum(T - h, h * 0.5)
     w_T = (surface.total_variance(up, k) - surface.total_variance(down, k)) / (up - down)[:, None]
@@ -230,19 +254,36 @@ def _finite_difference_slopes(surface, T, k):
 
 
 def _log_euler(t_grid, k_grid, variance, times, n_paths, rng):
-    """Bilinear local variance, log-Euler. Invalid samples add no shock."""
+    """Bilinear local variance, log-Euler. Non-positive cells add no shock.
+
+    Coordinates outside the grid are clipped to the edge before the
+    lookup. ``clipped`` counts those samples. ``invalid`` counts samples
+    whose cell is not a strictly positive finite variance.
+    """
     interpolant = RegularGridInterpolator(
-        (t_grid, k_grid), variance, bounds_error=False, fill_value=np.nan,
+        (t_grid, k_grid),
+        variance,
+        bounds_error=False,
+        fill_value=np.nan,
     )
     log_z = np.zeros(n_paths, dtype=float)
     Z = np.empty((n_paths, times.size), dtype=float)
     Z[:, 0] = 1.0
     invalid = np.zeros(n_paths, dtype=int)
+    clipped = np.zeros(n_paths, dtype=int)
     query = np.empty((n_paths, 2), dtype=float)
+    t_lo = float(t_grid[0])
+    t_hi = float(t_grid[-1])
+    k_lo = float(k_grid[0])
+    k_hi = float(k_grid[-1])
     for i in range(1, times.size):
         dt = float(times[i] - times[i - 1])
-        query[:, 0] = times[i - 1]
-        query[:, 1] = log_z
+        t_left = float(times[i - 1])
+        off_t = t_left < t_lo or t_left > t_hi
+        off_k = (log_z < k_lo) | (log_z > k_hi)
+        clipped += off_t | off_k
+        query[:, 0] = min(max(t_left, t_lo), t_hi)
+        query[:, 1] = np.clip(log_z, k_lo, k_hi)
         sampled = np.asarray(interpolant(query), dtype=float)
         usable = np.isfinite(sampled) & (sampled > 0.0)
         invalid += ~usable
@@ -250,7 +291,7 @@ def _log_euler(t_grid, k_grid, variance, times, n_paths, rng):
         shock = rng.standard_normal(n_paths)
         log_z = log_z - 0.5 * local * dt + np.sqrt(local * dt) * shock
         Z[:, i] = np.exp(log_z)
-    return Z, invalid
+    return Z, invalid, clipped
 
 
 def _intrinsic(F: float, K: np.ndarray, df: float, kind) -> np.ndarray:
