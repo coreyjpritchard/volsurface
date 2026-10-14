@@ -69,6 +69,7 @@ def solve_linear(
     bounds=None,
     method: str = "highs",
     dense: bool = False,
+    options: dict | None = None,
 ) -> OptimizeResult:
     """Solve ``min c' x`` with HiGHS. Sparse inputs stay sparse unless ``dense`` is set."""
     if dense:
@@ -87,4 +88,5 @@ def solve_linear(
         b_eq=None if b_eq is None else np.asarray(b_eq, dtype=float),
         bounds=bounds,
         method=method,
+        options=options,
     )
