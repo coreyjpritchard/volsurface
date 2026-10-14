@@ -56,21 +56,34 @@ filtered probabilities. It is not computed from the true label ``r_t``.
 At ``H = 1/2`` each regime-conditional expectation equals
 ``v_t xi0(u) / xi0(t)``, so the mixture equals that common curve.
 ``state["xi"]`` stores the mixture. ``VarianceSwapPricer`` integrates it.
-``surface_at`` does not price Black on that curve: at ``H = 1/2`` that
-Black call is flat in strike and does not depend on ``nu``. The surface
-is a Monte Carlo of the call payoff under the filtered mixture. Each
-regime holds ``nu`` fixed, starts from the path's ``v_t``, and is weighted
-by ``regime_prob`` at the clock. The true label is not an argument. At
-``H = 1/2`` the variance step is the exponential martingale and the
-plugin is not called. Any other ``H`` restarts ``volterra_components``
-on a uniform grid from the clock to the last expiry, anchored at ``v_t``.
-That restart does not replay the path's past Volterra integral.
+``surface_at`` prices the call by Monte Carlo under the same mixture.
+Each regime holds ``nu`` fixed. The variance level is that regime's
+forward curve ``xi_t(u)``: at ``H = 1/2`` it is flat at ``v_t``, and at
+any other ``H`` it is ``v_t`` times the constant-``nu`` rough ratio. The
+future noise is a fresh kernel, independent of the past given that
+curve. The past Volterra integral sits in ``xi_t(u)`` and is not drawn
+again. Weights are ``regime_prob`` at the clock. The true label is not
+an argument. At ``H = 1/2`` the variance step is the exponential
+martingale and the plugin is not called. Any other ``H`` reads
+``state["dW"]`` and restarts ``volterra_components`` from the clock.
+
+The same shocks drive a Black path whose variance is the deterministic
+left forward curve. The control is that Black price. Its mean is the
+formula, not the sample mean, and the coefficient is the sample
+``cov / var``. One terminal is used for every strike. ``n_mc`` defaults
+to 1024 and must be at least 2. The returned standard error is the
+sample standard deviation of the residual divided by ``sqrt(n_mc)``.
+Fitting the coefficient on the same sample makes that error slightly
+optimistic. ``total_variance`` is the controlled log contract
+``-2 E[log Z]`` on those paths, which is the variance-swap strike, and
+``total_variance_se`` is its standard error.
 
 The Monte Carlo seed is a ``SeedSequence`` with the path's entropy and
 ``spawn_key + (i_t, 4, regime)``. It is not one of the four simulation
 children. At ``H = 1/2`` each step draws ``dW`` for every path and every
-copy, then the orthogonal shock. ``n_mc`` is the number of copies. The
-unit forward is 1 and the strike is ``exp(k)``.
+copy, then the orthogonal shock. At any other ``H`` the plugin consumes
+the vol child and the spot child draws the orthogonal shock. The unit
+forward is 1 and the strike is ``exp(k)``.
 
 The Hamilton filter reads one-step log realised variance of the simulated
 spot,
@@ -120,8 +133,10 @@ import math
 import numpy as np
 from scipy.linalg import expm
 
+from volsurface import bs
 from volsurface.core.types import MarketPaths, RegimeSpec, SurfaceBatch
 from volsurface.markets.filter import hamilton_filter
+from volsurface.markets.pricers import integrate_forward_variance
 from volsurface.markets.seeds import DRAW_ORDER, stream_seeds
 from volsurface.mc.rng import as_seed_sequence, generator, spawn
 from volsurface.plugins import create
@@ -146,7 +161,7 @@ class RegimeSwitchingBergomi:
         forward: float = 100.0,
         rate: float = 0.0,
         smile_k: np.ndarray | None = None,
-        n_mc: int = 256,
+        n_mc: int = 1024,
     ):
         self.spec = spec
         self.xi0 = float(xi0)
@@ -160,8 +175,8 @@ class RegimeSwitchingBergomi:
             np.linspace(-0.2, 0.2, 9) if smile_k is None else np.asarray(smile_k, dtype=float)
         )
         self.n_mc = int(n_mc)
-        if self.n_mc < 1:
-            raise ValueError(f"n_mc must be positive, got {self.n_mc}")
+        if self.n_mc < 2:
+            raise ValueError(f"n_mc must be at least 2, got {self.n_mc}")
         self._plugin = None
 
     def simulate_market(
@@ -250,10 +265,12 @@ class RegimeSwitchingBergomi:
     def surface_at(self, paths: MarketPaths, i_t: int) -> SurfaceBatch:
         """Monte Carlo calls mixed over the filtered regime probabilities.
 
-        Each regime is simulated with that regime's ``nu`` held fixed,
-        starting from ``v`` at the clock. The draws do not read
-        ``paths.regime``. Weights are ``regime_prob`` at the clock. Two
-        calls on the same paths use the same seed, so the prices match.
+        Each regime is simulated with that regime's ``nu`` held fixed.
+        The variance level is the regime-conditional forward curve
+        ``xi_t(u)``, and the future kernel is restarted from the clock.
+        The draws do not read ``paths.regime``. Weights are ``regime_prob``
+        at the clock. Two calls on the same paths use the same seed, so
+        the prices match.
         """
         if paths.regime_prob is None:
             raise ValueError("surface_at mixes filtered regime probabilities")
@@ -270,57 +287,93 @@ class RegimeSwitchingBergomi:
             )
         k = np.asarray(self.smile_k, dtype=float)
         strikes = np.exp(k)
-        call = np.zeros((v_now.shape[0], indices.size, k.size))
+        m = v_now.shape[0]
+        if int(indices[-1]) == clock:
+            call = _intrinsic_calls(m, strikes)
+            return SurfaceBatch(
+                T=times[indices].copy(),
+                k=k.copy(),
+                call=call,
+                stderr=np.zeros_like(call),
+                total_variance=np.zeros((m, 1)),
+                total_variance_se=np.zeros((m, 1)),
+            )
+        dW = _forward_driver(paths, self.H)
+        call = np.zeros((m, indices.size, k.size))
+        stderr = np.zeros_like(call)
+        total = np.zeros((m, indices.size))
+        total_se = np.zeros_like(total)
         for r, nu in enumerate(nus):
             seed = _surface_seed(paths, clock, r)
-            column = self._regime_calls(float(nu), v_now, times, clock, indices, strikes, seed)
-            call += probs[:, r, None, None] * column
-        return SurfaceBatch(T=times[indices].copy(), k=k.copy(), call=call)
+            xi = _regime_forward(self.H, float(nu), v_now, self.xi0, times, dW, clock)
+            column, column_se, vs, vs_se = self._regime_calls(
+                float(nu), xi, times, clock, indices, strikes, seed
+            )
+            weight = probs[:, r]
+            call += weight[:, None, None] * column
+            stderr += (weight[:, None, None] * column_se) ** 2
+            total += weight[:, None] * vs
+            total_se += (weight[:, None] * vs_se) ** 2
+        return SurfaceBatch(
+            T=times[indices].copy(),
+            k=k.copy(),
+            call=call,
+            stderr=np.sqrt(stderr),
+            total_variance=total,
+            total_variance_se=np.sqrt(total_se),
+        )
 
-    def _regime_calls(self, nu, v_now, times, i_t, indices, strikes, seed) -> np.ndarray:
-        """Call prices for one constant ``nu``. Shape ``(m, n_exp, n_k)``."""
-        if int(indices[-1]) == i_t:
-            return _intrinsic_calls(v_now.shape[0], strikes)
+    def _regime_calls(self, nu, xi, times, i_t, indices, strikes, seed):
+        """Controlled calls for one constant ``nu``.
+
+        Returns call, stderr, log-contract and its standard error.
+        """
         if self.H == 0.5:
-            return _half_calls(nu, v_now, times, i_t, indices, strikes, seed, self.n_mc, self.rho)
-        return self._rough_calls(nu, v_now, times, i_t, indices, strikes, seed)
+            return _half_calls(nu, xi, times, i_t, indices, strikes, seed, self.n_mc, self.rho)
+        return self._rough_calls(nu, xi, times, i_t, indices, strikes, seed)
 
-    def _rough_calls(self, nu, v_now, times, i_t, indices, strikes, seed) -> np.ndarray:
-        """Restarted hybrid kernel, anchored at ``v_now``. The plugin draws the vol child."""
-        m = v_now.shape[0]
+    def _rough_calls(self, nu, xi, times, i_t, indices, strikes, seed):
+        """Restarted hybrid factor on the regime's forward curve ``xi``.
+
+        The plugin draws the vol child. ``xi`` already holds the path's
+        past, so the factor is a fresh kernel with mean near 1.
+        """
+        m = xi.shape[0]
         n_mc = self.n_mc
         last = int(indices[-1])
         n_steps = last - i_t
-        tau = float(times[last] - times[i_t])
-        grid = np.linspace(0.0, tau, n_steps + 1)
+        grid = np.asarray(times[i_t : last + 1], dtype=float)
+        _equal_steps(grid)
+        grid = grid - float(grid[0])
         vol_seed, spot_seed = spawn(seed, 2)
         n_sim = m * n_mc
         components = self._rough_components(n_sim, grid, vol_seed)
         nu_step = np.full((n_sim, n_steps), float(nu))
-        variance = hybrid_increment_variance(self.H, nu_step, 1.0, grid, components)
-        variance = variance * np.repeat(np.maximum(v_now, 0.0), n_mc)[:, None]
+        factor = hybrid_increment_variance(self.H, nu_step, 1.0, grid, components)
+        level = np.repeat(np.maximum(xi[:, i_t : last + 1], 0.0), n_mc, axis=0)
+        variance = level * factor
         rng = generator(spot_seed)
         log_z = np.zeros(n_sim)
+        log_z_bs = np.zeros(n_sim)
         rho = self.rho
         ortho = math.sqrt(max(0.0, 1.0 - rho * rho))
-        stored: dict[int, np.ndarray] = {}
-        wanted = {_residual_step(times, i_t, int(idx), grid) for idx in indices}
+        stored_z: dict[int, np.ndarray] = {}
+        stored_bs: dict[int, np.ndarray] = {}
+        wanted = {int(idx) for idx in indices}
         for step in range(n_steps):
             dt = float(grid[step + 1] - grid[step])
             dW = np.asarray(components[:, step, 0], dtype=float)
             dW_perp = math.sqrt(dt) * rng.standard_normal(n_sim)
             left = np.maximum(variance[:, step], 0.0)
+            left_bs = level[:, step]
             shock = rho * dW + ortho * dW_perp
             log_z = log_z + np.sqrt(left) * shock - 0.5 * left * dt
-            if step + 1 in wanted:
-                stored[step + 1] = log_z.copy()
-        out = np.empty((m, indices.size, strikes.size))
-        for j, idx in enumerate(indices):
-            step = _residual_step(times, i_t, int(idx), grid)
-            z = np.exp(stored[step]).reshape(m, n_mc)
-            payoff = np.maximum(z[:, :, None] - strikes, 0.0)
-            out[:, j, :] = payoff.mean(axis=1)
-        return out
+            log_z_bs = log_z_bs + np.sqrt(left_bs) * shock - 0.5 * left_bs * dt
+            done = i_t + step + 1
+            if done in wanted:
+                stored_z[done] = log_z.reshape(m, n_mc).copy()
+                stored_bs[done] = log_z_bs.reshape(m, n_mc).copy()
+        return _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs)
 
     def _checked_spec(self) -> RegimeSpec:
         spec = self.spec
@@ -683,37 +736,141 @@ def _intrinsic_calls(n_paths: int, strikes: np.ndarray) -> np.ndarray:
     return np.broadcast_to(intrinsic, (n_paths, 1, strikes.size)).copy()
 
 
-def _half_calls(nu, v_now, times, i_t, indices, strikes, seed, n_mc, rho) -> np.ndarray:
-    """Exponential-martingale variance at ``H = 1/2``. Shape ``(m, n_exp, n_k)``."""
+def _forward_driver(paths: MarketPaths, H: float) -> np.ndarray | None:
+    """``state["dW"]`` when the forward curve depends on it. ``H = 1/2`` skips it."""
+    if float(H) == 0.5:
+        return None
+    if "dW" not in paths.state:
+        raise ValueError(
+            "surface_at at H other than 1/2 reads state['dW'] to build the "
+            "regime-conditional forward variance xi_t(u). A flat anchor at v_t "
+            "drops that curve."
+        )
+    return np.asarray(paths.state["dW"], dtype=float)
+
+
+def _regime_forward(H, nu, v_now, xi0, times, dW, i_t) -> np.ndarray:
+    """Regime-conditional forward variance. Shape ``(m, n_times)``.
+
+    At ``H = 1/2`` the curve is flat at ``v_now``. At any other ``H`` it is
+    ``v_now`` times the constant-``nu`` rough ratio ``xi_t(u) / xi_t(t)``.
+    Entries before the clock are NaN. The true regime label is not an argument.
+    """
     m = int(v_now.shape[0])
+    out = np.full((m, times.size), np.nan)
+    if float(H) == 0.5:
+        out[:, i_t:] = np.maximum(v_now, 0.0)[:, None]
+        return out
+    curve = bergomi_forward_variance(float(H), float(nu), xi0, times, dW)
+    level = curve[:, i_t, i_t]
+    ratio = curve[:, i_t, i_t:] / level[:, None]
+    out[:, i_t:] = np.maximum(v_now, 0.0)[:, None] * ratio
+    return out
+
+
+def _equal_steps(grid: np.ndarray) -> None:
+    """The hybrid plugin draws on an equally spaced grid."""
+    dt = np.diff(np.asarray(grid, dtype=float))
+    if dt.size == 0:
+        return
+    span = max(1.0, float(grid[-1] - grid[0]))
+    if float(np.max(np.abs(dt - dt[0]))) > 1e-10 * span:
+        raise ValueError(
+            "surface_at at H other than 1/2 needs equally spaced times "
+            "from the clock to the last expiry"
+        )
+
+
+def _half_calls(nu, xi, times, i_t, indices, strikes, seed, n_mc, rho):
+    """Exponential-martingale variance at ``H = 1/2``, with a Black control."""
+    m = int(xi.shape[0])
     rng = generator(seed)
-    current = np.broadcast_to(np.maximum(v_now, 0.0)[:, None], (m, n_mc)).copy()
+    multiplier = np.ones((m, n_mc))
     log_z = np.zeros((m, n_mc))
+    log_z_bs = np.zeros((m, n_mc))
     ortho = math.sqrt(max(0.0, 1.0 - rho * rho))
     wanted = {int(i) for i in indices}
-    slot = {int(i): j for j, i in enumerate(indices)}
-    out = np.empty((m, indices.size, strikes.size))
+    stored_z: dict[int, np.ndarray] = {}
+    stored_bs: dict[int, np.ndarray] = {}
     last = int(indices[-1])
     for i in range(i_t + 1, last + 1):
         dt = float(times[i] - times[i - 1])
         scale = math.sqrt(dt)
         dW = scale * rng.standard_normal((m, n_mc))
         dW_perp = scale * rng.standard_normal((m, n_mc))
-        left = np.maximum(current, 0.0)
+        level = np.maximum(xi[:, i - 1], 0.0)
+        left = level[:, None] * multiplier
         shock = rho * dW + ortho * dW_perp
         log_z = log_z + np.sqrt(left) * shock - 0.5 * left * dt
-        current = current * np.exp(nu * dW - 0.5 * nu * nu * dt)
+        log_z_bs = log_z_bs + np.sqrt(level)[:, None] * shock - 0.5 * level[:, None] * dt
+        multiplier = multiplier * np.exp(nu * dW - 0.5 * nu * nu * dt)
         if i in wanted:
-            z = np.exp(log_z)
-            payoff = np.maximum(z[:, :, None] - strikes, 0.0)
-            out[:, slot[i], :] = payoff.mean(axis=1)
-    return out
+            stored_z[i] = log_z.copy()
+            stored_bs[i] = log_z_bs.copy()
+    return _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs)
 
 
-def _residual_step(times: np.ndarray, i_t: int, index: int, grid: np.ndarray) -> int:
-    """Grid step nearest to a clock expiry. Exact when both grids are uniform."""
-    residual = float(times[index] - times[i_t])
-    return int(np.argmin(np.abs(grid - residual)))
+def _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs):
+    """Black control at the left Riemann of ``xi``, one terminal for every strike."""
+    m = xi.shape[0]
+    call = np.empty((m, indices.size, strikes.size))
+    stderr = np.empty_like(call)
+    total = np.empty((m, indices.size))
+    total_se = np.empty_like(total)
+    clock = float(times[i_t])
+    for j, idx in enumerate(indices):
+        maturity = float(times[int(idx)])
+        integrated = integrate_forward_variance(xi, times, clock, maturity)
+        tau = maturity - clock
+        z = stored_z[int(idx)]
+        z_bs = stored_bs[int(idx)]
+        y = np.maximum(np.exp(z)[:, :, None] - strikes, 0.0)
+        x = np.maximum(np.exp(z_bs)[:, :, None] - strikes, 0.0)
+        known = _black_calls(integrated, tau, strikes)
+        call[:, j, :], stderr[:, j, :] = _control_means(y, x, known)
+        total[:, j], total_se[:, j] = _controlled_log_contract(z, z_bs, integrated)
+    return call, stderr, total, total_se
+
+
+def _black_calls(total: np.ndarray, tau: float, strikes: np.ndarray) -> np.ndarray:
+    """Unit-forward Black calls. ``total`` is the left Riemann, shape ``(m,)``."""
+    if tau <= 0.0:
+        intrinsic = np.maximum(1.0 - strikes, 0.0)
+        return np.broadcast_to(intrinsic, (total.shape[0], strikes.size)).copy()
+    sigma = np.sqrt(np.maximum(total, 0.0) / tau)
+    return np.asarray(bs.price(1.0, strikes[None, :], tau, sigma[:, None], 1.0), dtype=float)
+
+
+def _control_means(y: np.ndarray, x: np.ndarray, known: np.ndarray):
+    """Controlled mean and standard error.
+
+    ``y`` and ``x`` have shape ``(m, n_mc, n_k)``. ``known`` has shape
+    ``(m, n_k)`` and is the mean of ``x``, not the sample mean. The
+    coefficient is the sample ``cov(y, x) / var(x)``. A tiny variance sets
+    it to 0. The standard error divides the residual's sample standard
+    deviation by ``sqrt(n_mc)``. Fitting the coefficient on the same sample
+    makes that error slightly optimistic.
+    """
+    n_mc = y.shape[1]
+    y_centred = y - y.mean(axis=1, keepdims=True)
+    x_centred = x - x.mean(axis=1, keepdims=True)
+    var_x = np.sum(x_centred * x_centred, axis=1) / (n_mc - 1)
+    cov = np.sum(y_centred * x_centred, axis=1) / (n_mc - 1)
+    beta = np.zeros_like(cov)
+    usable = var_x > 1e-18
+    beta[usable] = cov[usable] / var_x[usable]
+    residual = y - beta[:, None, :] * (x - known[:, None, :])
+    mean = residual.mean(axis=1)
+    stderr = residual.std(axis=1, ddof=1) / math.sqrt(n_mc)
+    return mean, stderr
+
+
+def _controlled_log_contract(log_z, log_z_bs, total):
+    """``-2 E[log Z]`` controlled by the Black total variance."""
+    mean, stderr = _control_means(
+        -2.0 * log_z[:, :, None], -2.0 * log_z_bs[:, :, None], total[:, None]
+    )
+    return mean[:, 0], stderr[:, 0]
 
 
 def bergomi_forward_variance(H: float, nu, xi0, times: np.ndarray, dW: np.ndarray) -> np.ndarray:

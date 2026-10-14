@@ -893,7 +893,7 @@ call lies inside that quote's bid and ask is at least the raw SVI share
 on the same held-out quotes, and that the fitted SANOS surface still has
 zero static-arbitrage violations on the dense grid. Corey has ratified
 this bar: SANOS held-out in-spread at least raw SVI held-out in-spread,
-with zero static-arbitrage violations.
+with zero static-arbitrage violations, ratified 14 Oct 2026.
 
 ## 19. Discrete local volatility
 
@@ -1038,17 +1038,26 @@ the regime-conditional curves, weighted by the filtered probabilities
 `H = 1/2` each regime-conditional expectation of future variance equals
 `v_t xi0(u) / xi0(t)`, so the mixture equals that common curve.
 `state["xi"]` stores the mixture. `VarianceSwapPricer` integrates it.
-`surface_at` is a Monte Carlo of the call payoff under the same mixture.
-Each regime holds `nu` fixed and starts from the path's `v_t`. The
-weights are `regime_prob` at the clock. The seed is the path entropy
-and `spawn_key + (i_t, 4, regime)`, and `n_mc` defaults to 256. At
-`H = 1/2` the variance step is the exponential martingale, and a Black
-call on the expected variance would be flat in strike and independent
-of `nu`. The plugin is not called at that `H`. Any other `H` restarts
-`volterra_components` on a uniform grid from the clock to the last
-expiry, anchored at `v_t`. That draw leaves the path's past Volterra
-integral out. Whether `Z` stays a martingale when `nu` switches is a
-hypothesis. The test is the z-rule. It is not a theorem in this file.
+`surface_at` is a Monte Carlo of the call under the same mixture. Each
+regime holds `nu` fixed. The variance level is that regime's forward
+curve `xi_t(u)`, and the future kernel is restarted from the clock. At
+`H = 1/2` the curve is flat at `v_t` and the step is the exponential
+martingale. A Black call on the expected variance would be flat in
+strike and independent of `nu`. The plugin is not called at that `H`.
+Any other `H` reads `state["dW"]` and restarts `volterra_components`
+from the clock. The past Volterra integral sits in `xi_t(u)` and is
+not drawn again. The weights are `regime_prob` at the clock. The same
+shocks drive a Black path whose variance is the deterministic left
+forward curve. The control is that Black price, with the sample
+coefficient `cov / var` and the formula as the known mean. One terminal
+is used for every strike. `n_mc` defaults to 1024. The seed is the path
+entropy and `spawn_key + (i_t, 4, regime)`. `SurfaceBatch.stderr` is
+the residual standard deviation divided by `sqrt(n_mc)`. Fitting the
+coefficient on the same sample makes that error slightly optimistic.
+`total_variance` is the controlled log contract `-2 E[log Z]`, the
+variance-swap strike of those paths. Whether `Z` stays a martingale
+when `nu` switches is a hypothesis. The test is the z-rule. It is not
+a theorem in this file.
 
 The Hamilton filter reads one-step log realised variance of the simulated
 spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
@@ -1067,14 +1076,22 @@ index 10, seed entropy 12, test split, the filter's modal hit rate is
 regime at that clock. The lift is -0.0600. The bar is a two-sided band
 on that lift, from -0.10 to 0.10, not a claim that the hit rate is below
 1. The same paths, read from eight quantile bins, give a call modal
-accuracy of 0.6417 with 256 Monte Carlo copies (lift 0.1033) and a
+accuracy of 0.6600 with 1,024 Monte Carlo copies (lift 0.1217) and a
 variance-swap modal accuracy of 0.6600 (lift 0.1217). Both lifts sit
 between 0.05 and 0.35, so the price is not the unconditional law and
 it is not the latent label. On one path with `v = 0.04`, `rho = -0.4`,
 32 steps and 8,192 copies, seed entropy 7, test split, the implied-vol
-span at expiry 1 is 0.0044 when `nu = 0.01` and 0.0401 when `nu = 1.5`.
-At `nu = 1.5` the implied vol is 0.2066 at log-moneyness -0.2 and
-0.1668 at log-moneyness 0.2.
+span at expiry 1 is 0.000391 when `nu = 0.01` and 0.04387 when
+`nu = 1.5`. At `nu = 1.5` the implied vol is 0.2117 at log-moneyness
+-0.2 and 0.1681 at log-moneyness 0.2. On one path with `nu = 1.1` and
+1,024 copies the at-the-money relative standard error at expiry 1 is
+0.0186. At `H = 0.1`, eight paths, clock 0.5, maturity 1, 4,096 copies,
+seed entropy 21, test split, the flat anchor `v_t (T - t)` misses the
+variance swap by a median relative gap of 0.258. The surface log
+contract stays inside 4 standard errors of that swap on every expiry.
+The largest absolute z-score is 1.50. The out-of-the-money strip on
+log-moneyness from -0.8 to 0.8 stays inside 4 standard errors on the
+last expiry. Its largest absolute z-score is 1.31.
 Reliability of the filter on a hand-built Gaussian series is checked
 against binomial bands.
 

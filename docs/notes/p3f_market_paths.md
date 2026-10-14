@@ -47,15 +47,22 @@ At `H` other than `1/2` the tenor slope of that curve is the
 constant-`nu` rough ratio for each regime, anchored at `v_t`, then mixed.
 
 `surface_at` is a separate Monte Carlo of the call. Each regime holds
-`nu` fixed, starts from `v_t`, and is weighted by `regime_prob` at the
-clock. The seed is the path entropy and `spawn_key + (i_t, 4, regime)`.
-`n_mc` defaults to 256. The unit forward is 1 and the strike is `exp(k)`.
-At `H = 1/2` the variance step is the exponential martingale. A Black
+`nu` fixed. The variance level is that regime's forward curve `xi_t(u)`,
+and the future kernel is restarted from the clock. The past Volterra
+integral sits in the curve and is not drawn again. The prices are
+weighted by `regime_prob` at the clock. The seed is the path entropy
+and `spawn_key + (i_t, 4, regime)`. `n_mc` defaults to 1024. The unit
+forward is 1 and the strike is `exp(k)`. At `H = 1/2` the curve is flat
+at `v_t` and the variance step is the exponential martingale. A Black
 call on the expected variance is flat in strike there, and independent
 of `nu`, so the surface simulates the payoff instead. The plugin is not
-called. Any other `H` restarts `volterra_components` on a uniform grid
-from the clock to the last expiry, anchored at `v_t`. The path's past
-Volterra integral is left out of that draw.
+called. Any other `H` reads `state["dW"]` and restarts
+`volterra_components` from the clock. The same shocks drive a Black
+path at the deterministic left forward variance. That Black price is
+the control, with the sample coefficient `cov / var`. `stderr` is the
+residual standard deviation divided by `sqrt(n_mc)`. The coefficient is
+fit on the same sample, so the error is slightly optimistic.
+`total_variance` is the controlled log contract `-2 E[log Z]`.
 
 The filter observation is one-step log realised variance of the simulated
 spot, `log((d log Z)^2 / dt)`. Time 0 has no return, and the probability
@@ -119,8 +126,8 @@ value `1.602` and mean `-0.194`. It passes the z-rule.
 Six hundred paths, 21 times, clock index 10, seed entropy 12, test split.
 The base rate, the larger share of the latent regime, is 0.5383. Eight
 quantile bins of the at-the-money call, and the same bins of the variance
-swap, each contain both regimes. With 256 Monte Carlo copies the call's
-modal prediction is right on 0.6417 of the paths, a lift of 0.1033. The
+swap, each contain both regimes. With 1,024 Monte Carlo copies the call's
+modal prediction is right on 0.6600 of the paths, a lift of 0.1217. The
 variance swap is right on 0.6600 of the paths, a lift of 0.1217. Both
 lifts sit inside the band from 0.05 to 0.35. The log-RV filter's modal
 hit rate on the same paths is 0.4783, a lift of -0.0600, inside the band
@@ -128,8 +135,18 @@ from -0.10 to 0.10. The figure is `docs/figures/p3f_paths.png`.
 
 One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1,
 8,192 copies, seed entropy 7, test split. The implied-vol span at
-`nu = 0.01` is 0.0044. At `nu = 1.5` the span is 0.0401. The implied
-vol at that `nu` is 0.2066 at log-moneyness -0.2 and 0.1668 at 0.2.
+`nu = 0.01` is 0.000391. At `nu = 1.5` the span is 0.04387. The implied
+vol at that `nu` is 0.2117 at log-moneyness -0.2 and 0.1681 at 0.2.
+With `nu = 1.1` and 1,024 copies the at-the-money relative standard
+error at expiry 1 is 0.0186.
+
+At `H = 0.1`, eight paths, 17 times, clock index 8, maturity 1, 4,096
+copies, seed entropy 21, test split. The flat anchor `v_t (T - t)`
+misses the variance swap by a median relative gap of 0.258. The surface
+log contract stays inside 4 standard errors of that swap on every
+expiry. The largest absolute z-score is 1.50. The out-of-the-money
+strip on log-moneyness from -0.8 to 0.8 stays inside 4 standard errors
+on the last expiry. Its largest absolute z-score is 1.31.
 
 `H = 0.1`, the same two regimes, eight runs, 2,000 paths, terminal time
 1, 11 times, seed entropies 70 to 77, test split. The driver is the

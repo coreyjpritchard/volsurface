@@ -325,9 +325,15 @@ class SurfaceBatch:
     """Normalised calls on one date, for every path in a batch.
 
     ``T`` has shape ``(n_exp,)``, ``k`` has shape ``(n_k,)``, and ``call``
-    has shape ``(m, n_exp, n_k)``.
+    has shape ``(m, n_exp, n_k)``. ``stderr`` matches ``call`` when the
+    price is a Monte Carlo estimate. ``total_variance`` and
+    ``total_variance_se`` have shape ``(m, n_exp)`` and are the log
+    contract ``-2 E[log Z]`` and its standard error.
     """
 
     T: np.ndarray
     k: np.ndarray
     call: np.ndarray
+    stderr: np.ndarray | None = None
+    total_variance: np.ndarray | None = None
+    total_variance_se: np.ndarray | None = None

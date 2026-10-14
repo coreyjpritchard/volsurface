@@ -550,8 +550,8 @@ def test_regime_cannot_be_read_exactly_from_prices():
     Eight quantile bins of the call and of the variance swap each contain
     both regimes. Their modal accuracy beats the base rate by more than
     0.05 and by less than 0.35, so the price is not the unconditional law
-    and it is not the label. With 256 Monte Carlo copies the call accuracy
-    is 0.6417 (lift 0.1033) and the variance-swap accuracy is 0.6600
+    and it is not the label.     With 1,024 Monte Carlo copies the call accuracy
+    is 0.6600 (lift 0.1217) and the variance-swap accuracy is 0.6600
     (lift 0.1217). The log-RV filter's modal hit rate stays within 0.10 of
     the same base rate. One-step log realised variance has one mean in both
     regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
@@ -597,7 +597,7 @@ def _quoted_paths(v0: float, n_steps: int, prob: np.ndarray, entropy: int = 7) -
     return MarketPaths(
         times=times,
         Z=np.ones((1, times.size)),
-        state={"v": variance, "xi_tenor": times.copy()},
+        state={"v": variance, "xi_tenor": times.copy(), "dW": np.zeros((1, n_steps))},
         F0=lambda t: np.full(np.shape(np.asarray(t, dtype=float)), 100.0),
         df=lambda t: np.ones(np.shape(np.asarray(t, dtype=float))),
         regime=np.zeros((1, times.size), dtype=np.int8),
@@ -634,9 +634,10 @@ def test_surface_mixes_the_filter_and_repeats():
 def test_half_smile_is_not_flat_and_moves_with_nu():
     """H = 1/2, one path, 32 steps, 8,192 Monte Carlo copies, seed entropy 7.
 
-    The implied-vol span at nu = 1.5 is 0.0401, against 0.0044 at nu = 0.01.
-    With rho = -0.4 the low-strike implied vol is 0.2066 and the high-strike
-    implied vol is 0.1668.
+    The implied-vol span at nu = 1.5 is 0.04387, against 0.000391 at nu = 0.01.
+    With rho = -0.4 the low-strike implied vol is 0.2117 and the high-strike
+    implied vol is 0.1681. The control removes the Monte Carlo smile that a
+    raw mean left at nu = 0.01.
     """
     paths = _quoted_paths(0.04, 32, np.array([1.0]))
     calm = _last_smile(_single_regime(0.01, 8192), paths)
@@ -660,7 +661,7 @@ def test_half_surface_does_not_call_the_plugin(monkeypatch):
 
 
 def test_rough_surface_ignores_the_label_and_responds_to_nu():
-    """H = 0.1 restarts the hybrid kernel. Two copies, 16 Monte Carlo paths, 4 steps."""
+    """H = 0.1 restarts the hybrid factor on xi_t(u). 16 copies, 4 steps."""
     pytest.importorskip("roughvol")
     paths = _quoted_paths(0.04, 4, np.array([1.0]), entropy=11)
     calm = _single_regime(0.2, 16, H=0.1).surface_at(paths, 0)
@@ -669,3 +670,79 @@ def test_rough_surface_ignores_the_label_and_responds_to_nu():
     assert np.array_equal(calm.call, _single_regime(0.2, 16, H=0.1).surface_at(flipped, 0).call)
     assert np.isfinite(calm.call).all()
     assert not np.allclose(calm.call, moved.call)
+
+
+def test_rough_surface_requires_the_forward_driver():
+    """Without ``dW`` the rough surface would anchor on flat ``v_t`` and drop ``xi_t(u)``."""
+    pytest.importorskip("roughvol")
+    paths = _quoted_paths(0.04, 4, np.array([1.0]))
+    state = dict(paths.state)
+    del state["dW"]
+    with pytest.raises(ValueError, match="dW"):
+        _single_regime(0.4, 8, H=0.1).surface_at(replace(paths, state=state), 0)
+
+
+def test_surface_standard_error_is_below_the_raw_monte_carlo_noise():
+    """One path, nu = 1.1, H = 1/2, 32 steps, 1,024 copies, seed entropy 7.
+
+    The at-the-money relative standard error at expiry 1 is 0.0186. The raw
+    mean at 256 copies was about 8 percent of the price. The coefficient is
+    the sample cov / var, so this standard error is slightly optimistic.
+    """
+    paths = _quoted_paths(0.04, 32, np.array([1.0]))
+    batch = _single_regime(1.1, 1024).surface_at(paths, 0)
+    assert batch.stderr.shape == batch.call.shape
+    assert np.isfinite(batch.stderr).all()
+    assert np.all(batch.stderr >= 0.0)
+    atm = int(np.argmin(np.abs(batch.k)))
+    relative = float(batch.stderr[0, -1, atm] / batch.call[0, -1, atm])
+    assert relative < 0.025
+    assert batch.total_variance.shape == (1, batch.T.size)
+    assert np.isfinite(batch.total_variance_se).all()
+
+
+def _otm_variance(call: np.ndarray, k: np.ndarray) -> np.ndarray:
+    """Total variance from out-of-the-money options. ``call`` has shape ``(m, n_k)``.
+
+    Put-call parity builds the put. A call a fraction under intrinsic makes
+    that put negative, and the weight ``1/K^2`` turns the wing into a large
+    negative contribution, so the out-of-the-money price is clipped at 0.
+    On a uniform log-strike grid the trapezium rule overstates Black's total
+    variance by ``dk^2 / 6``.
+    """
+    strikes = np.exp(k)
+    put = call - (1.0 - strikes)
+    otm = np.maximum(np.where(strikes < 1.0, put, call), 0.0)
+    integrand = 2.0 * otm * np.exp(-k)
+    bits = (integrand[:, 1:] + integrand[:, :-1]) * np.diff(k) / 2.0
+    dk = float(k[1] - k[0])
+    return bits.sum(axis=1) - dk**2 / 6.0
+
+
+def test_rough_surface_variance_swap_matches_i2_within_mc_error():
+    """H = 0.1, eight paths, clock 0.5, maturity 1, 4,096 copies.
+
+    The flat anchor ``v_t (T - t)`` misses the variance swap by a median
+    relative gap of 0.258 on the last expiry. The surface log contract
+    ``-2 E[log Z]`` stays inside 4 standard errors of that swap on every
+    expiry. The largest absolute z-score on this draw is 1.50. The
+    out-of-the-money strip, on log-moneyness from -0.8 to 0.8, stays inside
+    4 standard errors of the same swap on the last expiry. Its largest
+    absolute z-score is 1.31.
+    """
+    pytest.importorskip("roughvol")
+    smile = np.linspace(-0.8, 0.8, 161)
+    model = _model(H=0.1, n_mc=4096, smile_k=smile)
+    times = np.linspace(0.0, 1.0, 17)
+    paths = model.simulate_market(8, times, seed=run_seed(21, 2))
+    clock = 8
+    batch = model.surface_at(paths, clock)
+    contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
+    i2 = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
+    gap = np.abs(batch.total_variance - i2)
+    assert np.all(gap <= 4.0 * batch.total_variance_se + 1e-8)
+    last = i2[:, -1]
+    flat = paths.state["v"][:, clock] * (float(batch.T[-1]) - float(times[clock]))
+    assert float(np.median(np.abs(flat - last) / last)) > 0.20
+    strip = _otm_variance(batch.call[:, -1, :], batch.k)
+    assert np.all(np.abs(strip - last) <= 4.0 * batch.total_variance_se[:, -1])

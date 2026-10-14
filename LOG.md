@@ -2,7 +2,23 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo under that mixture, and at `H = 1/2` the smile moves with `nu`. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Review: the forward curve inside the surface
+
+At `H` other than `1/2`, `surface_at` multiplies the regime-conditional forward curve `xi_t(u)` by a fresh hybrid factor and mixes the calls with `regime_prob`. The past Volterra integral is in that curve. A Black path with the same shocks, at the left forward variance, is the control. `n_mc` defaults to 1024. `stderr` is the residual standard deviation over `sqrt(n_mc)`.
+
+Eight paths, `H = 0.1`, clock 0.5, maturity 1, 4,096 copies, seed entropy 21, test split. The flat anchor `v_t (T - t)` misses the variance swap by a median relative gap of 0.258. The surface log contract `-2 E[log Z]` stays inside 4 standard errors of that swap on every expiry. The largest absolute z-score is 1.50. The out-of-the-money strip, log-moneyness from -0.8 to 0.8, stays inside 4 standard errors on the last expiry. Its largest absolute z-score is 1.31.
+
+One path, `v = 0.04`, `nu = 1.1`, `H = 1/2`, 32 steps, expiry 1, 1,024 copies, seed entropy 7, test split. The at-the-money relative standard error is 0.0186.
+
+The smile sample from the previous entry, with the control. The implied-vol span at `nu = 0.01` is 0.000391. At `nu = 1.5` the span is 0.04387, with implied vol 0.2117 at log-moneyness -0.2 and 0.1681 at 0.2.
+
+Six hundred paths, clock index 10, 1,024 copies. The at-the-money call's modal accuracy is 0.6600, a lift of 0.1217 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217.
+
+Corey ratified the held-out SANOS bar on 14 Oct 2026: SANOS held-out in-spread at least raw SVI held-out in-spread, with zero static-arbitrage violations.
+
+**Hypothesis:** the z-score of this log contract against the variance swap at `H = 0.1` stays inside 4 when the step count rises from 16 to 64. The quantity to report is the maximum absolute z-score, next to the 1.50 measured here.
 
 ## 2026-10-14 Review: the Monte Carlo smile
 
