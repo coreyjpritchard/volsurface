@@ -64,12 +64,13 @@ class SupportsSimulate(Protocol):
 
 @runtime_checkable
 class SupportsCharFunc(Protocol):
-    """Characteristic function of ``X_T = log(S_T / F_T)``.
+    """Characteristic function of ``X_T = log(F_T / F(T))``.
 
-    ``char_func`` returns ``E[exp(i u X_T)]``. There is no extra drift term:
-    the mean of ``X_T`` is already inside the function (for Black-Scholes it
-    is ``-sigma^2 T / 2``). ``cumulants`` returns ``(c1, c2, c4)`` of ``X_T``,
-    which a cosine expansion uses to place its grid.
+    ``F(T)`` is today's forward for maturity ``T``. ``F_T`` is the random
+    terminal forward. ``char_func`` returns ``E[exp(i u X_T)]``. There is no
+    extra drift term: the mean of ``X_T`` is already inside the function (for
+    Black-Scholes it is ``-sigma^2 T / 2``). ``cumulants`` returns
+    ``(c1, c2, c4)`` of ``X_T``, which a cosine expansion uses to place its grid.
     """
 
     def char_func(self, u: np.ndarray, T: float, *, state: State | None = None) -> np.ndarray: ...

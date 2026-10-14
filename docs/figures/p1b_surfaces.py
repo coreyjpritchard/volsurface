@@ -2,9 +2,11 @@
 
 The chain is ``data/snapshots/SPY_2026-10-07.parquet``: last trades, empty
 bid and ask. The loader marks SPY American and physical. The expiry in the
-figure is 30 September 2027, about 0.98 year, thirty strikes. It is the
-slice whose natural cubic, continued past the lowest quoted strike, crosses
-through zero implied volatility.
+top two panels is the last one in the file, chosen because the natural cubic,
+continued past the lowest quoted strike, crosses through zero implied
+volatility. It is not chosen because SVI passes there. The count of slices
+with ``g < 0`` on ``k`` in ``[-0.5, 0.5]`` is computed in this script. The
+bottom panel is the fitted slice with the smallest such ``g``.
 
 Run from the repository root:
 
@@ -27,7 +29,7 @@ from volsurface import chains
 from volsurface.arbitrage import check_surface
 from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import ArbTol, Curves, Domain
-from volsurface.fit.svi import fit_raw_svi
+from volsurface.fit.svi import SVIFitter, fit_raw_svi
 from volsurface.surface.linear import linear_surface
 from volsurface.surface.spline import spline_surface
 from volsurface.surface.svi import SVISurface
@@ -62,6 +64,23 @@ def main() -> None:
     raw, residual = fit_raw_svi(k_obs, iv_obs**2 * T)
     svi = SVISurface([(T, raw)], market, Domain(T, T, float(k_obs[0]), float(k_obs[-1])))
 
+    # Same objective as the fitter. SPY has no spreads, so the weights are 1.
+    fitted = SVIFitter().fit(data)
+    k_band = np.linspace(-0.5, 0.5, 401)
+    n_slices = len(fitted.surface.pillars)
+    n_fail = 0
+    worst = None
+    for maturity, slice_ in fitted.surface.pillars:
+        g_band = np.asarray(slice_.g(k_band), dtype=float)
+        g_min = float(np.nanmin(g_band))
+        if g_min < 0.0:
+            n_fail += 1
+        if worst is None or g_min < worst[0]:
+            worst = (g_min, maturity, g_band)
+    this_g = float(np.nanmin(np.asarray(raw.g(k_band), dtype=float)))
+    this_passes = this_g >= 0.0
+    n_pass = n_slices - n_fail
+
     # A little past each end, so the cubic is no longer an interpolant.
     pad = 0.12
     wide = np.linspace(k_obs[0] - pad, k_obs[-1] + pad, 361)
@@ -83,7 +102,7 @@ def main() -> None:
     inside_neg = int(np.sum((density_spline < 0.0) & inside & np.isfinite(density_spline)))
     inside_n = int(np.sum(inside & np.isfinite(density_spline)))
 
-    fig, axes = plt.subplots(2, 1, figsize=(7.4, 7.2), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(7.4, 10.2), sharex=True)
 
     ax = axes[0]
     ax.axvspan(wide[0], k_obs[0], color="0.85", label="past the quotes")
@@ -106,7 +125,8 @@ def main() -> None:
     ax.set_ylim(-40, 55)
     ax.set_ylabel("implied volatility (%)")
     ax.set_title(
-        f"SPY {expiry.date()}, T = {T:.2f}y. Last trades, not bids. American."
+        f"Last expiry in the file, {expiry.date()}, T = {T:.2f}y, "
+        f"chosen because the cubic wing crosses zero. Last trades, American."
     )
     ax.legend(frameon=False, fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.3)
@@ -132,7 +152,31 @@ def main() -> None:
     ax.set_ylim(lo, hi)
     ax.set_xlabel("log-moneyness k = log(K / F)")
     ax.set_ylabel("density of log(F_T / F)")
-    ax.set_title("A negative density is a butterfly. SVI stays positive on this slice.")
+    if this_passes:
+        svi_line = (
+            f"SVI: g<0 on {n_fail}/{n_slices} slices for k in [-0.5, 0.5]; "
+            f"this is one of the {n_pass} that pass."
+        )
+    else:
+        svi_line = (
+            f"SVI: g<0 on {n_fail}/{n_slices} slices for k in [-0.5, 0.5]; "
+            "this plotted expiry fails too."
+        )
+    ax.set_title(svi_line + f" In-sample knot RMS {100 * knot_gap:.2f} vol points.")
+    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[2]
+    g_min, worst_T, g_band = worst
+    ax.axhline(0.0, color="0.4", lw=0.6)
+    ax.plot(k_band, g_band, color="C3", label="worst fitted slice")
+    ax.plot(k_band, raw.g(k_band), color="C2", label="expiry in the panels above")
+    ax.set_xlabel("log-moneyness k = log(K / F)")
+    ax.set_ylabel("Durrleman g")
+    ax.set_title(
+        f"Worst slice on this grid: T = {worst_T:.4f}y, min g = {g_min:.3f}. "
+        "The fit does not penalise g."
+    )
     ax.legend(frameon=False, fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.3)
 
@@ -145,7 +189,9 @@ def main() -> None:
         f"spline_wing_iv_min={wing_min:.3f} "
         f"spline_density_negative_inside={inside_neg}/{inside_n} "
         f"butterfly_nodes={int(butterfly.sum())}/{wide.size} "
-        f"svi_density_min={float(np.nanmin(density_svi)):.4f}"
+        f"svi_density_min={float(np.nanmin(density_svi)):.4f} "
+        f"g_fail={n_fail}/{n_slices} this_g_min={this_g:.4f} "
+        f"worst_T={worst_T:.4f} worst_g={g_min:.4f}"
     )
 
 

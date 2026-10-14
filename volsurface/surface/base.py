@@ -1,9 +1,11 @@
 """Mixin that turns a normalised call into implied vol, density, and local variance.
 
 A surface overrides any of these when it has an analytic form. The defaults are
-central differences with step ``1e-4`` in ``k`` and in ``T``. That step is a
-choice of the mixin, not a property of the interpolator, which is why SVI and
-the spline do not use it.
+central differences: step ``1e-4`` for a first derivative and ``1e-3`` for a
+second derivative. A second difference at ``1e-4`` is lost in round-off (about
+``1e-8`` on a price of order 1), which is larger than the checker's default
+tolerance. The step is a choice of the mixin, not a property of the
+interpolator, which is why SVI and the spline do not use it.
 """
 
 from __future__ import annotations
@@ -34,14 +36,25 @@ class SurfaceMixin:
         return t_out[:, None] | k_out[None, :]
 
     def iv(self, T, k) -> np.ndarray:
-        """Black implied volatility of the normalised call. NaN if it does not exist."""
+        """Black implied volatility of the out-of-the-money option. NaN if it does not exist.
+
+        For ``k >= 0`` the call is out of the money and is inverted as a call.
+        For ``k < 0`` the put is out of the money. Its normalised price is
+        ``C - (1 - exp(k))``, and that is what gets inverted. Inverting the
+        in-the-money call instead subtracts two numbers that are both near the
+        forward, and the time value disappears into the subtraction.
+        """
         T, k = as_axes(T, k)
         normalised = self.call(T, k)
         F = np.asarray(self.market.F(T), dtype=float).reshape(T.shape)
         df = np.asarray(self.market.df(T), dtype=float).reshape(T.shape)
-        cash = normalised * df[:, None] * F[:, None]
         strikes = F[:, None] * np.exp(k)[None, :]
-        return bs.implied_vol(cash, F[:, None], strikes, T[:, None], df[:, None], "call")
+        put = normalised - (1.0 - np.exp(k)[None, :])
+        scale = df[:, None] * F[:, None]
+        otm_call = k >= 0.0
+        cash = np.where(otm_call[None, :], normalised, put) * scale
+        kind = np.where(otm_call, "call", "put")
+        return bs.implied_vol(cash, F[:, None], strikes, T[:, None], df[:, None], kind)
 
     def total_variance(self, T, k) -> np.ndarray:
         """``iv(T, k)^2 * T``. NaN where the implied vol is."""
@@ -52,8 +65,13 @@ class SurfaceMixin:
         """Central difference of ``call`` in ``k``."""
         return (self.call(T, k + h) - self.call(T, k - h)) / (2.0 * h)
 
-    def d2call_dk2(self, T, k, h: float = 1e-4) -> np.ndarray:
-        """Central second difference of ``call`` in ``k``."""
+    def d2call_dk2(self, T, k, h: float = 1e-3) -> np.ndarray:
+        """Central second difference of ``call`` in ``k``.
+
+        The default step is ``1e-3``. At ``1e-4`` the second difference of a
+        smooth call is comparable to round-off, and a flat Black surface then
+        looks like a butterfly.
+        """
         return (self.call(T, k + h) - 2.0 * self.call(T, k) + self.call(T, k - h)) / h**2
 
     def dcall_dT(self, T, k, h: float = 1e-4) -> np.ndarray:
@@ -86,11 +104,13 @@ class SurfaceMixin:
         w_up = self.total_variance(T + h, k_axis)
         w_down = self.total_variance(np.maximum(T - h, h * 0.5), k_axis)
         w_k = (self.total_variance(T, k_axis + h) - self.total_variance(T, k_axis - h)) / (2 * h)
+        # Second difference of total variance uses the wider step. See d2call_dk2.
+        h2 = 1e-3
         w_kk = (
-            self.total_variance(T, k_axis + h)
+            self.total_variance(T, k_axis + h2)
             - 2.0 * w
-            + self.total_variance(T, k_axis - h)
-        ) / h**2
+            + self.total_variance(T, k_axis - h2)
+        ) / h2**2
         # dw/dT at fixed k. The down step may have been clipped near 0.
         dt = (T + h) - np.maximum(T - h, h * 0.5)
         w_T = (w_up - w_down) / dt[:, None]

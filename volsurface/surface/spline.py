@@ -189,7 +189,7 @@ class SplineSurface(SurfaceMixin):
 
 
 def spline_surface(quotes: pd.DataFrame, market: Curves) -> SplineSurface:
-    """Spline each expiry's implied vol. Needs a finite ``iv`` column and three strikes."""
+    """Spline each expiry's implied vol. Needs a finite ``iv`` column and four strikes."""
     pillars = []
     for _, group in quotes.groupby("expiry", sort=True):
         group = group.dropna(subset=["iv"]).drop_duplicates("k").sort_values("k")

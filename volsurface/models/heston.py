@@ -64,7 +64,9 @@ class Heston:
         return heston_f.price(F, K, T, v0, self.kappa, self.theta, self.xi, self.rho, df, kind)
 
     def char_func(self, u, T: float, *, state: State | None = None) -> np.ndarray:
-        """``E[exp(i u log(F_T / F))]`` in the trap-free Gatheral form.
+        """``E[exp(i u log(F_T / F(T)))]`` in the trap-free Gatheral form.
+
+        ``F(T)`` is today's forward. ``F_T`` is the random terminal forward.
 
         ``u`` may be complex. The branch is the one Albrecher, Mayer, Schoutens
         and Tistaert (2007) show stays continuous: see :func:`volsurface.heston.char_func`.
@@ -73,7 +75,7 @@ class Heston:
         return heston_f.char_func(u, float(T), v0, self.kappa, self.theta, self.xi, self.rho)
 
     def cumulants(self, T: float, *, state: State | None = None) -> tuple[float, float, float]:
-        """``(c1, c2, c4)`` of ``X_T = log(F_T / F)``.
+        """``(c1, c2, c4)`` of ``X_T = log(F_T / F(T))``.
 
         The variance is an autonomous square-root process, so
 
@@ -84,8 +86,10 @@ class Heston:
         ``c2`` and ``c4`` are derivatives of the cumulant generating function
         ``K(t) = log E[exp(t X_T)] = log phi(-i t)`` at ``t = 0``. They are
         read from a degree-8 polynomial on the stencil ``t = -4h, ..., 4h``
-        with ``h = 0.01``, which matches the closed form for ``c1`` and is
-        stable for ``c2``. A cosine expansion only needs them to place a grid.
+        with ``h = 0.01``. That stencil reproduces the closed form for ``c1``.
+        A second stencil at ``h = 0.02``, and a central difference, are the
+        checks on ``c2`` and ``c4`` (see the protocol test). A cosine expansion
+        only needs the numbers to place a grid.
         """
         v0 = self._variance(state)
         kappa, theta = self.kappa, self.theta
