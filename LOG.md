@@ -2,7 +2,7 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads log realised variance from the paths. Any other `H` calls `volterra_components` and keeps the near field. The SANOS leave-strikes-out bar is held-out in-spread at least raw SVI, with zero violations, ratified 14 Oct 2026. **Next:** the preregistration is still to freeze before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance, and its hit rate sits near the unconditional base rate. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field, so `E[v]` matches `xi0` at `H = 0.1` inside the z-rule. Corey ratified the SANOS held-out bar on 14 Oct 2026. The preregistration pins `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 
@@ -29,6 +29,20 @@ One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies,
 Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
 
 **Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Review: the near field, the filter band, the draft pins
+
+`H` other than `1/2` calls `volterra_components` on rough-volatility `37eb89ba`. The return is `(dW, I_1, ..., I_kappa)`, shape `(n_paths, n_steps, kappa + 1)`, `kappa = 1` on the plugin default. Each step's vector is multiplied by the `nu` in force on that step. `I_k` lands at lag `k`. The tail uses `power_kernel_weights`, whose first `kappa` entries are 0. The compensator stays the exact one, `nu^2 t^{2H} / 2` when `nu` is constant. `dW` alone is not used. The Cholesky stays in the plugin.
+
+`H = 0.1`, regimes `nu` in `{0.4, 1.1}`, eight runs, 2,000 paths, terminal time 1, 11 times, seed entropies 70 to 77, test split. The z-score of `E[Z] - 1` has maximum absolute value `2.493` and mean `-0.137`. The z-score of `E[v] - xi0` has maximum absolute value `2.305` and mean `-0.388`. Both pass the z-rule. At 8 runs the bound on the maximum absolute z-score is `3.836` and the bound on the mean is `1.237`.
+
+The one-step log-RV emission has one mean in both regimes, `log(xi0) - gamma - log(2)`. `pi^2 / 2` is about `4.93`, and `nu^2` is `0.16` and `1.21`, so the filter cannot see the regime. A 5-step window and a product of the return with the change in log realised variance, on 2,000 paths, stayed within about `0.02` of the base rate. The observation is unchanged. Six hundred paths, clock index 10, seed entropy 12, test split: base rate `0.5383`, price-bin modal accuracy `0.6600` (lift `0.1217`, band `0.05` to `0.35`), filter hit rate `0.4783` (lift `-0.0600`, band `-0.10` to `0.10`).
+
+Corey has ratified the held-out bar in DESIGN section 18: SANOS held-out in-spread at least raw SVI, with zero static-arbitrage violations.
+
+`experiments/regime/PREREG.md` now pins `H = 0.1`, `nu_L = 1.5`, primary ratio `2` so `nu_H = 3`, entropic `lambda = 1`, 5 network seeds and 20,000 test paths, and a Bonferroni lower bound at level `1 - 0.05/3` on the three gate contrasts. H2 is the difference of premium-normalised gaps, premium being the time-0 model price. The file says it is a draft and is not frozen.
+
+**Hypothesis:** the log-RV filter's lift over the base rate stays inside `[-0.10, 0.10]` when the paths use the preregistered `nu` of `1.5` and `3` at `H = 0.1`. The quantity to report is that lift, next to the `-0.0600` measured here at `nu` of `0.4` and `1.1`.
 
 ## 2026-10-14 Review: increments, the trader's filter, held-out strikes
 

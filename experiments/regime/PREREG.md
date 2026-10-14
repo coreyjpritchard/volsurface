@@ -32,25 +32,54 @@ Two benchmarks sit beside those policies. One is the Black-Scholes delta
 at `sqrt(v_t)`. The other is the rBergomi model delta, used where the
 pilot can afford it.
 
+## Fixed settings
+
+These are settings, not measurements.
+
+The generative Hurst index is `H = 0.1`. That is the default of the rough
+Bergomi plugin. It is not the SPX skew-route value 0.167.
+
+The low-regime vol of vol is `nu_L = 1.5`, the same plugin's default
+`nu`. The primary ratio `nu_H / nu_L` is 2, so `nu_H = 3`. H1, H2 and H3
+use this one specification.
+
+The primary risk is entropic risk at `lambda = 1`. For a sample of P&L
+the risk is `(1/lambda) log E[exp(-lambda X)]` with `lambda = 1`. That is
+the deep-hedging default. CVaR at 95 percent is a report, not the gate.
+
 ## Metrics
 
-The primary risk is entropic risk at the deep-hedging default lambda.
-That default is the number the hedger ships. This draft does not write a
-different lambda. The same paths also report CVaR at 95 percent, the mean,
+The primary risk is the entropic risk in the fixed settings, at
+`lambda = 1`. The same paths also report CVaR at 95 percent, the mean,
 the standard deviation, turnover, and cost.
 
 Test paths are paired across policies. Uncertainty is a hierarchical
 bootstrap over paths and over network seeds.
 
+## Multiple testing
+
+H1, H2 and H3 are one family of three contrasts. A contrast counts as met
+only when its lower confidence bound at level `1 - 0.05/3` is above 0.
+That is a Bonferroni correction at family-wise level 0.05, one-sided.
+The ratio grid, the two durations, and the conditional L2 sentence in H3
+are outside the family. They are not extra gates.
+
 ## H1. Transfer cost
 
-`Gap(L -> H) > 0` for L1 hedged with I1. The bar is a lower 95 percent
+`Gap(L -> H) > 0` for L1 hedged with I1. The bar is the family lower
 bound above 0.
 
 ## H2. Vol-of-vol content
 
-The premium-normalised `Gap(L -> H)` is larger for L2 than for L1. The
-bar is a lower 95 percent bound on that difference above 0.
+The premium of a liability is its time-0 model price, one number for that
+liability, not a number per path. The premium-normalised gap is
+`Gap(L -> H)` divided by that premium. H2 is
+
+`Gap(L2 -> H) / premium(L2) - Gap(L1 -> H) / premium(L1) > 0`.
+
+L1 is the 30-day at-the-money call. L2 is the forward-start at-the-money
+straddle that starts in 15 days and expires in 45 days. The bar is the
+family lower bound on that difference, above 0.
 
 ## H3. Hedgeability
 
@@ -59,18 +88,20 @@ price is the mixture of the regime-conditional variance swaps, weighted
 by the filtered regime probabilities. It is not the variance swap
 conditioned on the true regime. `surface_at` uses the same mixture.
 
-For L1, adding I2 reduces `Gap(L -> H)`. The variance swap hedges the
-level of variance. For L2, the reduction from I2 is smaller than the
-reduction from I3, if the surrogate validation error is under its bar.
-The directions are fixed.
+The gate contrast is the L1 reduction: `Gap` with I1 minus `Gap` with I2,
+for L1, above 0. The variance swap hedges the level of variance. The bar
+is the family lower bound above 0. For L2, the reduction from I2 is
+smaller than the reduction from I3, if the surrogate validation error is
+under its bar. That L2 sentence is reported when I3 is eligible. It is
+not a fourth member of the family.
 
 ## Sample size
 
-The pilot uses at least 5 network seeds and 20,000 test paths. Before the
-main run it reports the minimum detectable effect at 80 percent power. If
-that effect is larger than 10 percent of `pi_H`'s risk on the high-`nu`
-regime, the pilot raises the path count or the seed count before the main
-run.
+The pilot uses 5 network seeds and 20,000 test paths. Before the main run
+it reports the minimum detectable effect at 80 percent power. If that
+effect is larger than 10 percent of `pi_H`'s risk on the high-`nu`
+regime, the pilot raises the path count or the seed count and writes the
+new counts down before the main run.
 
 ## Controls
 
@@ -85,18 +116,25 @@ is the opposite of the sign used in testing. The gap is clearly above 0.
 ## Design knobs, not results
 
 Regime durations of 5 times maturity and of 0.5 times maturity are a
-design axis. The ratio `nu_H / nu_L` is taken from the grid `{1, 1.5, 2}`.
-Those values are settings. They are not measurements.
+design axis. The ratio grid `{1, 1.5, 2}` is a sensitivity around the
+primary ratio 2. Those values are settings. They are not measurements,
+and they are outside the family of three.
 
 ## Not the gate
 
-H4 is exploratory. The Hamilton filter is run on log realised variance of
-the simulated paths, `log((d log Z)^2 / dt)`. It is not run on a synthetic
-observation drawn from the latent regime. The fraction of variance that
-filter explains is the exploratory summary. Prices, including the I2
-variance swap and `surface_at`, do not determine the latent regime: a
-price bin contains more than one regime. H5, a link between the filter
-and the toy dynamic surface, is exploratory. Neither is a hypothesis this
-draft freezes. Statements about DYSANOS that were the motivation for H5
-remain UNVERIFIED, and the dynamic surface in this repository is a toy
-rather than a v3 baseline.
+H4 is exploratory. The Hamilton filter is run on one-step log realised
+variance of the simulated paths, `log((d log Z)^2 / dt)`. It is not run
+on a synthetic observation drawn from the latent regime. The emission
+mean is the same in every regime, because the return's variance is the
+spot variance and not `nu`. The variance of `log(chi^2_1)` is `pi^2 / 2`,
+which dwarfs the gap in `nu^2` between the two regimes, so this
+observation does not separate them. A trailing window that still sits
+inside one regime visit has the same problem, and a longer window mixes
+the regimes. The exploratory summary is the filter's hit rate minus the
+unconditional base rate, the larger marginal frequency of the latent
+regime. Prices, including the I2 variance swap and `surface_at`, do not
+determine the latent regime: a price bin contains more than one regime.
+H5, a link between the filter and the toy dynamic surface, is exploratory.
+Neither is a hypothesis this draft freezes. Statements about DYSANOS that
+were the motivation for H5 remain UNVERIFIED, and the dynamic surface in
+this repository is a toy rather than a v3 baseline.
