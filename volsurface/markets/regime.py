@@ -20,28 +20,35 @@ with ``v_0 = xi0``. Constant ``nu`` reduces to the compensator
 ``nu^2 t^{2H} / 2``.
 
 ``H = 1/2`` is drawn here, as Brownian increments. Any other ``H`` calls
-``volterra_increments`` on the rBergomi plugin. That method returns the
-driving Wiener increments. This module applies the kernel weights itself
-and puts ``nu`` inside the sum. A missing plugin, or a plugin without that
-method, raises. This file does not simulate the hybrid scheme, and a
-stand-in is not labelled rBergomi.
+``volterra_components`` on the rBergomi plugin. That method returns the
+hybrid-scheme components ``(dW, I_1, ..., I_kappa)`` on each step. This
+module multiplies the whole vector of a step by the ``nu`` in force on
+that step, then places ``I_k`` at lag ``k`` and the tail with roughvol's
+power-kernel weights. ``dW`` alone is the covariance regression of the
+kernel onto the Wiener increment. At ``H = 0.1`` that regression keeps
+about ``2H / (H + 1/2)^2 = 5/9`` of ``Var(I_1)``, and ``E[v]`` falls short
+of ``xi0``. A missing plugin, or a plugin without ``volterra_components``,
+raises. This file does not simulate the hybrid scheme, and a stand-in is
+not labelled rBergomi.
 
-The Volterra interface this module calls, which roughvol does not yet
-provide:
+The interface:
 
-    volterra_increments(n_paths, times, *, seed, H) -> dW
+    volterra_components(n_paths, times, *, seed, H) -> components
 
-``times`` has shape ``(n_steps + 1,)``, starts at 0, and is strictly
-increasing. ``dW`` has shape ``(n_paths, n_steps)``. Entry ``[i, k]`` is
-``W(times[k + 1]) - W(times[k])`` for path ``i``, with variance equal to
-the step length. ``seed`` is already the volatility child. The draw is the
-one ``hybrid_scheme_rng`` makes from ``generator(seed)``: do not spawn
-another child. On a uniform grid that is the ``dW`` behind
-``RoughBergomi.simulate`` at this plugin's ``kappa``. Returning only the
-summed factor ``Y_t = int (t - s)^{H - 1/2} dW_s`` is not enough, because
-``nu`` has to sit inside the integral. The kernel weights are the
-antiderivative already in :func:`_kernel_weights`, the same weights as
-``roughvol``'s forward-curve step weights. They do not need to be returned.
+``times`` has shape ``(n_steps + 1,)``, starts at 0, and is equally spaced.
+``components`` has shape ``(n_paths, n_steps, kappa + 1)``. Last-axis index
+0 is ``dW``, with variance equal to the step length. Index ``k >= 1`` is
+``I_k``, the exact integral of the power kernel at lag ``k``. ``seed`` is
+already the volatility child. The draw is the one ``hybrid_scheme_rng``
+makes from ``generator(seed)``: do not spawn another child. ``kappa`` is
+the plugin's, 1 or 2. The kernel weights are not returned. The tail uses
+``roughvol.volterra.power_kernel_weights`` for this ``H``, the step count,
+the horizon and ``kappa``. Its first ``kappa`` entries are 0. The
+contribution of step ``j`` that lands at time index ``j + k`` is
+``nu_j * components[:, j, k]`` when ``k <= kappa``, and
+``nu_j * w[k - 1] * components[:, j, 0]`` when ``k > kappa``. Column 0 of
+the sum is 0. The compensator stays the exact one,
+``sum_j nu_j^2 ((t - t_j)^{2H} - (t - t_{j+1})^{2H}) / 2``.
 
 Every price is computed under the trader's information. The forward
 variance is the mixture of the regime-conditional curves, weighted by the
@@ -52,16 +59,24 @@ At ``H = 1/2`` each regime-conditional expectation equals
 ``surface_at`` prices each regime's Black call and mixes those prices with
 ``regime_prob``.
 
-The Hamilton filter reads log realised variance of the simulated spot,
+The Hamilton filter reads one-step log realised variance of the simulated
+spot,
 
     y_i = log( (log Z_i - log Z_{i-1})^2 / dt_i ).
 
 There is no observation at ``t = 0``, and the filter probability there is
-``p0``. The emission is Gaussian, the same mean in every regime,
-``log(xi0) - gamma - log(2)``, which is ``E[log(xi0 * chi^2_1)]``. The
-variance in regime ``j`` is ``pi^2 / 2 + nu_j^2``, the variance of
-``log(chi^2_1)`` plus a stated ``nu_j^2`` term. A price from this
-information does not determine ``r_t``.
+``p0``. The emission is Gaussian. The mean is the same in every regime,
+``log(xi0) - gamma - log(2)``, which is ``E[log(xi0 * chi^2_1)]``, because
+the return's variance is the spot variance and not ``nu``. The variance in
+regime ``j`` is ``pi^2 / 2 + nu_j^2``. ``pi^2 / 2`` is about 4.93. For
+``nu`` of 0.4 and 1.1 the extra term is 0.16 and 1.21, so the two
+emissions are close and the filter does not beat the unconditional base
+rate. A trailing window of the same series was tried. The chi-squared
+noise in a window that still sits inside one regime visit dominates
+``nu^2`` times the window length, and the hit rate stays near that base
+rate. The observation is therefore still the one-step log realised
+variance. A price from this information does not determine ``r_t``. The
+test is a two-sided band on the hit rate minus the base rate.
 
 Whether ``Z`` stays a martingale when ``nu`` switches is a hypothesis.
 The log-Euler step freezes ``v`` at the left of the interval, so each
@@ -76,7 +91,7 @@ generators, so draws in one do not move another.
   is computed from ``Z``. This stream does not draw it.
 - vol: every Brownian increment, in time order, when ``H = 1/2``. When
   ``H`` is not 1/2 the plugin consumes this child inside
-  ``volterra_increments`` and this module draws nothing from it.
+  ``volterra_components`` and this module draws nothing from it.
 - spot: one normal per path per step, the shock orthogonal to ``dW``.
   ``dW_spot = rho dW + sqrt(1 - rho^2) dW_perp``.
 - surrogate: spawned and not drawn.
@@ -159,7 +174,12 @@ class RegimeSwitchingBergomi:
         n_regimes = nus.size
         regime = np.empty((n_paths, grid.size), dtype=np.int8)
         regime[:, 0] = _categorical(regime_rng, np.broadcast_to(p0, (n_paths, n_regimes)).copy())
-        dW, weights = self._increments(n_paths, grid, streams["vol"])
+        if self.H == 0.5:
+            dW = np.diff(_brownian(n_paths, grid, streams["vol"]), axis=1)
+            components = None
+        else:
+            components = self._rough_components(n_paths, grid, streams["vol"])
+            dW = np.asarray(components[..., 0], dtype=float)
         steps: list[np.ndarray] = []
         for i in range(1, grid.size):
             dt = float(grid[i] - grid[i - 1])
@@ -167,7 +187,11 @@ class RegimeSwitchingBergomi:
             steps.append(step)
             regime[:, i] = _categorical(regime_rng, step[regime[:, i - 1]])
         nu_step = nus[regime[:, :-1]]
-        v = increment_variance(self.H, nu_step, self.xi0, grid, dW, weights)
+        if components is None:
+            weights = _kernel_weights(0.5, grid, grid)
+            v = increment_variance(self.H, nu_step, self.xi0, grid, dW, weights)
+        else:
+            v = hybrid_increment_variance(self.H, nu_step, self.xi0, grid, components)
         Z = np.ones((n_paths, grid.size))
         rho = self.rho
         orthogonal = math.sqrt(max(0.0, 1.0 - rho * rho))
@@ -282,34 +306,37 @@ class RegimeSwitchingBergomi:
         variances = np.full(nus.shape, _LOG_CHI2_VAR) + nus**2 + self.obs_sigma**2
         return means, variances
 
-    def _increments(self, n_paths: int, times: np.ndarray, seed):
-        """Wiener increments and kernel weights. ``H = 1/2`` does not call the plugin."""
-        if self.H == 0.5:
-            dW = np.diff(_brownian(n_paths, times, seed), axis=1)
-            return dW, _kernel_weights(0.5, times, times)
+    def _rough_components(self, n_paths: int, times: np.ndarray, seed) -> np.ndarray:
+        """Hybrid components ``(dW, I_1, ..., I_kappa)``. ``H = 1/2`` does not call this."""
         try:
             plugin = create("rbergomi")
         except KeyError as exc:
             raise RuntimeError(
-                "H other than 1/2 uses roughvol's volterra_increments, and that plugin "
+                "H other than 1/2 uses roughvol's volterra_components, and that plugin "
                 "is not installed. This module does not simulate the hybrid scheme."
             ) from exc
-        if not hasattr(plugin, "volterra_increments"):
+        if not hasattr(plugin, "volterra_components"):
             raise RuntimeError(
-                "the rbergomi plugin has no volterra_increments. "
-                "This module needs the Wiener increments dW, not a summed driver Y, "
-                "and it does not simulate the hybrid scheme."
+                "the rbergomi plugin has no volterra_components. "
+                "dW alone drops the near field I_1, ..., I_kappa, so E[v] falls short "
+                "of xi0. This module does not simulate the hybrid scheme."
             )
         self._plugin = plugin
-        dW = np.asarray(
-            plugin.volterra_increments(n_paths, times, seed=seed, H=self.H), dtype=float
+        components = np.asarray(
+            plugin.volterra_components(n_paths, times, seed=seed, H=self.H), dtype=float
         )
-        if dW.shape != (n_paths, times.size - 1):
+        n_steps = times.size - 1
+        if components.ndim != 3 or components.shape[:2] != (n_paths, n_steps):
             raise ValueError(
-                f"volterra_increments returned shape {dW.shape}, "
-                f"expected {(n_paths, times.size - 1)}"
+                f"volterra_components returned shape {components.shape}, "
+                f"expected {(n_paths, n_steps, 'kappa + 1')}"
             )
-        return dW, _kernel_weights(self.H, times, times)
+        if components.shape[2] < 2:
+            raise ValueError(
+                "volterra_components must include the near field I_1, ..., I_kappa. "
+                "dW alone keeps only part of Var(Y), and E[v] falls short of xi0."
+            )
+        return components
 
 
 def _is_roughvol(plugin) -> bool:
@@ -346,6 +373,24 @@ def _brownian(n_paths: int, times: np.ndarray, seed) -> np.ndarray:
     return Y
 
 
+def _step_compensator(H: float, nu_step: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """Exact compensator, shape ``(m, n_times)``.
+
+    Entry ``(path, i)`` is ``sum_j nu_j^2 ((t_i - t_j)^{2H} - (t_i - t_{j+1})^{2H}) / 2``
+    over steps ``j`` that finish at or before ``t_i``. Constant ``nu`` reduces
+    to ``nu^2 t^{2H} / 2``. This is the variance of the integral, not the
+    hybrid scheme's sample variance.
+    """
+    grid = np.asarray(times, dtype=float)
+    nu = np.asarray(nu_step, dtype=float)
+    two_h = 2.0 * float(H)
+    left = grid[None, :] - grid[:-1, None]
+    right = grid[None, :] - grid[1:, None]
+    gap = np.maximum(left, 0.0) ** two_h - np.maximum(right, 0.0) ** two_h
+    gap = np.where(right >= -1e-14, gap, 0.0)
+    return (0.5 * nu**2) @ gap
+
+
 def increment_variance(
     H: float,
     nu_step: np.ndarray,
@@ -360,6 +405,9 @@ def increment_variance(
     each step, the regime at the left endpoint. ``dW`` has the same shape.
     ``weights`` has shape ``(n_steps, n_times)``. A switch changes later
     rows of ``nu_step`` and leaves the variance already accumulated as it was.
+    At ``H`` other than 1/2 the market uses :func:`hybrid_increment_variance`,
+    because these weights are the regression of the kernel onto ``dW`` and
+    they drop the near-field variance.
     """
     hurst = float(H)
     increments = np.asarray(dW, dtype=float)
@@ -376,19 +424,90 @@ def increment_variance(
             f"weights shape {kernel.shape} does not match times {grid.size} and {n_steps} steps"
         )
     scale = math.sqrt(2.0 * hurst)
-    two_h = 2.0 * hurst
     level = float(xi0)
     # weight[k, i] is already 0 once step k finishes after tenor i, so the
     # matrix product only accumulates increments that have happened.
     integral = (nu * increments) @ kernel
-    left = grid[None, :] - grid[:-1, None]
-    right = grid[None, :] - grid[1:, None]
-    gap = np.maximum(left, 0.0) ** two_h - np.maximum(right, 0.0) ** two_h
-    gap = np.where(right >= -1e-14, gap, 0.0)
-    compensator = (0.5 * nu**2) @ gap
-    variance = level * np.exp(scale * integral - compensator)
+    variance = level * np.exp(scale * integral - _step_compensator(hurst, nu, grid))
     variance[:, 0] = level
     return variance
+
+
+def hybrid_increment_variance(
+    H: float,
+    nu_step: np.ndarray,
+    xi0: float,
+    times: np.ndarray,
+    components: np.ndarray,
+) -> np.ndarray:
+    """Spot variance from hybrid components ``(dW, I_1, ..., I_kappa)``.
+
+    ``components`` has shape ``(m, n_steps, kappa + 1)``. Each step's vector
+    is multiplied by the ``nu`` in force on that step. ``I_k`` lands at lag
+    ``k``. The tail uses roughvol's power-kernel weights, whose first
+    ``kappa`` entries are 0, so the near field is not added twice. The
+    compensator is :func:`_step_compensator`.
+    """
+    hurst = float(H)
+    nu = np.asarray(nu_step, dtype=float)
+    grid = np.asarray(times, dtype=float)
+    pieces = np.asarray(components, dtype=float)
+    if pieces.ndim != 3:
+        raise ValueError(f"components must have shape (m, n_steps, kappa + 1), got {pieces.shape}")
+    m, n_steps, n_comp = pieces.shape
+    if nu.shape != (m, n_steps) or grid.size != n_steps + 1:
+        raise ValueError(
+            f"nu_step {nu.shape} and times {grid.size} do not match components {pieces.shape}"
+        )
+    if n_comp < 2:
+        raise ValueError(
+            "components must include the near field I_1, ..., I_kappa. "
+            "dW alone keeps only part of Var(Y), and E[v] falls short of xi0."
+        )
+    kappa = n_comp - 1
+    weights = _hybrid_tail_weights(hurst, n_steps, float(grid[-1]), kappa)
+    driver = _assemble_driver(nu, pieces, weights)
+    level = float(xi0)
+    scale = math.sqrt(2.0 * hurst)
+    variance = level * np.exp(scale * driver - _step_compensator(hurst, nu, grid))
+    variance[:, 0] = level
+    return variance
+
+
+def _hybrid_tail_weights(H: float, n_steps: int, horizon: float, kappa: int) -> np.ndarray:
+    """Power-kernel tail weights. The first ``kappa`` lags are 0."""
+    try:
+        from roughvol.volterra import power_kernel_weights
+    except ImportError as exc:
+        raise RuntimeError(
+            "H other than 1/2 uses roughvol's power-kernel weights for the hybrid tail. "
+            "This module does not build those weights."
+        ) from exc
+    return np.asarray(power_kernel_weights(H, n_steps, horizon, kappa=kappa), dtype=float)
+
+
+def _assemble_driver(nu: np.ndarray, pieces: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Nu-weighted Volterra integral. Column 0 is 0. Shape ``(m, n_times)``."""
+    _m, n_steps, n_comp = pieces.shape
+    kappa = n_comp - 1
+    if weights.shape != (n_steps,):
+        raise ValueError(f"tail weights must have shape {(n_steps,)}, got {weights.shape}")
+    driver = np.zeros((nu.shape[0], n_steps + 1))
+    # w[k - 1] is the weight at lag k. The first kappa lags are the near field.
+    scaled = nu * pieces[:, :, 0]
+    for lag in range(kappa + 1, n_steps + 1):
+        weight = float(weights[lag - 1])
+        if weight == 0.0:
+            continue
+        length = n_steps - lag + 1
+        driver[:, lag : lag + length] += weight * scaled[:, :length]
+    for lag in range(1, kappa + 1):
+        length = n_steps - lag + 1
+        if length <= 0:
+            continue
+        block = nu[:, :length] * pieces[:, :length, lag]
+        driver[:, lag : lag + length] += block
+    return driver
 
 
 def trader_forward_variance(

@@ -17,6 +17,7 @@ from volsurface.markets.regime import (
     _kernel_weights,
     bergomi_forward_variance,
     filter_log_realised_variance,
+    hybrid_increment_variance,
     increment_variance,
     trader_forward_variance,
 )
@@ -61,13 +62,14 @@ def test_missing_rough_driver_is_not_replaced(monkeypatch):
 
 
 def test_plugin_driver_is_called_and_not_labelled_rbergomi(monkeypatch):
+    pytest.importorskip("roughvol")
     seen = {}
 
     class _StandIn:
-        def volterra_increments(self, n_paths, times, *, seed, H):
+        def volterra_components(self, n_paths, times, *, seed, H):
             seen["H"] = H
             seen["n"] = n_paths
-            return np.zeros((n_paths, len(times) - 1))
+            return np.zeros((n_paths, len(times) - 1, 2))
 
     monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
     model = _model(H=0.1)
@@ -137,6 +139,60 @@ def test_mean_z_and_variance_stay_inside_the_z_rule():
         v_scores.append((variance.mean() - model.xi0) / se_v)
     assert check_z(np.asarray(z_scores)) is None
     assert check_z(np.asarray(v_scores)) is None
+
+
+def test_rough_mean_variance_matches_xi0_inside_the_z_rule():
+    """Eight runs, 2,000 paths, H = 0.1, terminal time 1. The z-rule is the test.
+
+    The driver is roughvol's ``(dW, I_1, ..., I_kappa)``. ``E[v] - xi0`` and
+    ``E[Z] - 1`` are in standard errors of the mean.
+    """
+    pytest.importorskip("roughvol")
+    model = _model(H=0.1)
+    times = np.linspace(0.0, 1.0, 11)
+    z_scores = []
+    v_scores = []
+    for replication in range(8):
+        paths = model.simulate_market(2000, times, seed=run_seed(70 + replication, 2))
+        terminal = paths.Z[:, -1]
+        se = terminal.std(ddof=1) / math.sqrt(terminal.size)
+        z_scores.append((terminal.mean() - 1.0) / se)
+        variance = paths.state["v"][:, -1]
+        se_v = variance.std(ddof=1) / math.sqrt(variance.size)
+        v_scores.append((variance.mean() - model.xi0) / se_v)
+    assert paths.meta["roughvol"] is True
+    assert paths.meta["label"] == "RoughBergomi"
+    assert check_z(np.asarray(z_scores)) is None
+    assert check_z(np.asarray(v_scores)) is None
+
+
+def test_constant_nu_hybrid_matches_the_roughvol_driver():
+    """Constant nu factors out. The rebuilt variance matches roughvol's Y."""
+    pytest.importorskip("roughvol")
+    from roughvol.rbergomi import _variance_from_driver
+    from roughvol.rng import generator as rough_generator
+    from roughvol.volterra import hybrid_scheme_rng
+
+    from volsurface.plugins import create
+
+    hurst = 0.1
+    nu = 1.5
+    xi0 = 0.04
+    times = np.linspace(0.0, 1.0, 17)
+    n_paths = 32
+    n_steps = times.size - 1
+    vol_seed = stream_seeds(run_seed(9, 2))["vol"]
+    plugin = create("rbergomi")
+    components = np.asarray(
+        plugin.volterra_components(n_paths, times, seed=vol_seed, H=hurst), dtype=float
+    )
+    kappa = components.shape[-1] - 1
+    nu_step = np.full((n_paths, n_steps), nu)
+    variance = hybrid_increment_variance(hurst, nu_step, xi0, times, components)
+    vol = hybrid_scheme_rng(hurst, n_steps, 1.0, n_paths, rough_generator(vol_seed), kappa=kappa)
+    level = np.full(times.shape, xi0)
+    expected = _variance_from_driver(hurst, nu, level, times, vol.Y)
+    assert variance == pytest.approx(expected, rel=1e-10, abs=1e-12)
 
 
 def test_variance_swap_matches_realised_variance_within_se():
@@ -312,11 +368,12 @@ def test_half_hurst_forward_variance_depends_on_the_clock_only():
 
 
 def test_zero_driver_stores_the_rough_compensator(monkeypatch):
-    """dW = 0. Variance is the compensator of the nu path, and the curve mixes the filter."""
+    """Near field and dW are 0. Variance is the compensator of the nu path."""
+    pytest.importorskip("roughvol")
 
     class _StandIn:
-        def volterra_increments(self, n_paths, times, *, seed, H):
-            return np.zeros((n_paths, len(times) - 1))
+        def volterra_components(self, n_paths, times, *, seed, H):
+            return np.zeros((n_paths, len(times) - 1, 2))
 
     monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
     H = 0.1
@@ -486,20 +543,30 @@ def _bayes_accuracy(price: np.ndarray, regime: np.ndarray) -> tuple[float, bool]
 
 
 def test_regime_cannot_be_read_exactly_from_prices():
-    """Quantile bins of the call and of the variance swap each contain both regimes.
+    """Six hundred paths, clock index 10. Lifts over the base rate, both sides.
 
-    Six hundred paths, clock index 10. Predicting the modal regime in a bin
-    is strictly below accuracy 1, so the price is not the latent label.
+    The base rate is the larger share of the latent regime at that clock.
+    Eight quantile bins of the call and of the variance swap each contain
+    both regimes. Their modal accuracy beats the base rate by more than
+    0.05 and by less than 0.35, so the price is not the unconditional law
+    and it is not the label. The log-RV filter's modal hit rate stays
+    within 0.10 of the same base rate. One-step log realised variance has
+    one mean in both regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
     """
     model = _model()
     times = np.linspace(0.0, 1.0, 21)
     paths = model.simulate_market(600, times, seed=run_seed(12, 2))
+    labels = paths.regime[:, 10]
+    base = float(np.bincount(labels.astype(int), minlength=2).max() / labels.size)
     batch = model.surface_at(paths, 10)
     atm = int(np.argmin(np.abs(batch.k)))
-    call_accuracy, call_both = _bayes_accuracy(batch.call[:, 0, atm], paths.regime[:, 10])
+    call_accuracy, call_both = _bayes_accuracy(batch.call[:, 0, atm], labels)
     contract = Contract(Vanilla(model.forward), T=1.0)
     swap = VarianceSwapPricer().price_along(paths, [contract])[:, 10, 0]
-    swap_accuracy, swap_both = _bayes_accuracy(swap, paths.regime[:, 10])
+    swap_accuracy, swap_both = _bayes_accuracy(swap, labels)
     assert call_both and swap_both
-    assert call_accuracy < 1.0
-    assert swap_accuracy < 1.0
+    assert 0.05 < call_accuracy - base < 0.35
+    assert 0.05 < swap_accuracy - base < 0.35
+    predicted = paths.regime_prob[:, 10].argmax(axis=1)
+    filter_accuracy = float(np.mean(predicted == labels))
+    assert -0.10 < filter_accuracy - base < 0.10

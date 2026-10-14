@@ -1016,17 +1016,20 @@ There is no separate plan file in this repository. This paragraph is the
 specification of that increment rule.
 
 `H = 1/2` is drawn in this module, as Brownian increments. Any other `H`
-calls `volterra_increments` on the rBergomi plugin of section 20. The
-method returns the Wiener increments `dW` of shape `(n_paths, n_steps)`
-on the grid, drawn as the plugin's volatility child with no further
-spawn, the same increments `hybrid_scheme_rng` would draw. This module
-multiplies each increment by the `nu` in force on that step and by the
-kernel weight `int_{step} (u - s)^{H - 1/2} ds / dt`. A method that
-returns only the summed factor `Y` cannot do that, because `nu` has to
-sit inside the integral. The hybrid scheme stays in the plugin. If the
-method is missing, this module raises. It does not build a substitute
-rough driver, and it does not silently replace the requested `H` with
-`1/2`.
+calls `volterra_components` on the rBergomi plugin of section 20. The
+method returns the hybrid components `(dW, I_1, ..., I_kappa)` of shape
+`(n_paths, n_steps, kappa + 1)` on a uniform grid, drawn as the plugin's
+volatility child with no further spawn. `kappa` is the plugin's, 1 or 2.
+This module multiplies each step's whole vector by the `nu` in force on
+that step. `I_k` lands at lag `k`. The tail uses the plugin's
+power-kernel weights, whose first `kappa` entries are 0. `dW` alone is
+not enough: it is the regression of the kernel onto the Wiener increment,
+and at `H = 0.1` that regression keeps `5/9` of `Var(I_1)`, so `E[v]`
+falls short of `xi0`. The compensator stays the exact one,
+`sum_j nu_j^2 ((t - t_j)^{2H} - (t - t_{j+1})^{2H}) / 2`. The Cholesky
+of the hybrid scheme stays in the plugin. If the method is missing, this
+module raises. It does not build a substitute rough driver, and it does
+not silently replace the requested `H` with `1/2`.
 
 Every price, including the variance swap and `surface_at`, is computed
 under the trader's information. The forward variance is the mixture of
@@ -1040,13 +1043,26 @@ mixes the prices with `regime_prob`. Whether `Z` stays a martingale when
 `nu` switches is a hypothesis. The test is the z-rule. It is not a
 theorem in this file.
 
-The Hamilton filter reads log realised variance of the simulated spot,
-`log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic side
-signal. There is no observation at `t = 0`, and the filter probability
-there is `p0`. The emission is Gaussian. The mean is
+The Hamilton filter reads one-step log realised variance of the simulated
+spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
+side signal. There is no observation at `t = 0`, and the filter
+probability there is `p0`. The emission is Gaussian. The mean is
 `log(xi0) - gamma - log(2)` in every regime, the mean of
-`log(xi0 * chi^2_1)`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
-A price computed from this information does not determine `r_t`.
+`log(xi0 * chi^2_1)`, because the return's variance is the spot variance
+and not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
+`pi^2 / 2` is about 4.93. For `nu` of 0.4 and 1.1 the extra term is 0.16
+and 1.21, so the two emissions are close. A trailing window of the same
+series does not fix that. The chi-squared noise in a window short enough
+to sit inside one regime visit dominates `nu^2` times the window length,
+and a longer window mixes the regimes. On 600 paths, 21 times, clock
+index 10, seed entropy 12, test split, the filter's modal hit rate is
+0.4783 against the base rate 0.5383, the larger share of the latent
+regime at that clock. The lift is -0.0600. The bar is a two-sided band
+on that lift, from -0.10 to 0.10, not a claim that the hit rate is below
+1. The same paths, read from eight quantile bins of the at-the-money call
+and of the variance swap, have modal accuracy 0.6600, a lift of 0.1217
+over the same base rate. That lift sits between 0.05 and 0.35, so the
+price is not the unconditional law and it is not the latent label.
 Reliability of the filter on a hand-built Gaussian series is checked
 against binomial bands.
 
