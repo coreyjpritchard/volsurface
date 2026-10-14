@@ -156,9 +156,12 @@
   },
   "display": {
     "coordinate": "k/sqrt(T)",
-    "m_min": -3.0,
-    "m_max": 1.5,
-    "m_step": 0.1,
+    "m_min": -0.7,
+    "m_max": 0.15,
+    "m_step": 0.05,
+    "y_axis": "sqrt(T)",
+    "local_vol_cap": 0.8,
+    "local_vol_n_capped": 15,
     "min_days": 7,
     "T_min_year": 0.019164955509924708,
     "T_min_drawn": 0.020317351598173515,
@@ -172,13 +175,13 @@
       0.014837899543378996,
       0.017577625570776256
     ],
-    "quoted_m_min": -2.8,
-    "quoted_m_max": 0.5,
+    "quoted_m_min": -0.7,
+    "quoted_m_max": 0.15,
     "m_view": [
-      -2.95,
-      0.65
+      -0.72,
+      0.17
     ],
-    "n_quote_points": 7922,
+    "n_quote_points": 6440,
     "market_smooth": "gaussian along k/sqrt(T), sigma one grid step, display only",
     "implied_vol_axis": [
       0.05,
@@ -186,24 +189,24 @@
     ],
     "local_vol_axis": [
       0.0,
-      2.6583727367935515
+      0.8
     ],
     "clips": {
       "market": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.09130320534405668,
-        "raw_max": 0.8173803897083881,
+        "raw_min": 0.08296923638174868,
+        "raw_max": 0.3707009615668458,
         "worst": []
       },
       "black_scholes": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
@@ -214,83 +217,83 @@
       "gbm_mc": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.11057459543957973,
-        "raw_max": 0.13072765953873947,
+        "raw_min": 0.11057459543957955,
+        "raw_max": 0.12323645783611964,
         "worst": []
       },
       "svi": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.08334608641326552,
-        "raw_max": 0.8032950556891407,
+        "raw_min": 0.08238179520284733,
+        "raw_max": 0.37109910792501544,
         "worst": []
       },
       "heston": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.07592118806447526,
-        "raw_max": 0.6008456790865899,
+        "raw_min": 0.07074513114948867,
+        "raw_max": 0.3402613268423059,
         "worst": []
       },
       "sabr": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 847,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.07570660666927112,
-        "raw_max": 0.777174901321856,
+        "raw_min": 0.07668959373341347,
+        "raw_max": 0.37107192417120083,
         "worst": []
       },
       "dupire_localvol": {
         "lo": 0.0,
-        "hi": 2.6583727367935515,
-        "n_finite": 829,
+        "hi": 0.8,
+        "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,
-        "raw_min": 0.05974397811064249,
-        "raw_max": 2.6062477811701483,
+        "raw_min": 0.0597439781106425,
+        "raw_max": 0.8,
         "worst": []
       }
     },
     "error_heatmap": {
       "percentile": 98.0,
-      "limit_vol_points": 15.9,
-      "limit_raw": 15.901461918015464,
-      "n_errors": 2541,
-      "n_beyond_limit": 51,
+      "limit_vol_points": 2.22,
+      "limit_raw": 2.2239865673296606,
+      "n_errors": 1890,
+      "n_beyond_limit": 39,
       "panels": {
         "svi": {
-          "n": 847,
-          "rmse_vol_points": 0.5244522169891721,
-          "max_abs_vol_points": 2.6568760271142633,
-          "p98_abs_vol_points": 1.7508288842307365
+          "n": 630,
+          "rmse_vol_points": 0.100480257299637,
+          "max_abs_vol_points": 0.7623168123757074,
+          "p98_abs_vol_points": 0.27621470890463495
         },
         "heston": {
-          "n": 847,
-          "rmse_vol_points": 7.253952100171276,
-          "max_abs_vol_points": 23.117382123626307,
-          "p98_abs_vol_points": 18.902107478594868
+          "n": 630,
+          "rmse_vol_points": 1.1236409550330926,
+          "max_abs_vol_points": 5.522190159908486,
+          "p98_abs_vol_points": 2.5050683315401896
         },
         "sabr": {
-          "n": 847,
-          "rmse_vol_points": 3.5571145633481978,
-          "max_abs_vol_points": 21.67358396308797,
-          "p98_abs_vol_points": 11.539901436208009
+          "n": 630,
+          "rmse_vol_points": 0.7368632523239577,
+          "max_abs_vol_points": 4.648117597434206,
+          "p98_abs_vol_points": 2.2551156852269565
         }
       }
     }

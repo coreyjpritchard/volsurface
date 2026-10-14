@@ -1,13 +1,14 @@
 """Implied-vol gallery for the models on the committed SPX book.
 
-The figures use standardised moneyness ``k / sqrt(T)`` on ``[-3, 1.5]``.
-Expiries under seven days are left out of the pictures and kept in the
-JSON error tables. A cell is drawn only when that expiry quotes the
-strike: there is no extrapolated sheet. Implied-vol panels share one
-colour scale, ``[0.05, 0.90]``, unless a drawn cell sits a little outside
-it, in which case the scale grows to cover the cell. A cell above 1.25
-is left off the mesh and marked. Dupire local volatility keeps its own
-vertical scale, set to the values actually drawn.
+The 3D figures share one rectangle. Standardised moneyness is the range
+the market quotes at every expiry from seven days to one year, snapped
+inward to a grid, so the outline is straight. Maturity is spaced by
+``sqrt(T)`` and labelled in year fractions. Expiries under seven days
+are left out of the pictures and kept in the JSON error tables. Implied-vol
+panels share one colour scale, ``[0.05, 0.90]``, unless a drawn cell sits
+a little outside it, in which case the scale grows to cover the cell. A
+cell above 1.25 is left off the mesh and marked. Dupire local volatility
+keeps its own vertical scale and is capped, and the cap is in the title.
 
 The market surface in the picture is a light Gaussian smooth along
 ``k / sqrt(T)``. The smooth is display only. The raw quotes are the
@@ -48,7 +49,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import ListedColormap, Normalize
+from matplotlib.colors import LightSource, ListedColormap, Normalize
 from matplotlib.patches import Patch
 
 from volsurface import bs, chains
@@ -78,13 +79,21 @@ SEED = 2
 # The smile cut used by the Heston and SABR calibration figures.
 SMILE_ABS_K = 0.4
 SMILE_STRIKES = 11
-# Figures omit expiries shorter than a week. The JSON tables keep them.
+# Figures omit expiries shorter than a week, and stop at one year.
+# The JSON tables keep the short expiries.
 DISPLAY_MIN_DAYS = 7
 DISPLAY_T_MIN = DISPLAY_MIN_DAYS / 365.25
-# Common grid in standardised moneyness. The drawn cells are the quoted subset.
-M_LO = -3.0
-M_HI = 1.5
-M_STEP = 0.1
+DISPLAY_T_MAX = 1.0
+# The moneyness rectangle is the intersection of the quotes, snapped in
+# to this step. A wider window steps at the long end, which does not
+# quote the wings in units of ``k / sqrt(T)``.
+RECT_M_STEP = 0.05
+# Dupire's drawn wing is held at this local vol. The full-book table is not.
+LOCAL_VOL_CAP = 0.80
+# One light for every panel. Azimuth matches the camera's side of the sheet.
+LIGHT = LightSource(azdeg=315, altdeg=50)
+EDGE_COLOR = (1.0, 1.0, 1.0, 0.55)
+EDGE_WIDTH = 0.35
 # Implied-vol colour scale. A drawn cell above IV_CAP is marked, not scaled in.
 IV_LO = 0.05
 IV_HI = 0.90
@@ -313,15 +322,37 @@ def _quote_date(data: MarketData) -> str:
     return f"{stamp.day} {stamp.strftime('%B')} {stamp.year}"
 
 
-def standardised_axis() -> np.ndarray:
-    """Grid of ``k / sqrt(T)`` from ``M_LO`` to ``M_HI`` in steps of ``M_STEP``."""
-    count = int(round((M_HI - M_LO) / M_STEP))
-    return np.linspace(M_LO, M_HI, count + 1)
+def _on_display(maturity: float) -> bool:
+    """True for an expiry the pictures draw: a week to a year."""
+    return DISPLAY_T_MIN <= float(maturity) <= DISPLAY_T_MAX
+
+
+def rectangle_moneyness(pillars: list[tuple[float, np.ndarray, np.ndarray]]) -> np.ndarray:
+    """``k / sqrt(T)`` nodes inside every expiry's quotes.
+
+    The ends are the intersection of the quoted ranges, snapped inward to
+    ``RECT_M_STEP``, so each row of the mesh has the same width.
+    """
+    if not pillars:
+        raise ValueError("no expiry is in the display window")
+    lo = max(float(k_obs[0]) / np.sqrt(maturity) for maturity, k_obs, _iv in pillars)
+    hi = min(float(k_obs[-1]) / np.sqrt(maturity) for maturity, k_obs, _iv in pillars)
+    if not hi > lo:
+        raise ValueError("quoted standardised moneyness has no common width")
+    step = RECT_M_STEP
+    left = float(np.round(np.ceil((lo - 1e-9) / step) * step, 10))
+    right = float(np.round(np.floor((hi + 1e-9) / step) * step, 10))
+    if not right > left:
+        # The overlap is narrower than one step. Two nodes stay inside the quotes.
+        inset = 0.2 * (hi - lo)
+        return np.round(np.array([lo + inset, hi - inset]), 10)
+    count = int(round((right - left) / step))
+    return np.round(np.linspace(left, right, count + 1), 10)
 
 
 def pillars_for_display(pillars: list[tuple[float, np.ndarray, np.ndarray]]):
-    """Expiries of at least seven days. Shorter ones stay in the error tables."""
-    return [row for row in pillars if row[0] >= DISPLAY_T_MIN]
+    """Expiries from seven days to one year. Shorter ones stay in the error tables."""
+    return [row for row in pillars if _on_display(row[0])]
 
 
 def quote_mask(pillars: list[tuple[float, np.ndarray, np.ndarray]], m: np.ndarray) -> np.ndarray:
@@ -329,7 +360,8 @@ def quote_mask(pillars: list[tuple[float, np.ndarray, np.ndarray]], m: np.ndarra
     mask = np.zeros((len(pillars), m.size), dtype=bool)
     for i, (maturity, k_obs, _iv) in enumerate(pillars):
         k_query = m * np.sqrt(maturity)
-        mask[i] = (k_query >= k_obs[0]) & (k_query <= k_obs[-1])
+        # A hair of tolerance keeps the snapped rectangle edge on the quote.
+        mask[i] = (k_query >= k_obs[0] - 1e-8) & (k_query <= k_obs[-1] + 1e-8)
     return mask
 
 
@@ -342,8 +374,9 @@ def market_on_moneyness(
         if k_obs.size < 2:
             continue
         k_query = m * np.sqrt(maturity)
-        inside = (k_query >= k_obs[0]) & (k_query <= k_obs[-1])
-        out[i, inside] = np.interp(k_query[inside], k_obs, iv_obs)
+        inside = (k_query >= k_obs[0] - 1e-8) & (k_query <= k_obs[-1] + 1e-8)
+        held = np.clip(k_query[inside], k_obs[0], k_obs[-1])
+        out[i, inside] = np.interp(held, k_obs, iv_obs)
     return out
 
 
@@ -375,16 +408,16 @@ def smooth_along_moneyness(z: np.ndarray, sigma_steps: float = 1.0) -> np.ndarra
     return out
 
 
-def quote_cloud(pillars: list[tuple[float, np.ndarray, np.ndarray]]):
-    """Raw quotes on the display expiries, as ``(m, T, iv)``."""
+def quote_cloud(pillars: list[tuple[float, np.ndarray, np.ndarray]], m_lo: float, m_hi: float):
+    """Raw quotes on the display rectangle, as ``(m, T, iv)``."""
     ms: list[np.ndarray] = []
     ts: list[np.ndarray] = []
     ivs: list[np.ndarray] = []
     for maturity, k_obs, iv_obs in pillars:
-        if maturity < DISPLAY_T_MIN:
+        if not _on_display(maturity):
             continue
         moneyness = k_obs / np.sqrt(maturity)
-        keep = (moneyness >= M_LO) & (moneyness <= M_HI) & np.isfinite(iv_obs)
+        keep = (moneyness >= m_lo) & (moneyness <= m_hi) & np.isfinite(iv_obs)
         if not np.any(keep):
             continue
         ms.append(moneyness[keep])
@@ -410,16 +443,10 @@ def _apply_quotes(z: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
-def _view_m_limits(mask: np.ndarray, m: np.ndarray) -> tuple[float, float]:
-    """Frame the quoted columns, with a small pad, inside the sampling grid."""
-    columns = np.any(mask, axis=0)
-    if not np.any(columns):
-        return M_LO, M_HI
-    used = m[columns]
-    pad = 1.5 * M_STEP
-    lo = max(M_LO, float(used[0]) - pad)
-    hi = min(M_HI, float(used[-1]) + pad)
-    return round(lo, 2), round(hi, 2)
+def _view_m_limits(m: np.ndarray) -> tuple[float, float]:
+    """The rectangle, with half a grid step so the edge line is not clipped."""
+    pad = 0.5 * RECT_M_STEP
+    return round(float(m[0]) - pad, 2), round(float(m[-1]) + pad, 2)
 
 
 def choose_iv_axis(sheets: list[Sheet]) -> tuple[float, float]:
@@ -448,12 +475,14 @@ def choose_iv_axis(sheets: list[Sheet]) -> tuple[float, float]:
     return float(lo), float(hi)
 
 
-def _local_axis(z: np.ndarray) -> tuple[float, float]:
-    """Dupire's own scale, set just above the values drawn on this domain."""
+def _local_axis(z: np.ndarray, cap: float) -> tuple[float, float]:
+    """Dupire's own scale. A wing that meets the cap uses the cap as the top."""
     finite = z[np.isfinite(z)]
     if finite.size == 0:
-        return 0.0, 1.0
+        return 0.0, float(cap)
     hi = float(np.max(finite))
+    if hi >= cap - 1e-9:
+        return 0.0, float(cap)
     return 0.0, hi + 0.02 * max(hi, 1.0)
 
 
@@ -471,13 +500,13 @@ def build_display(
     n_paths: int,
     seed: int,
 ) -> dict:
-    """Surfaces on ``k / sqrt(T)``, expiries of at least seven days, quotes only."""
+    """Surfaces on one quoted rectangle in ``k / sqrt(T)``, from a week to a year."""
     kept = pillars_for_display(pillars)
     if not kept:
         raise ValueError("no expiry is at least 7 days")
-    m = standardised_axis()
+    m = rectangle_moneyness(kept)
     d_maturities = np.array([row[0] for row in kept], dtype=float)
-    positions = [i for i, maturity in enumerate(maturities) if float(maturity) >= DISPLAY_T_MIN]
+    positions = [i for i, maturity in enumerate(maturities) if _on_display(maturity)]
     if len(positions) != d_maturities.size:
         raise ValueError("display expiries do not match the quote pillars")
     k_rows = m[None, :] * np.sqrt(d_maturities)[:, None]
@@ -511,7 +540,10 @@ def build_display(
     svi = _rows_of(d_maturities, k_rows, _svi_row)
     heston_surface = _rows_of(d_maturities, k_rows, _heston_row)
     sabr_surface = _rows_of(d_maturities, k_rows, _sabr_row)
-    dupire = _rows_of(d_maturities, k_rows, _dupire_row)
+    dupire = _apply_quotes(_rows_of(d_maturities, k_rows, _dupire_row), mask)
+    capped = np.isfinite(dupire) & (dupire > LOCAL_VOL_CAP)
+    n_capped = int(capped.sum())
+    dupire = np.where(capped, LOCAL_VOL_CAP, dupire)
 
     smile_note = "fit on |k| <= 0.4"
     sheets = [
@@ -543,14 +575,17 @@ def build_display(
         ),
         Sheet(
             "dupire_localvol",
-            f"Dupire local volatility from raw SVI, not implied vol, {date}",
-            _apply_quotes(dupire, mask),
+            (
+                f"Dupire local volatility from raw SVI, capped at {LOCAL_VOL_CAP:.2f}, "
+                f"not implied vol, {date}"
+            ),
+            dupire,
             "local volatility",
         ),
     ]
-    quote_m, quote_t, quote_iv = quote_cloud(pillars)
-    m_lo, m_hi = _view_m_limits(mask, m)
-    local_lo, local_hi = _local_axis(sheets[-1].z)
+    quote_m, quote_t, quote_iv = quote_cloud(pillars, float(m[0]), float(m[-1]))
+    m_lo, m_hi = _view_m_limits(m)
+    local_lo, local_hi = _local_axis(sheets[-1].z, LOCAL_VOL_CAP)
     return {
         "maturities": d_maturities,
         "m": m,
@@ -564,6 +599,8 @@ def build_display(
         "m_view": (m_lo, m_hi),
         "iv_axis": choose_iv_axis(sheets),
         "local_axis": (local_lo, local_hi),
+        "local_vol_cap": LOCAL_VOL_CAP,
+        "local_vol_n_capped": n_capped,
     }
 
 
@@ -768,9 +805,12 @@ def summary_numbers(built: dict) -> dict:
     quoted_m = display["m"][np.any(display["quoted"], axis=0)]
     numbers["display"] = {
         "coordinate": "k/sqrt(T)",
-        "m_min": M_LO,
-        "m_max": M_HI,
-        "m_step": M_STEP,
+        "m_min": float(display["m"][0]),
+        "m_max": float(display["m"][-1]),
+        "m_step": RECT_M_STEP,
+        "y_axis": "sqrt(T)",
+        "local_vol_cap": float(display["local_vol_cap"]),
+        "local_vol_n_capped": int(display["local_vol_n_capped"]),
         "min_days": DISPLAY_MIN_DAYS,
         "T_min_year": DISPLAY_T_MIN,
         "T_min_drawn": float(display["maturities"][0]),
@@ -928,21 +968,22 @@ def _face_colours(z: np.ndarray, norm: Normalize, alpha: float = 1.0) -> np.ndar
     return colours
 
 
-def _plot_layer(ax, k, maturities, z: np.ndarray, faces: np.ndarray) -> None:
+def _plot_layer(ax, k, y, z: np.ndarray, faces: np.ndarray) -> None:
     if not np.any(np.isfinite(z)):
         return
-    kk, tt = np.meshgrid(k, maturities)
+    kk, yy = np.meshgrid(k, y)
     ax.plot_surface(
         kk,
-        tt,
+        yy,
         z,
         facecolors=faces,
         rstride=1,
         cstride=1,
-        linewidth=0,
-        edgecolor=(0, 0, 0, 0),
-        antialiased=False,
-        shade=False,
+        linewidth=EDGE_WIDTH,
+        edgecolor=EDGE_COLOR,
+        antialiased=True,
+        shade=True,
+        lightsource=LIGHT,
     )
 
 
@@ -978,14 +1019,15 @@ def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float,
     lo, hi = _axis_for(display, sheet)
     m = display["m"]
     maturities = display["maturities"]
+    y = np.sqrt(maturities)
     drawn = layer_z(sheet.z, ~clipped_mask(sheet.z, lo, hi))
     norm = Normalize(vmin=lo, vmax=hi)
     alpha = 0.88 if points is not None else 1.0
-    _plot_layer(ax, m, maturities, drawn, _face_colours(drawn, norm, alpha))
+    _plot_layer(ax, m, y, drawn, _face_colours(drawn, norm, alpha))
     if points is not None and points[0].size:
         ax.scatter(
             points[0],
-            points[1],
+            np.sqrt(points[1]),
             points[2],
             c="#8a8a8a",
             s=point_size,
@@ -994,13 +1036,13 @@ def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float,
             linewidths=0,
         )
     if int(clipped_mask(sheet.z, lo, hi).sum()):
-        _mark_clipped(ax, m, maturities, sheet.z, lo, hi, size=mark_size)
+        _mark_clipped(ax, m, y, sheet.z, lo, hi, size=mark_size)
     ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)
     ax.set_xlim(float(display["m_view"][0]), float(display["m_view"][1]))
-    ax.set_ylim(float(maturities[0]), float(maturities[-1]))
+    ax.set_ylim(float(y[0]), float(y[-1]))
     ax.set_zlim(lo, hi)
     ax.set_xlabel("k / √T")
-    ax.set_ylabel("T")
+    _set_sqrt_maturity_ticks(ax, maturities, ylabel="T")
     ax.set_zlabel(sheet.quantity)
     ax.set_title(sheet.title, fontsize=9)
     ax.tick_params(labelsize=7)
@@ -1031,9 +1073,9 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
             pad=0.08,
             label=f"{sheet.quantity} on [{lo:.2f}, {hi:.2f}]",
         )
-        note = "k/√T, inside each expiry's quotes. Expiries under 7 days omitted."
+        note = "One rectangle in k/√T. Maturity spaced by √T. Expiries under 7 days omitted."
         if sheet.key == "market":
-            note = "k/√T, inside quotes. Points are raw quotes. Expiries under 7 days omitted."
+            note = "Rectangle in k/√T. Points are raw quotes. Maturity spaced by √T."
         fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8)
         fig.subplots_adjust(left=0.02, right=0.92, bottom=0.08, top=0.92)
         fig.savefig(fig_dir / f"p2_surface_{sheet.key}.png", dpi=140, bbox_inches="tight")
@@ -1051,7 +1093,7 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
             mark_size=8.0,
         )
     fig.suptitle(
-        f"SPX {built['date']}. k/√T, expiries under 7 days omitted, inside the quotes.",
+        f"SPX {built['date']}. One rectangle in k/√T, maturity spaced by √T.",
         fontsize=12,
     )
     fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.92, wspace=0.08, hspace=0.22)
@@ -1204,24 +1246,27 @@ def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
     _set_sqrt_maturity_ticks(axes[0], maturities)
     extend = "both" if stats["n_beyond_limit"] else "neither"
     fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points", extend=extend)
-    fig.legend(
-        handles=[Patch(facecolor="#f0f0f0", edgecolor="#d0d0d0", label="outside quotes")],
-        loc="lower center",
-        bbox_to_anchor=(0.45, -0.02),
-        frameon=False,
-        fontsize=9,
-    )
-    fig.suptitle(
-        f"SPX {built['date']}. Saturates at ±{_limit_text(limit)} vol points. "
-        "Grey is outside the quotes.",
-        fontsize=12,
-    )
+    outside = any(bool(np.any(~np.isfinite(gaps[key]))) for key in ERROR_KEYS)
+    if outside:
+        fig.legend(
+            handles=[Patch(facecolor="#f0f0f0", edgecolor="#d0d0d0", label="outside quotes")],
+            loc="lower center",
+            bbox_to_anchor=(0.45, -0.02),
+            frameon=False,
+            fontsize=9,
+        )
+    caption = f"SPX {built['date']}. Saturates at ±{_limit_text(limit)} vol points."
+    if outside:
+        caption += " Grey is outside the quotes."
+    fig.suptitle(caption, fontsize=12)
     fig.subplots_adjust(left=0.07, right=0.90, bottom=0.16, top=0.84, wspace=0.16)
     fig.savefig(fig_dir / "p2_surface_iv_error.png", dpi=140, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
 
 
-def _set_sqrt_maturity_ticks(ax, maturities: np.ndarray) -> None:
+def _set_sqrt_maturity_ticks(
+    ax, maturities: np.ndarray, ylabel: str = "maturity T, spaced by √T"
+) -> None:
     """Tick labels are calendar year fractions. Positions are ``sqrt(T)``."""
     candidates = np.array([0.02, 0.05, 0.10, 0.25, 0.50, 1.00])
     lo = float(maturities[0])
@@ -1231,7 +1276,7 @@ def _set_sqrt_maturity_ticks(ax, maturities: np.ndarray) -> None:
         ticks = np.array([lo, hi])
     ax.set_yticks(np.sqrt(ticks))
     ax.set_yticklabels([f"{t:.2f}" for t in ticks])
-    ax.set_ylabel("maturity T, spaced by √T")
+    ax.set_ylabel(ylabel)
 
 
 def _colourscale() -> list:
@@ -1257,14 +1302,15 @@ def _plotly_marks(m, maturities, z: np.ndarray, lo: float, hi: float) -> list:
         traces.append(
             go.Scatter3d(
                 x=m[cols],
-                y=maturities[rows],
+                y=np.sqrt(maturities[rows]),
                 z=np.full(rows.shape, height),
+                customdata=maturities[rows],
                 mode="markers",
                 marker={"size": 3, "color": colour, "symbol": "x"},
                 name=name,
                 text=[f"raw {value:.4f}" for value in raw],
                 hovertemplate=(
-                    "k/√T=%{x:.3f}<br>T=%{y:.5f}<br>marked at %{z:.2f}"
+                    "k/√T=%{x:.3f}<br>T=%{customdata:.5f}<br>marked at %{z:.2f}"
                     "<br>%{text}<extra>" + name + "</extra>"
                 ),
             )
@@ -1272,37 +1318,78 @@ def _plotly_marks(m, maturities, z: np.ndarray, lo: float, hi: float) -> list:
     return traces
 
 
+def _sqrt_tick_spec(maturities: np.ndarray) -> tuple[list[float], list[str]]:
+    """Plotly tick positions in ``sqrt(T)`` and labels in year fractions."""
+    candidates = np.array([0.02, 0.05, 0.10, 0.25, 0.50, 1.00])
+    lo = float(maturities[0])
+    hi = float(maturities[-1])
+    ticks = candidates[(candidates >= lo - 1e-12) & (candidates <= hi + 1e-12)]
+    if ticks.size == 0:
+        ticks = np.array([lo, hi])
+    return [float(np.sqrt(t)) for t in ticks], [f"{t:.2f}" for t in ticks]
+
+
 def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
     display = built["display"]
     lo, hi = _axis_for(display, sheet)
     m = display["m"]
     maturities = display["maturities"]
+    y = np.sqrt(maturities)
     drawn = layer_z(sheet.z, ~clipped_mask(sheet.z, lo, hi))
+    calendar = np.repeat(maturities[:, None], m.size, axis=1)
     fig = go.Figure()
     fig.add_trace(
         go.Surface(
             x=m,
-            y=maturities,
+            y=y,
             z=drawn,
+            customdata=calendar,
             cmin=lo,
             cmax=hi,
             colorscale=_colourscale(),
             colorbar={"title": sheet.quantity},
             name="surface",
             showscale=True,
+            lighting={
+                "ambient": 0.62,
+                "diffuse": 0.7,
+                "specular": 0.15,
+                "roughness": 0.55,
+                "fresnel": 0.15,
+            },
+            lightposition={"x": 1.0, "y": -1.0, "z": 1.5},
+            contours={
+                "x": {
+                    "show": True,
+                    "color": "rgba(255,255,255,0.45)",
+                    "width": 1,
+                    "highlight": False,
+                },
+                "y": {
+                    "show": True,
+                    "color": "rgba(255,255,255,0.45)",
+                    "width": 1,
+                    "highlight": False,
+                },
+                "z": {"show": False},
+            },
+            hovertemplate=(
+                "k/√T=%{x:.3f}<br>T=%{customdata:.4f}<br>%{z:.4f}<extra>surface</extra>"
+            ),
         )
     )
     if sheet.key == "market" and display["quote_iv"].size:
         fig.add_trace(
             go.Scatter3d(
                 x=display["quote_m"],
-                y=display["quote_t"],
+                y=np.sqrt(display["quote_t"]),
                 z=display["quote_iv"],
+                customdata=display["quote_t"],
                 mode="markers",
                 marker={"size": 1.5, "color": "rgba(140,140,140,0.35)"},
                 name="raw quotes",
                 hovertemplate=(
-                    "k/√T=%{x:.3f}<br>T=%{y:.4f}<br>quote %{z:.4f}<extra>raw quote</extra>"
+                    "k/√T=%{x:.3f}<br>T=%{customdata:.4f}<br>quote %{z:.4f}<extra>raw quote</extra>"
                 ),
             )
         )
@@ -1319,6 +1406,7 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
     if sheet.key == "market":
         title += " Points are raw quotes."
     m_lo, m_hi = display["m_view"]
+    tick_vals, tick_text = _sqrt_tick_spec(maturities)
     fig.update_layout(
         title={"text": title, "font": {"size": 12}},
         margin={"l": 0, "r": 0, "t": 72, "b": 0},
@@ -1330,8 +1418,11 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
                 "autorange": False,
             },
             "yaxis": {
-                "title": "maturity T",
-                "range": [float(maturities[0]), float(maturities[-1])],
+                "title": "T, spaced by √T",
+                "range": [float(y[0]), float(y[-1])],
+                "tickmode": "array",
+                "tickvals": tick_vals,
+                "ticktext": tick_text,
                 "autorange": False,
             },
             "zaxis": {

@@ -70,9 +70,13 @@ def test_display_grid_drops_short_expiries_and_unquoted_wings():
     smooth = gallery.smooth_along_moneyness(raw, sigma_steps=1.0)
     assert np.isnan(smooth[0, 0]) and np.isnan(smooth[0, 3])
     assert np.isfinite(smooth[0, 2])
-    axis = gallery.standardised_axis()
-    assert axis[0] == -3.0 and axis[-1] == 1.5
+    # Quotes at T=0.25 cover k in [-0.20, 0.10], so m in [-0.40, 0.20].
+    rect = gallery.rectangle_moneyness(kept)
+    assert rect[0] == -0.4 and rect[-1] == 0.2
+    assert gallery.quote_mask(kept, rect).all()
     assert gallery.DISPLAY_MIN_DAYS == 7
+    assert gallery.DISPLAY_T_MAX == 1.0
+    assert gallery.LOCAL_VOL_CAP == 0.80
 
 
 def test_error_colour_limit_ignores_a_handful_of_large_cells():
@@ -148,8 +152,9 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     assert numbers["dupire_localvol"]["n_finite_inside"] > 0
     assert numbers["gbm_mc"]["n_missing"] < numbers["n_expiries"] * numbers["n_k"]
     assert numbers["display"]["coordinate"] == "k/sqrt(T)"
-    assert numbers["display"]["m_min"] == -3.0
-    assert numbers["display"]["m_max"] == 1.5
+    assert numbers["display"]["m_max"] > numbers["display"]["m_min"]
+    assert numbers["display"]["y_axis"] == "sqrt(T)"
+    assert numbers["display"]["local_vol_cap"] == 0.80
     assert numbers["display"]["min_days"] == 7
     assert numbers["display"]["n_expiries_drawn"] == 2
     assert numbers["display"]["n_expiries_omitted"] == 0
@@ -192,6 +197,7 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
         assert '"autorange":false' in text or '"autorange": false' in text
         assert "7 days" in text
         assert "standardised moneyness" in text.lower()
+        assert "spaced by" in text
         if key == "market":
             assert "raw quotes" in text
         if key != "dupire_localvol":
