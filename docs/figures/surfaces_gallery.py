@@ -5,9 +5,9 @@ the market quotes at every expiry from seven days to one year, snapped
 inward to a grid, so the outline is straight. Maturity is spaced by
 ``sqrt(T)`` and labelled in year fractions. Expiries under seven days
 are left out of the pictures and kept in the JSON error tables. Implied-vol
-panels share one colour scale, ``[0.05, 0.90]``, unless a drawn cell sits
-a little outside it, in which case the scale grows to cover the cell. A
-cell above 1.25 is left off the mesh and marked. Dupire local volatility
+panels share one colour scale set from the market's 1st and 99th
+percentiles on that rectangle, about ``[0.05, 0.40]`` on this book. A cell
+above 1.25 is left off the mesh and marked. Dupire local volatility
 keeps its own vertical scale and is capped, and the cap is in the title.
 
 The market surface in the picture is a light Gaussian smooth along
@@ -30,9 +30,10 @@ Run from the repository root:
 
     python docs/figures/surfaces_gallery.py
 
-Writes one PNG per surface, ``p2_surface_gallery.png``, and
-``p2_surface_iv_error.png`` under ``docs/figures/``. Writes one
-self-contained plotly HTML file per surface under ``docs/surfaces/``.
+Writes one PNG per surface, ``p2_surface_gallery.png``,
+``p2_surface_iv_error.png``, and ``p2_smile_slices.png`` under
+``docs/figures/``. Writes one self-contained plotly HTML file per
+surface under ``docs/surfaces/``.
 """
 
 from __future__ import annotations
@@ -94,10 +95,21 @@ LOCAL_VOL_CAP = 0.80
 LIGHT = LightSource(azdeg=315, altdeg=50)
 EDGE_COLOR = (1.0, 1.0, 1.0, 0.55)
 EDGE_WIDTH = 0.35
-# Implied-vol colour scale. A drawn cell above IV_CAP is marked, not scaled in.
+# Implied-vol colour scale. The top is 0.40 when that covers the market's
+# 99th percentile on the rectangle. A higher percentile lifts it, in steps
+# of 0.05, until IV_CAP. A cell above the cap is marked, not scaled in.
 IV_LO = 0.05
-IV_HI = 0.90
+IV_HI = 0.40
 IV_CAP = 1.25
+# Caption on the two panels that cannot show a skew.
+FLAT_CAPTION = "constant vol: flat by construction,\nthe benchmark the market rejects"
+# Smile slices: label, target year fraction, and how far an expiry may sit.
+SLICE_TARGETS = (
+    ("2 weeks", 14 / 365.25, 21 / 365.25),
+    ("1 month", 1 / 12, 21 / 365.25),
+    ("3 months", 0.25, 40 / 365.25),
+    ("9 months", 0.75, 50 / 365.25),
+)
 # Error heatmap. The limit is a high percentile of |error|, not the maximum.
 ERROR_PERCENTILE = 98.0
 ERROR_KEYS = ("svi", "heston", "sabr")
@@ -449,29 +461,28 @@ def _view_m_limits(m: np.ndarray) -> tuple[float, float]:
     return round(float(m[0]) - pad, 2), round(float(m[-1]) + pad, 2)
 
 
-def choose_iv_axis(sheets: list[Sheet]) -> tuple[float, float]:
-    """One implied-vol scale. Grow it to cover drawn cells, until ``IV_CAP``.
+def choose_iv_axis(market_z: np.ndarray) -> tuple[float, float]:
+    """Implied-vol scale from the market on the rectangle, tight enough to show the skew.
 
-    A cell above the cap is a blow-up and is marked later. A cell between
-    ``IV_HI`` and the cap widens the shared scale so it does not become a cross.
+    The floor stays at 0.05 when the 1st percentile is at least that. The top
+    stays at 0.40 when that covers the 99th percentile. A higher 99th
+    percentile lifts the top in steps of 0.05, and never past ``IV_CAP``.
+    Model cells above the scale are marked. They do not set it.
     """
-    pieces = []
-    for sheet in sheets:
-        if sheet.quantity != "implied volatility":
-            continue
-        finite = sheet.z[np.isfinite(sheet.z)]
-        if finite.size:
-            pieces.append(finite)
-    if not pieces:
+    finite = np.asarray(market_z, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
         return IV_LO, IV_HI
-    values = np.concatenate(pieces)
-    kept = values[(values >= 0.0) & (values <= IV_CAP)]
-    if kept.size == 0:
-        return IV_LO, IV_HI
-    lo_data = float(np.min(kept))
-    hi_data = float(np.max(kept))
-    lo = IV_LO if lo_data >= IV_LO else max(0.0, lo_data - 0.01)
-    hi = IV_HI if hi_data <= IV_HI else hi_data + 0.02
+    p01 = float(np.quantile(finite, 0.01))
+    p99 = float(np.quantile(finite, 0.99))
+    if p01 >= IV_LO:
+        lo = IV_LO
+    else:
+        lo = max(0.0, float(np.floor(p01 * 20.0) / 20.0))
+    if p99 <= IV_HI:
+        hi = IV_HI
+    else:
+        hi = min(IV_CAP, float(np.ceil((p99 - 1e-12) * 20.0) / 20.0))
     return float(lo), float(hi)
 
 
@@ -550,13 +561,13 @@ def build_display(
         Sheet("market", f"SPX market, display smooth, {date}", market_smooth, "implied volatility"),
         Sheet(
             "black_scholes",
-            f"Black-Scholes flat, sigma {sigma:.3f}, {date}",
+            f"Black-Scholes, sigma {sigma:.3f}, {date}\n{FLAT_CAPTION}",
             flat,
             "implied volatility",
         ),
         Sheet(
             "gbm_mc",
-            f"Monte Carlo GBM, {n_paths} paths, seed {seed}, wings at sigma, {date}",
+            f"Monte Carlo GBM, {n_paths} paths, seed {seed}, {date}\n{FLAT_CAPTION}",
             gbm_draw,
             "implied volatility",
         ),
@@ -597,7 +608,7 @@ def build_display(
         "quote_t": quote_t,
         "quote_iv": quote_iv,
         "m_view": (m_lo, m_hi),
-        "iv_axis": choose_iv_axis(sheets),
+        "iv_axis": choose_iv_axis(market_raw),
         "local_axis": (local_lo, local_hi),
         "local_vol_cap": LOCAL_VOL_CAP,
         "local_vol_n_capped": n_capped,
@@ -686,6 +697,10 @@ def build_sheets(
         "sabr_report": sabr_fit.slice_report,
         "n_paths": n_paths,
         "seed": seed,
+        "quotes": data.quotes,
+        "market": data,
+        "heston_model": heston,
+        "svi_surface": svi_fit.surface,
         "display": build_display(
             data,
             pillars,
@@ -824,6 +839,9 @@ def summary_numbers(built: dict) -> dict:
         "n_quote_points": int(display["quote_iv"].size),
         "market_smooth": "gaussian along k/sqrt(T), sigma one grid step, display only",
         "implied_vol_axis": [float(display["iv_axis"][0]), float(display["iv_axis"][1])],
+        "market_iv_p01": _market_percentile(display["market_raw"], 0.01),
+        "market_iv_p99": _market_percentile(display["market_raw"], 0.99),
+        "smile_slices": slice_expiries(display["maturities"]),
         "local_vol_axis": [float(display["local_axis"][0]), float(display["local_axis"][1])],
         "clips": _display_clips(display),
         "error_heatmap": summarise_errors(error_gaps(display)),
@@ -1044,12 +1062,149 @@ def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float,
     ax.set_xlabel("k / √T")
     _set_sqrt_maturity_ticks(ax, maturities, ylabel="T")
     ax.set_zlabel(sheet.quantity)
-    ax.set_title(sheet.title, fontsize=9)
+    ax.set_title(sheet.title, fontsize=8)
     ax.tick_params(labelsize=7)
 
 
+def _market_percentile(z: np.ndarray, q: float) -> float | None:
+    finite = np.asarray(z, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return None
+    return float(np.quantile(finite, q))
+
+
+def slice_expiries(maturities: np.ndarray) -> list[dict]:
+    """Up to four display expiries, the nearest to two weeks, one, three and nine months.
+
+    An expiry is used once. A target with nothing inside its window is skipped.
+    """
+    times = np.asarray(maturities, dtype=float)
+    chosen: list[dict] = []
+    used: set[float] = set()
+    for label, target, window in SLICE_TARGETS:
+        if times.size == 0:
+            break
+        order = np.argsort(np.abs(times - target))
+        for idx in order:
+            maturity = float(times[idx])
+            if maturity in used or not _on_display(maturity):
+                continue
+            if abs(maturity - target) > window:
+                break
+            used.add(maturity)
+            chosen.append(
+                {
+                    "label": label,
+                    "T": maturity,
+                    "days": float(maturity * 365.25),
+                }
+            )
+            break
+    return chosen
+
+
+def _slice_quotes(quotes: pd.DataFrame, maturity: float, m_lo: float, m_hi: float):
+    """Mid, bid and ask implied vol on one expiry, inside the rectangle."""
+    group = quotes.loc[np.isclose(quotes["T"].to_numpy(dtype=float), maturity)].copy()
+    group = group.dropna(subset=["iv", "k"]).drop_duplicates("k").sort_values("k")
+    if group.empty:
+        empty = np.array([], dtype=float)
+        return empty, empty, empty, empty
+    maturity = float(group["T"].iloc[0])
+    m = group["k"].to_numpy(dtype=float) / np.sqrt(maturity)
+    keep = (m >= m_lo) & (m <= m_hi)
+    group = group.iloc[np.flatnonzero(keep)]
+    m = m[keep]
+    if group.empty:
+        empty = np.array([], dtype=float)
+        return empty, empty, empty, empty
+    forward = group["F"].to_numpy(dtype=float)
+    strike = group["K"].to_numpy(dtype=float)
+    tenor = group["T"].to_numpy(dtype=float)
+    discount = group["df"].to_numpy(dtype=float)
+    kind = group["kind"].to_numpy()
+    bid = bs.implied_vol(group["bid"].to_numpy(dtype=float), forward, strike, tenor, discount, kind)
+    ask = bs.implied_vol(group["ask"].to_numpy(dtype=float), forward, strike, tenor, discount, kind)
+    return m, group["iv"].to_numpy(dtype=float), bid, ask
+
+
+def _write_smile_slices(built: dict, fig_dir: Path) -> None:
+    """Market bid-ask band and model smiles at four tenors, on the gallery rectangle."""
+    display = built["display"]
+    slices = slice_expiries(display["maturities"])
+    m_lo = float(display["m"][0])
+    m_hi = float(display["m"][-1])
+    iv_lo, iv_hi = display["iv_axis"]
+    grid = np.linspace(m_lo, m_hi, 81)
+    n = max(len(slices), 1)
+    fig, axes = plt.subplots(1, n, figsize=(3.4 * n, 3.9), sharex=True, sharey=True)
+    axes = np.atleast_1d(axes)
+    colours = {"svi": "#1b9e77", "heston": "#d95f02", "sabr": "#7570b3"}
+    if not slices:
+        axes[0].set_axis_off()
+        axes[0].text(0.5, 0.5, "no expiry near the slice tenors", ha="center", va="center")
+    for ax, row in zip(axes, slices, strict=False):
+        maturity = float(row["T"])
+        k = grid * np.sqrt(maturity)
+        tenor = np.array([maturity])
+        market = built["market"]
+        curves = {
+            "svi": np.asarray(built["svi_surface"].iv(tenor, k), dtype=float)[0],
+            "heston": heston_iv(built["heston_model"], market, tenor, k)[0],
+            "sabr": sabr_iv(built["sabr_report"], market, tenor, k)[0],
+        }
+        m_pts, mid, bid, ask = _slice_quotes(built["quotes"], maturity, m_lo, m_hi)
+        band = np.isfinite(bid) & np.isfinite(ask)
+        if np.any(band):
+            ax.fill_between(
+                m_pts,
+                np.where(band, bid, np.nan),
+                np.where(band, ask, np.nan),
+                color="#d5dde3",
+                linewidth=0,
+                label="bid-ask",
+            )
+        ax.plot(grid, curves["svi"], color=colours["svi"], lw=1.5, label="SVI")
+        ax.plot(grid, curves["heston"], color=colours["heston"], lw=1.5, label="Heston")
+        ax.plot(grid, curves["sabr"], color=colours["sabr"], lw=1.5, label="SABR")
+        ax.plot(
+            grid,
+            np.full(grid.shape, built["sigma"]),
+            color="#444444",
+            lw=1.2,
+            ls="--",
+            label="Black-Scholes",
+        )
+        if m_pts.size:
+            ax.plot(m_pts, mid, "o", color="#1a1a1a", ms=3.2, label="mid")
+        ax.set_xlim(m_lo, m_hi)
+        ax.set_ylim(iv_lo, iv_hi)
+        ax.set_title(f"{row['label']}, {row['days']:.1f} days", fontsize=10)
+        ax.set_xlabel("k / √T")
+        ax.tick_params(labelsize=8)
+    axes[0].set_ylabel("implied volatility")
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            ncol=6,
+            frameon=False,
+            fontsize=9,
+        )
+    fig.suptitle(
+        f"SPX {built['date']}. Smiles on the gallery rectangle in k/√T.",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 0.90))
+    fig.savefig(fig_dir / "p2_smile_slices.png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+
+
 def write_pngs(built: dict, fig_dir: Path) -> None:
-    """One PNG per surface, the seven-panel gallery, and the error heatmap."""
+    """One PNG per surface, the gallery, the error heatmap, and the smile slices."""
     fig_dir.mkdir(parents=True, exist_ok=True)
     display = built["display"]
     points = (display["quote_m"], display["quote_t"], display["quote_iv"])
@@ -1101,6 +1256,7 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
     plt.close(fig)
 
     _write_error_heatmap(built, fig_dir)
+    _write_smile_slices(built, fig_dir)
 
 
 def error_colour_limit(abs_errors: np.ndarray, percentile: float = ERROR_PERCENTILE) -> float:

@@ -79,6 +79,26 @@ def test_display_grid_drops_short_expiries_and_unquoted_wings():
     assert gallery.LOCAL_VOL_CAP == 0.80
 
 
+def test_slice_expiries_pick_four_tenors_without_reuse():
+    """Each target takes the nearest unused expiry inside its window."""
+    gallery = _gallery()
+    maturities = np.array([0.0395, 0.0834, 0.256, 0.711, 0.96])
+    rows = gallery.slice_expiries(maturities)
+    assert [row["label"] for row in rows] == ["2 weeks", "1 month", "3 months", "9 months"]
+    assert rows[0]["T"] == 0.0395
+    assert rows[3]["T"] == 0.711
+    # Nothing near two weeks: that panel is skipped, and the expiry is not reused.
+    short = gallery.slice_expiries(np.array([0.30, 0.71]))
+    assert [row["label"] for row in short] == ["3 months", "9 months"]
+
+
+def test_iv_axis_stays_at_0_40_when_the_market_percentile_is_inside():
+    """A high cell past the 99th percentile does not lift the colour scale."""
+    gallery = _gallery()
+    market = np.concatenate([np.full(200, 0.20), np.array([0.09, 0.90])])
+    assert gallery.choose_iv_axis(market) == (0.05, 0.40)
+
+
 def test_error_colour_limit_ignores_a_handful_of_large_cells():
     """The heatmap scale is a high percentile of |error|, not the maximum."""
     gallery = _gallery()
@@ -158,7 +178,8 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     assert numbers["display"]["min_days"] == 7
     assert numbers["display"]["n_expiries_drawn"] == 2
     assert numbers["display"]["n_expiries_omitted"] == 0
-    assert numbers["display"]["implied_vol_axis"] == [0.05, 0.9]
+    assert numbers["display"]["implied_vol_axis"] == [0.05, 0.4]
+    assert isinstance(numbers["display"]["smile_slices"], list)
     local = numbers["display"]["clips"]["dupire_localvol"]
     assert local["n_clipped"] == 0
     assert local["raw_max"] is None or local["hi"] >= local["raw_max"]
@@ -201,9 +222,12 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
         if key == "market":
             assert "raw quotes" in text
         if key != "dupire_localvol":
-            assert "0.90" in text
+            assert "0.40" in text
+        if key in ("black_scholes", "gbm_mc"):
+            assert "flat by construction" in text
     assert (fig_dir / "p2_surface_gallery.png").stat().st_size > 1000
     assert (fig_dir / "p2_surface_iv_error.png").stat().st_size > 1000
+    assert (fig_dir / "p2_smile_slices.png").stat().st_size > 1000
     local = html_dir / "dupire_localvol.html"
     assert "local volatility" in local.read_text(encoding="utf-8")
     assert "not implied vol" in local.read_text(encoding="utf-8")

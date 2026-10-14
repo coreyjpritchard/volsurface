@@ -185,7 +185,31 @@
     "market_smooth": "gaussian along k/sqrt(T), sigma one grid step, display only",
     "implied_vol_axis": [
       0.05,
-      0.9
+      0.4
+    ],
+    "market_iv_p01": 0.08612201203270399,
+    "market_iv_p99": 0.3595543043811554,
+    "smile_slices": [
+      {
+        "label": "2 weeks",
+        "T": 0.039495433789954335,
+        "days": 14.425707191780822
+      },
+      {
+        "label": "1 month",
+        "T": 0.08344520547945206,
+        "days": 30.478361301369862
+      },
+      {
+        "label": "3 months",
+        "T": 0.25604794520547947,
+        "days": 93.52151198630138
+      },
+      {
+        "label": "9 months",
+        "T": 0.7107283105022831,
+        "days": 259.5935154109589
+      }
     ],
     "local_vol_axis": [
       0.0,
@@ -194,7 +218,7 @@
     "clips": {
       "market": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
@@ -205,7 +229,7 @@
       },
       "black_scholes": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
@@ -216,7 +240,7 @@
       },
       "gbm_mc": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
@@ -227,7 +251,7 @@
       },
       "svi": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
@@ -238,7 +262,7 @@
       },
       "heston": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
@@ -249,7 +273,7 @@
       },
       "sabr": {
         "lo": 0.05,
-        "hi": 0.9,
+        "hi": 0.4,
         "n_finite": 630,
         "n_clipped": 0,
         "n_above": 0,
