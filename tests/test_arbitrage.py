@@ -370,13 +370,66 @@ def test_two_sided_book_runs_quotes_fit_and_both_builders():
     fitted = SVIFitter().fit(data)
     assert np.isfinite(fitted.in_spread)
     assert 0.0 <= fitted.in_spread <= 1.0
-    assert set(fitted.slice_report.columns) == {"T", "min_g", "lee_ok", "calendar_ok", "in_spread"}
+    assert set(fitted.slice_report.columns) == {
+        "T", "min_g", "lee_ok", "calendar_ok", "in_spread", "n_one_sided",
+    }
+    assert int(fitted.slice_report["n_one_sided"].sum()) == 0
     assert fitted.slice_report["min_g"].notna().all()
     assert len(fitted.slice_report) == 2
 
     market = Curves(data.F, data.df)
     linear_surface(data.quotes, market)
     spline_surface(data.quotes, market)
+
+
+def test_one_sided_quotes_take_the_median_two_sided_weight():
+    """A last trade does not keep weight 1 next to a tight two-sided market.
+
+    Three quotes have spreads. Their inverse-variance weights differ. The
+    fourth has a bid only. After the common rescaling to mean 1, that row
+    equals the median of the three two-sided weights.
+    """
+    from volsurface.fit.svi import _spread_weights
+
+    rows = []
+    for k, bid, ask in (
+        (-0.1, 1.0, 1.2),
+        (0.0, 2.0, 2.1),
+        (0.1, 0.4, 0.9),
+        (0.2, 0.5, np.nan),
+    ):
+        rows.append(
+            {
+                "k": k,
+                "T": 1.0,
+                "iv": 0.2,
+                "F": 100.0,
+                "df": 1.0,
+                "K": 100.0 * np.exp(k),
+                "bid": bid,
+                "ask": ask,
+            }
+        )
+    weights = _spread_weights(pd.DataFrame(rows))
+    median = float(np.median(weights[:3]))
+    assert weights[3] == pytest.approx(median)
+    assert weights.mean() == pytest.approx(1.0)
+
+
+def test_highs_failure_is_neither_a_pass_nor_a_violation(monkeypatch):
+    """A solver that returns no point sets ``ok`` to None and keeps the message."""
+    from scipy.optimize import OptimizeResult
+
+    def failed(*args, **kwargs):
+        return OptimizeResult(success=False, message="numerical failure in test", x=None)
+
+    monkeypatch.setattr("volsurface.arbitrage.check.linprog", failed)
+    data = _two_sided()
+    report = check_quotes(data, side="bidask")
+    assert report.ok is None
+    assert report.violations.empty
+    assert "numerical failure in test" in report.note
+    assert report.n_checked == len(data.quotes)
 
 
 def test_two_sided_calendar_break_is_reported():

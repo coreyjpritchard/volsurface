@@ -9,8 +9,9 @@ arbitrage. The fitter reports ``min_g`` instead of hiding it in a penalty.
 Two starting points are tried; the smaller residual wins.
 
 When a quote has a bid and an ask, the total-variance residual is weighted by
-the inverse variance of the half-spread mapped through vega. Quotes with no
-spread keep weight 1. There is no SSVI or eSSVI fit in this phase: the
+the inverse variance of the half-spread mapped through vega. A quote with no
+spread takes the median of those two-sided weights, or weight 1 when the
+slice has no two-sided quote. There is no SSVI or eSSVI fit: the
 parameterisation stays raw SVI.
 
 This is a fit, not the SANOS linear program. It will happily match an
@@ -152,8 +153,9 @@ def _spread_weights(group: pd.DataFrame) -> np.ndarray:
     The map from a cash price to total variance is ``dw/dP = 2 * iv * T / vega``,
     with ``vega = dCash/dsigma``. ``sigma_w`` is that slope times the half-spread.
     A tiny vega is floored so the slope stays finite. A quote with no two-sided
-    market keeps weight 1. Weights are then scaled to average 1, so the floor
-    penalty stays on the same scale as an unweighted fit.
+    market takes the median two-sided weight on the slice, or 1 when the slice
+    has none. Weights are then scaled to average 1, so the floor penalty stays
+    on the same scale as an unweighted fit.
     """
     k = group["k"].to_numpy(dtype=float)
     T = float(group["T"].iloc[0])
@@ -164,8 +166,12 @@ def _spread_weights(group: pd.DataFrame) -> np.ndarray:
     ask = group["ask"].to_numpy(dtype=float) if "ask" in group else np.full(k.size, np.nan)
     strike = group["K"].to_numpy(dtype=float)
     weights = np.ones(k.size)
+    two_sided_weights: list[float] = []
+    one_sided = np.zeros(k.size, dtype=bool)
     for i in range(k.size):
-        if not (np.isfinite(bid[i]) and np.isfinite(ask[i]) and ask[i] > bid[i]):
+        has_market = np.isfinite(bid[i]) and np.isfinite(ask[i]) and ask[i] > bid[i]
+        if not has_market:
+            one_sided[i] = True
             continue
         if not (np.isfinite(iv[i]) and iv[i] > 0.0):
             continue
@@ -175,6 +181,13 @@ def _spread_weights(group: pd.DataFrame) -> np.ndarray:
         dw_dp = 2.0 * iv[i] * T / max(vega, vega_floor)
         sigma_w = max(abs(dw_dp) * half, 1e-8)
         weights[i] = 1.0 / sigma_w**2
+        two_sided_weights.append(weights[i])
+    # A one-sided quote has no half-spread, so it cannot form an inverse-variance
+    # weight. Giving it 1 while its neighbours sit at 1/sigma_w^2 lets a last
+    # trade dominate a tight market. Use the median two-sided weight instead.
+    # With no two-sided quote on the slice every weight stays 1.
+    if two_sided_weights and one_sided.any():
+        weights[one_sided] = float(np.median(two_sided_weights))
     weights *= weights.size / np.sum(weights)
     return weights
 
@@ -192,6 +205,9 @@ def _slice_report(pillars, groups, surface, k_min: float, k_max: float) -> pd.Da
     ``calendar_ok`` is true when this slice's total variance sits above the
     previous expiry's on that same grid. The first expiry has nothing to clear.
     ``in_spread`` is the fraction of two-sided quotes at this expiry, or NaN.
+    ``n_one_sided`` counts quotes on the slice with no two-sided bid and ask.
+    Those rows are weighted by the median two-sided weight. See
+    :func:`_spread_weights`.
     """
     grid = _diagnostic_grid(k_min, k_max)
     rows = []
@@ -213,10 +229,22 @@ def _slice_report(pillars, groups, surface, k_min: float, k_max: float) -> pd.Da
                 "lee_ok": lee_ok,
                 "calendar_ok": calendar_ok,
                 "in_spread": _in_spread(group, surface),
+                "n_one_sided": _n_one_sided(group),
             }
         )
         previous = slice_
     return pd.DataFrame.from_records(rows)
+
+
+def _n_one_sided(group: pd.DataFrame) -> int:
+    """Quotes on this slice that do not have a strictly positive bid-ask spread."""
+    n = len(group)
+    if "bid" not in group or "ask" not in group:
+        return int(n)
+    bid = group["bid"].to_numpy(dtype=float)
+    ask = group["ask"].to_numpy(dtype=float)
+    two_sided = np.isfinite(bid) & np.isfinite(ask) & (ask > bid)
+    return int(n - int(two_sided.sum()))
 
 
 def _in_spread(quotes: pd.DataFrame, surface) -> float:
