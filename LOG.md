@@ -4,6 +4,39 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** Session 00 built. **Next:** Session 01, SVI on the SPY snapshot.
 
+Library work below is not a session. Roadmap boxes stay unticked until Corey
+works through the material.
+
+## 2026-10-14 Library review: curves, seeds, and the z-rule
+
+`ArbReport.ok` is None when the checker evaluated nothing, and `n_checked`
+counts what it did evaluate. `as_seed_sequence` copies a `SeedSequence` so a
+second spawn with common random numbers still draws child 0. The discount
+curve is anchored at `df(0) = 1` and both curves extend the last carry past
+the final pillar. The z-rule bounds scale with the node count; the helper is
+`volsurface/mc/zrule.py`. Heston `c2` and `c4` are checked against a second
+stencil, not against a copied closed form.
+
+`Spot` stays a one-for-one forward bump with `df` fixed. That is the reading
+in DESIGN section 8, and the greek tests lock `Spot == Forward`.
+
+## 2026-10-13 Library P1a: interfaces, in review
+
+`docs/DESIGN.md` is now the source of truth for coordinates (normalised call,
+`k = log(K/F)`), the `Model` / `Surface` / `GreeksEngine` protocols, and the
+pull-request stack. Black-Scholes and Heston implement it. `price` still
+returns an array; a standard error lives on `PriceResult`. `state=None` means
+the initial state, which is empty for Black-Scholes and the variance for Heston.
+
+The Heston first cumulant matches `-1/2` times the integrated expected variance.
+The second and fourth come from a fixed stencil on the log characteristic
+function. The committed SPY snapshot still has no bid or ask.
+
+Hypotheses, not findings: the SANOS HTML's normalised call matches the PDF;
+marking SPY American and physical is the right contract label; Heston
+cumulants from the stencil are accurate enough to place a cosine grid, which
+is all Phase 1 asks of them.
+
 ## 2026-10-08 Session 00: the smile is the model's fingerprint
 
 Built the package core (Black-Scholes, Heston, the `Model` interface, yfinance and IBKR

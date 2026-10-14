@@ -45,7 +45,9 @@ python -m volsurface.chains ibkr SPY         # needs IB Gateway or TWS; see .env
 |---|---|
 | `volsurface/bs.py` | Black-Scholes in forward form, Greeks, vectorised implied vol |
 | `volsurface/heston.py` | Heston characteristic function (trap-free form), Fourier prices, Euler simulation |
-| `volsurface/models.py` | The `Model` interface and `implied_surface`; every model plugs in here |
+| `volsurface/models/` | The `Model` interface, Black-Scholes, Heston, and `implied_surface` |
+| `volsurface/core/` | Shared types and protocols (`docs/DESIGN.md`) |
+| `docs/DESIGN.md` | Source of truth for interfaces, coordinates, and the pull-request stack |
 | `volsurface/chains.py` | Option chains from yfinance or IBKR, snapshots, forwards, market implied vols |
 | `volsurface/smile.py` | At-the-money level and skew, power-law fits |
 | `sessions/` | marimo apps, one per session |
