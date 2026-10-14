@@ -758,3 +758,29 @@ uses `k` in `[-0.5, 0.5]`, the widest finite-difference grid that stays
 positive for those parameters, 200,000 paths and 48 steps. The budget is
 15 bp of implied vol plus three standard errors. Widening `Domain` while
 the grid stays inside it does not change that variance grid.
+
+## 16. SABR, Hagan's formula, and log-Euler
+
+`SABR.price` is Black's formula at the Hagan, Kumar, Lesniewski and
+Woodward (2002) lognormal implied volatility. `beta` is a parameter. The
+at-the-money strike uses the closed limit of `z / x(z)`, which is 1, so
+the implementation does not divide zero by zero. `|z| <= 1e-6` uses
+`1 - rho z / 2`. `nu = 0` and `beta = 1` is a flat smile at `alpha`.
+
+`simulate` is log-Euler on `Z`. Draw order, one child of the seed: at each
+time after 0, the forward normals, then the volatility normals. The
+volatility shock is `rho Z_F + sqrt(1 - rho^2) Z_vol`. Both updates read
+the volatility at the left edge of the step. `euler_price` starts that
+volatility at `alpha * F^(beta - 1)`. For `beta < 1` a normal Euler
+predictor that is not strictly positive sets `Z` to 0, and later steps
+leave it there. `beta = 1` does not absorb.
+
+The formula is an expansion in small `nu^2 T`. The Monte Carlo test uses
+`nu = 0.15` (so `nu^2 T = 0.0225` at one year) and the z-rule. A large
+`nu^2 T` is plotted. It is not required to match. `SABRFitter` holds
+`beta` fixed and fits `alpha`, `rho` and `nu` by a vega-weighted price
+residual, multi-start, bounds from `param_spec`.
+
+`check_surface` on Hagan prices at `T = 10`, `nu = 1.5`, `beta = 1` reports
+a butterfly. The implied vol on that window stays positive. The negative
+number is the density.

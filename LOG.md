@@ -4,6 +4,48 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
+## 2026-10-14 Library P2f: SABR, Hagan's formula, log-Euler
+
+`beta = 1`, `nu = 0`, `alpha = 0.2`, `rho = -0.4`. Implied vol on 21 strikes
+from `k = -1` to `1`, at three maturities, differs from `0.2` by `0`. The
+cash price matches Black at that vol to `1e-12`. The at-the-money limit is
+the closed form. For `alpha = 0.2`, `rho = -0.3`, `nu = 0.4`, `T = 1` it is
+`0.20110666666666668`. A strike at log-moneyness `1e-8` is within `1e-8` of
+that value.
+
+Log-Euler against Hagan, `nu = 0.15`, `rho = -0.2`, `beta = 1`, so
+`nu^2 T = 0.0225` at one year. Twelve independent nodes, `k` from `-0.12`
+to `0.12`, maturities `0.5` and `1`, 8,000 paths, 32 steps, seeds `50` to
+`61`. The z-rule bound at `n = 12` is max |z| below `3.93`. The grid
+passes. Across seeds `10000` onward, 200 further grids: pass rate
+`200/200`. Median max |z| `1.92`, 95th percentile `2.73`, largest `3.65`.
+Mean of the per-grid mean z is `-0.027` (sample sd `0.29`).
+
+Outside that regime the formula and the simulation separate. `nu = 1`,
+`T = 2`, `nu^2 T = 2`, `beta = 1`, `rho = 0`, `alpha = 0.25`, 20,000 paths,
+64 steps, seed 3, nine strikes sharing the paths. Implied-vol gaps (Monte
+Carlo minus Hagan) run from `-561` bp to `-380` bp. The implied-vol
+standard errors on those strikes are `66` to `90` bp. The same comparison
+at `nu^2 T = 0.0225` (8,000 paths, 32 steps, seed 11, strikes sharing
+paths) has a largest gap of `28` bp against standard errors of `26` to
+`90` bp. The large-gap panel is not a test.
+
+`beta = 0.5`, `alpha = 0.8`, `nu = 0`, unit forward, 2,000 paths, four
+steps, seed 2. 116 paths hit 0. None of them leave 0. The terminal mean of
+`Z` is `0.987`.
+
+Synthetic book, `beta` fixed at 1, truth `alpha = 0.22`, `rho = -0.45`,
+`nu = 0.35`. Four starts, 0.13 seconds. Parameter errors are about `1e-15`
+to `1e-13`. Largest price residual `2.3e-13`.
+
+`check_surface` on Hagan prices, `alpha = 0.3`, `beta = 1`, `rho = -0.3`,
+`nu = 1.5`, `T = 10`, `k` from `-1.5` to `0.5`. The report is not ok, and
+it contains a butterfly. On the 81-point figure grid the density is
+negative from `k = -1.5` to `-0.15` and from `0.325` to `0.50`, and
+positive in between. The minimum is `-1.099` at `k = -0.325`. Implied vol
+on that window stays between `0.662` and `2.065`. The preset
+`data/presets/sabr.json` is 6,042 bytes.
+
 ## 2026-10-14 Library P2d: Dupire local variance and log-Euler
 
 Flat Black-Scholes, sigma `0.2`, gives local volatility `0.2` with a gap of
