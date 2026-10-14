@@ -2,7 +2,23 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** The rough-volatility plug-in calibrates through `create("rbergomi")` and reads forward variance from the SANOS log contract. `roughvol` is not installed here, so the SPX figure has no rBergomi curve. **Next:** market paths, the three pricers, and the `nu`-only regime chain.
+**Current state:** Market paths switch `nu` on a continuous-time chain, price a variance swap from the forward curve, and attach a causal filter probability. **Next:** a minimal DYSANOS replication on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Library P3f: market paths and regimes
+
+`xi_level` and `both` raise. `H = 0.1` with no plugin raises `RuntimeError` and does not build a substitute driver. A stand-in `driver_y` is called and is not labelled rBergomi. Train spawn key `(0,)` and test spawn key `(2,)` produce different first draws. The same seed repeats `Z`, the regime, and the filter probability.
+
+The chain, 4,000 paths, seed entropy 1, test split, time 1. Generator rates 1.5 and 0.8, initial law `(0.7, 0.3)`. Counts 1,550 and 2,450. The law `p0 expm(Q t)` expects 1,532.5 and 2,467.5. Chi-square statistic `0.323`, p-value `0.570`. The bar in the test is p-value above `0.001`.
+
+Terminal time 1, eight runs, 2,000 paths each, `nu` in `{0.4, 1.1}`, `rho = -0.4`, `xi0 = 0.04`, `H = 0.5`. The z-score of `E[Z] - 1` has maximum absolute value `1.193` and mean `-0.209`. The z-score of `E[v] - xi0` has maximum absolute value `1.838` and mean `-0.246`. Both sets pass the z-rule. This is the martingale hypothesis under switching, for the left-point log-Euler, not a proof for the continuous limit.
+
+The variance swap at inception against realised left-point variance, eight runs, 1,500 paths. The z-score of the gap has maximum absolute value `1.819` and mean `-0.473`. It passes the z-rule.
+
+The filter, 2,500 paths, 30 dates, observation means `-1` and `1`, variance `0.25`. Replacing the series after date 10 leaves the probabilities up to date 10 unchanged, to `1e-12`. Two bins at the last date have at least 40 paths. The largest gap between the hit rate and the mean predicted probability is `0.00108`. Both bins sit inside the 0.1 and 99.9 percent binomial quantiles.
+
+Black-Scholes along one path, forward 100, strike 90, expiry 1, rate 0.01. The pricer matches the formula to `1e-12` at `t = 0` and at `t = 0.5`. At expiry and one step later the value is the payoff, the same number. A surrogate whose validation error is 10 bp against a bar of 5 bp raises. One whose error is 2 bp keeps that error. The figure is `docs/figures/p3f_paths.png`.
+
+**Hypothesis:** the terminal mean of `Z` under this switch stays inside the z-rule at `H = 0.5`. The next specification is the same eight-run check when `Y` comes from `driver_y` at an `H` below one half. The quantity to report is the maximum absolute z-score, next to the `1.193` measured here.
 
 ## 2026-10-14 Library P3e: rough-volatility plug-in
 
