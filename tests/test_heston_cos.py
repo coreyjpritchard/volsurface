@@ -1,8 +1,9 @@
 """Heston cosine prices, Euler full truncation, and calibration.
 
-The Fang and Oosterlee reference is 5.785155450 at T = 1. Lewis and the
-cosine expansion are both required to 1e-7 there. The cosine interval uses
-L = 10 and N = 256, the defaults on ``cos_price``.
+Fang and Oosterlee publish 5.785155450, nine digits, at T = 1. A 50-digit
+Lewis integral is 5.78515543438. The library Lewis is required to 1e-10 of
+that value, and the cosine price to 1e-7. ``L = 10``. ``N`` is chosen from
+the interval unless a test passes ``n_terms``.
 """
 
 import datetime as dt
@@ -24,24 +25,26 @@ from volsurface.surface.model import ModelSurface
 
 # Fang and Oosterlee (2008), section 5.2. Feller ratio is about 0.38.
 FO = dict(v0=0.0175, kappa=1.5768, theta=0.0398, xi=0.5751, rho=-0.5711)
-FO_CALL = 5.785155450
+# 50-digit Lewis integral of the trap-free characteristic function. The
+# published 5.785155450 is that value rounded to nine digits, 1.56e-8 high.
+LEWIS_ATM = 5.78515543438
 
 
 def test_fang_oosterlee_reference_by_lewis_and_cos():
     model = Heston(**FO)
     lewis = model.price(100.0, np.array([100.0]), 1.0)[0]
     cos = model.cos_price(100.0, np.array([100.0]), 1.0)[0]
-    assert lewis == pytest.approx(FO_CALL, abs=1e-7)
-    assert cos == pytest.approx(FO_CALL, abs=1e-7)
+    assert lewis == pytest.approx(LEWIS_ATM, abs=1e-10)
+    assert cos == pytest.approx(LEWIS_ATM, abs=1e-7)
     assert model.feller_ratio() < 1.0
 
 
 def test_lewis_and_cos_agree_on_a_grid_including_the_wings_and_one_week():
     """FO parameters, which violate Feller, on one week through two years.
 
-    Strikes run from k = -1 to k = 1. N = 256, L = 10. The tolerance is
-    1e-6 in cash price, wider than the T = 1 at-the-money gap (about 8e-8)
-    and tighter than a wrong characteristic function.
+    Strikes run from k = -1 to k = 1. L = 10 and N follows the interval.
+    The tolerance is 1e-6 in cash price, wider than the T = 1 at-the-money
+    gap and tighter than a wrong characteristic function.
     """
     model = Heston(**FO)
     assert model.feller_ratio() == pytest.approx(0.3794922785422908, rel=1e-12)
@@ -62,18 +65,19 @@ def test_cos_matches_lewis_on_a_second_feller_violation():
     assert model.feller_ratio() == pytest.approx(0.32)
     strike = 100.0 * np.exp(np.linspace(-0.8, 0.8, 7))
     for maturity in (7.0 / 365.0, 1.0):
-        gap = np.max(np.abs(
-            model.price(100.0, strike, maturity) - model.cos_price(100.0, strike, maturity)
-        ))
+        gap = np.max(
+            np.abs(model.price(100.0, strike, maturity) - model.cos_price(100.0, strike, maturity))
+        )
         assert gap < 1e-6, (maturity, gap)
 
 
 def test_cos_converges_to_black_scholes_as_xi_vanishes():
-    """v0 = theta and xi = 1e-4. The cumulant stencil's c4 is negative and replaced by 0.
+    """v0 = theta and xi = 1e-4. The fourth-cumulant stencil does not agree.
 
-    The remaining gap is the vol-of-vol, the same size for Lewis and for COS.
-    A smaller xi makes the degree-8 stencil on log phi unusable (c4 of order
-    100), which is why this test stops at 1e-4.
+    The interval then uses twice the Gaussian half-width. The remaining gap
+    against Black is the vol-of-vol, the same size for Lewis and for COS.
+    A smaller xi is the same widened interval. The price gap, not the
+    stencil, is what this test checks, and it is already inside 5e-4 here.
     """
     theta = 0.04
     model = Heston(v0=theta, kappa=1.5, theta=theta, xi=1e-4, rho=-0.5)
@@ -132,8 +136,13 @@ def test_euler_matches_lewis_by_the_z_rule():
         reference = model.price(100.0, strike, float(maturity))
         for j, one in enumerate(strike):
             result = euler_price(
-                model, 100.0, np.array([one]), float(maturity),
-                n_paths=8_000, n_steps=64, seed=100 + node,
+                model,
+                100.0,
+                np.array([one]),
+                float(maturity),
+                n_paths=8_000,
+                n_steps=64,
+                seed=100 + node,
             )
             estimates.append(result.value[0])
             errors.append(result.stderr[0])
@@ -145,6 +154,75 @@ def test_euler_matches_lewis_by_the_z_rule():
     assert max_abs_bound(n) < 4.5
     failure = check_z(z)
     assert failure is None, failure
+
+
+def test_euler_on_fang_oosterlee_parameters_after_the_measured_bias():
+    """Feller ratio 0.38. 8,000 paths, 64 steps, one strike per seed.
+
+    The budget is the mean Euler price minus Lewis at 1,000,000 paths,
+    64 steps, seeds 0, 1, 2 and 3, on strikes 90, 100 and 110. Those four
+    runs had sample standard deviations 0.00672, 0.00684 and 0.00372.
+    The z-rule is applied to (estimate - Lewis - budget). Nodes do not
+    share paths.
+    """
+    model = Heston(**FO)
+    assert model.feller_ratio() == pytest.approx(0.3794922785422908, rel=1e-12)
+    strike = np.array([90.0, 100.0, 110.0])
+    # Mean of four 1,000,000-path runs. See the docstring.
+    budget = np.array([0.01593516, 0.02413260, 0.02054494])
+    reference = model.price(100.0, strike, 1.0)
+    estimates = []
+    errors = []
+    references = []
+    node = 0
+    for _seed_i in range(8):
+        for j, one in enumerate(strike):
+            result = euler_price(
+                model,
+                100.0,
+                np.array([one]),
+                1.0,
+                n_paths=8_000,
+                n_steps=64,
+                seed=400 + node,
+            )
+            estimates.append(result.value[0])
+            errors.append(result.stderr[0])
+            references.append(reference[j] + budget[j])
+            node += 1
+    z = (np.array(estimates) - np.array(references)) / np.array(errors)
+    assert z.size == 24
+    failure = check_z(z)
+    assert failure is None, failure
+
+
+def test_cos_matches_lewis_at_high_kurtosis():
+    """Puts, F = 100, k in {-1, -0.4, 0, 0.3}. Tolerance 1e-5.
+
+    The first set has kurtosis about 103 at T = 1. The second has kurtosis
+    about 281 at T = 0.25 and about 798 at T = 1. Both sit inside param_spec.
+    """
+    specs = (
+        Heston(v0=0.04, kappa=0.5, theta=0.04, xi=1.5, rho=-0.9),
+        Heston(v0=0.04, kappa=1.0, theta=0.04, xi=5.0, rho=-0.7),
+    )
+    strike = 100.0 * np.exp(np.array([-1.0, -0.4, 0.0, 0.3]))
+    for model in specs:
+        for maturity in (0.25, 1.0):
+            lewis = model.price(100.0, strike, maturity, kind="put")
+            cos = model.cos_price(100.0, strike, maturity, kind="put")
+            gap = float(np.max(np.abs(lewis - cos)))
+            assert gap < 1e-5, (model.xi, maturity, gap)
+
+
+def test_fitter_refuses_american_exercise():
+    truth = Heston(v0=0.03, kappa=1.2, theta=0.05, xi=0.4, rho=-0.6)
+    data = _quotes_from(truth, half_spread=None)
+    data.quotes.loc[data.quotes.index[:2], "exercise"] = "american"
+    with pytest.raises(ValueError, match="2 quotes"):
+        HestonFitter(n_starts=1).fit(data)
+    fitted = HestonFitter(n_starts=1, seed=1, allow_american=True).fit(data)
+    assert int(fitted.slice_report.iloc[0]["n_american"]) == 2
 
 
 def test_put_call_parity_on_the_cosine_price():

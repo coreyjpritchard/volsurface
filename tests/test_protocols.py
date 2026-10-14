@@ -71,8 +71,8 @@ def test_heston_cumulants_match_a_second_differentiation():
     integ = m.theta * T + (m.v0 - m.theta) * (1.0 - np.exp(-m.kappa * T)) / m.kappa
     c1, c2, c4 = m.cumulants(T)
     assert c1 == pytest.approx(-0.5 * integ, rel=0, abs=1e-12)
-    # mpmath derivatives of log phi at these parameters, T = 1. The stencil
-    # sits 2e-12 under c2 and about 5e-8 over c4. Wider than that gap, tighter
+    # mpmath derivatives of log phi at these parameters, T = 1. The scaled
+    # stencil is inside these absolute tolerances. Wider than the gap, tighter
     # than a broken branch of the characteristic function.
     assert c2 == pytest.approx(0.031571152013, abs=1e-9)
     assert c4 == pytest.approx(7.486782e-3, abs=1e-6)

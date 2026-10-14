@@ -6,15 +6,27 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 ## 2026-10-14 Library P2c: Heston cosine price, Euler, calibration
 
-Lewis and the cosine expansion both price the Fang and Oosterlee at-the-money
-one-year call to `1e-7`. Lewis is `5.785155434` (`-1.56e-8` against
-`5.785155450`). COS with `N = 256` and `L = 10` is `5.785155373`
-(`-7.66e-8`). On the same parameters, `k` from `-1` to `1` and maturities
-from one week to two years, the largest |Lewis minus COS| on the heatmap is
-`7.4e-8`. The Feller ratio there is `0.38`. A second violating set (ratio
-`0.32`) stays within `1e-6`. With `v0 = theta` and `xi = 1e-4` both prices
-sit within `5e-4` of Black. The fourth-cumulant stencil is unusable below
-that, so the test stops there.
+The published Fang and Oosterlee at-the-money one-year call is
+`5.785155450`, nine digits. A 40-digit Lewis integral is `5.785155434376`.
+The library Lewis is `5.785155434375`. COS with the term count chosen from
+the interval is `5.785155412` (`2.2e-8` under the integral). Fixed
+`N = 256` is `5.785155373` (`6.1e-8` under the integral). The old
+`-7.7e-8` against `5.785155450` was mostly that published rounding
+(`1.56e-8`). On the same parameters, `k` from `-1` to `1` and maturities
+from one week to two years, the largest |Lewis minus COS| on the heatmap
+is `2.2e-8`. The Feller
+ratio there is `0.38`. A second violating set (ratio `0.32`) stays within
+`1e-6`. With `v0 = theta` and `xi = 1e-4` the fourth cumulant is round-off,
+the interval widens to twice the Gaussian half-width, and both prices sit
+within `5e-4` of Black.
+
+A fourth cumulant above `80 c2^2` is kept. Puts at `F = 100` and `k` in
+`{-1, -0.4, 0, 0.3}`: largest |Lewis minus COS| is `2.5e-7` at `xi = 1.5`,
+`kappa = 0.5`, `rho = -0.9`, `T = 0.25`, and `9.0e-8` at `T = 1`. At
+`xi = 5`, `kappa = 1`, `rho = -0.7` it is `6.2e-6` at `T = 0.25` and
+`5.6e-6` at `T = 1`. On that set the library Lewis put at `k = -1`,
+`T = 1` is `0.166864108` against a 40-digit integral `0.166861460`
+(gap `2.65e-6`). The at-the-money put agrees to `4e-10`.
 
 Euler full truncation, 8,000 paths, 64 steps, 24 independent nodes (six
 strikes, four maturities). The z-rule bound at `n = 24` is max |z| below
@@ -23,7 +35,11 @@ fixed seed in the test passes. Across 200 further seeds the pass rate is
 `200/200`. The median max |z| is `2.23`. The mean of the per-grid mean z is
 `-0.013` (sample sd `0.20`). Bias at 64 steps on 240,000 paths is `-0.035`,
 `-0.023`, `-0.013` at strikes 90, 100, 110, against 8,000-path standard
-errors of about `0.17`, `0.13`, `0.10`.
+errors of about `0.17`, `0.13`, `0.10`. On the Fang and Oosterlee
+parameters (Feller ratio `0.38`), 64 steps, the bias at strikes 90, 100
+and 110 averaged over four runs of 1,000,000 paths (seeds 0 to 3) is
+`+0.0159`, `+0.0241` and `+0.0205` (sample sd `0.0067`, `0.0068`,
+`0.0037`). The z-rule test subtracts that budget.
 
 Synthetic recovery, four starts, vega-weighted prices: parameters return to
 better than `1e-8` and the largest price residual is `9.6e-12`. Wall time
@@ -33,7 +49,7 @@ nine strikes, returns no violations.
 
 SPXW mids of 14 October 2026, thinned to `|k| <= 0.4` and at most 11 strikes
 an expiry: 440 quotes, 40 expiries. Four starts, seed 0, vega-weighted
-prices, 27.2 seconds (`docs/figures/p2c_spx_fit.json` records 27.182).
+prices, 27.2 seconds on that run. The fit file does not store the clock.
 `v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`,
 `rho = -0.6508`, Feller ratio `0.141`. Solver `xtol`, cost `6.912e-2`.
 Root-mean-square price residual `5.48` index points, largest `20.68`, on a

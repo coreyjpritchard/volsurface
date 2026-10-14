@@ -5,7 +5,6 @@
   "xi": 2.7031594901941043,
   "rho": -0.6507881634823143,
   "feller": 0.14137766625612652,
-  "wall_time": 27.18171792200019,
   "solver_status": "`xtol` termination condition is satisfied. cost=6.912e-02 starts=4",
   "rmse_price": 5.483211635050884,
   "max_abs_price": 20.67675246937023,

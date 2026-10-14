@@ -13,13 +13,16 @@ forward, so the same truncated interval leaves a larger cosine error on the
 call. Parity adds ``df (F - K)`` and uses ``E[F_T] = F``, which the
 characteristic function already satisfies (``phi(-i) = 1``).
 
-The cosine interval is ``c1 ± L sqrt(c2 + sqrt(c4))`` with ``L = 10`` and
-``N = 256`` terms. Those cumulants are :meth:`Heston.cumulants`. A negative
-fourth cumulant, or one larger than ``80 c2²``, is replaced by zero before
-the square root. The degree-8 stencil that produces ``c4`` does that when
-``xi`` is small enough that the law is nearly Gaussian and the fourth
-derivative is round-off. The replacement widens nothing: the interval is
-then the Gaussian one.
+The cosine interval is ``c1 ± L sqrt(c2 + sqrt(c4))`` with ``L = 10``.
+Those cumulants are :meth:`Heston.cumulants`. A fourth cumulant that is
+not finite, or is negative, is the degree-8 stencil in round-off (the law
+is nearly Gaussian, or the maturity is too short for a float64 fourth
+derivative). The interval then uses ``half = 2 L sqrt(c2)``, which is
+wider than the Gaussian interval. A large positive ``c4`` is kept: Heston
+kurtosis above 80 is inside ``param_spec``, and dropping it narrows the
+grid. ``N`` starts from the width of that interval, at least 256, and
+doubles until two successive prices agree to ``1e-7`` or ``N`` reaches
+65536. Passing ``n_terms`` skips that and uses the given count.
 
 ``simulate`` is Euler full truncation (Lord, Koekkoek and van Dijk 2010) on
 the caller's time grid. Draw order, one child of the seed for the whole run:
@@ -38,6 +41,7 @@ vector of variances, one per path, is what ``simulate`` writes. ``price`` and
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -51,11 +55,15 @@ from volsurface.mc.rng import generator, spawn
 from volsurface.plugins import register
 
 # Fang and Oosterlee truncation. L = 10 is their reported Heston choice.
-# N = 256 prices the T = 1 reference to 1e-7. See docs/DESIGN.md section 14.
+# COS_N is the smallest term count. Wide intervals use more. See section 14.
 COS_L = 10.0
 COS_N = 256
-# Kurtosis c4 / c2^2 above this is the cumulant stencil, not a fat tail.
-_C4_KURTOSIS_CAP = 80.0
+_COS_N_MAX = 65_536
+# Successive cosine prices must agree by this much before N stops growing.
+_COS_AGREE = 1e-7
+# Neighbouring stencil steps. c4 is used only when both agree.
+_C2_AGREE = 1e-3
+_C4_AGREE = 1e-3
 
 
 def _spec() -> list[ParamSpec]:
@@ -110,18 +118,34 @@ class Heston:
         return heston_f.price(F, K, T, v0, self.kappa, self.theta, self.xi, self.rho, df, kind)
 
     def cos_price(
-        self, F, K, T, df=1.0, kind="call", *, state: State | None = None,
-        n_terms: int = COS_N, truncation: float = COS_L,
+        self,
+        F,
+        K,
+        T,
+        df=1.0,
+        kind="call",
+        *,
+        state: State | None = None,
+        n_terms: int | None = None,
+        truncation: float = COS_L,
     ):
         """Cash price by the cosine expansion of the put, then put-call parity.
 
         ``n_terms`` is ``N`` and ``truncation`` is ``L`` in section 14 of
-        ``docs/DESIGN.md``. The default is ``N = 256``, ``L = 10``.
+        ``docs/DESIGN.md``. ``n_terms=None`` chooses ``N`` from the interval
+        and raises it until successive prices agree. ``L`` defaults to 10.
         """
         v0 = self._variance(state)
         return _cos_cash(
-            self, float(F), K, float(T), float(df), kind, v0,
-            n_terms=int(n_terms), truncation=float(truncation),
+            self,
+            float(F),
+            K,
+            float(T),
+            float(df),
+            kind,
+            v0,
+            n_terms=None if n_terms is None else int(n_terms),
+            truncation=float(truncation),
         )
 
     def char_func(self, u, T: float, *, state: State | None = None) -> np.ndarray:
@@ -145,22 +169,27 @@ class Heston:
                = (1 - exp(-kappa T)) (theta - v0) / (2 kappa) - theta T / 2.
 
         ``c2`` and ``c4`` are derivatives of the cumulant generating function
-        ``K(t) = log E[exp(t X_T)] = log phi(-i t)`` at ``t = 0``. They are
-        read from a degree-8 polynomial on the stencil ``t = -4h, ..., 4h``
-        with ``h = 0.01``. That stencil reproduces the closed form for ``c1``.
-        A second stencil at ``h = 0.02``, and a central difference, are the
-        checks on ``c2`` and ``c4`` (see the protocol test). A cosine expansion
-        only needs the numbers to place a grid.
+        ``K(t) = log E[exp(t X_T)] = log phi(-i t)`` at ``t = 0``. The step
+        is a fraction of ``sqrt(2 |c1|)``, which tracks the scale of ``X_T``.
+        A degree-8 fit is kept only when two neighbouring steps agree, and
+        the step is halved while ``phi(-i t)`` is not finite. ``c4`` is
+        ``nan`` when those steps disagree: the cosine interval then widens
+        instead of trusting round-off. The protocol test checks the kept
+        values against a second stencil and a central difference.
         """
         v0 = self._variance(state)
         kappa, theta = self.kappa, self.theta
         c1 = (1.0 - np.exp(-kappa * T)) * (theta - v0) / (2.0 * kappa) - 0.5 * theta * T
-        c2, c4 = _higher_cumulants(self, float(T), v0)
+        c2, c4 = _higher_cumulants(self, float(T), v0, float(c1))
         return (float(c1), c2, c4)
 
     def simulate(
-        self, n_paths: int, times: np.ndarray, *,
-        seed: int | np.random.SeedSequence, state0: State | None = None,
+        self,
+        n_paths: int,
+        times: np.ndarray,
+        *,
+        seed: int | np.random.SeedSequence,
+        state0: State | None = None,
     ) -> Paths:
         """Unit-mean ``Z`` and the variance path. See the module note for the draws."""
         times = np.asarray(times, dtype=float)
@@ -175,7 +204,13 @@ class Heston:
         # One child for the whole run, shared by every strike priced off these paths.
         rng = generator(spawn(seed, 1)[0])
         Z, variance = _euler_full_truncation(
-            times, v0, self.kappa, self.theta, self.xi, self.rho, rng,
+            times,
+            v0,
+            self.kappa,
+            self.theta,
+            self.xi,
+            self.rho,
+            rng,
         )
         return Paths(times=times, Z=Z, state={"v": variance})
 
@@ -200,9 +235,17 @@ class Heston:
 
 
 def euler_price(
-    model: Heston, F, K, T, df=1.0, kind="call", *,
-    state: State | None = None, n_paths: int | None = None,
-    n_steps: int | None = None, seed: int | np.random.SeedSequence | None = None,
+    model: Heston,
+    F,
+    K,
+    T,
+    df=1.0,
+    kind="call",
+    *,
+    state: State | None = None,
+    n_paths: int | None = None,
+    n_steps: int | None = None,
+    seed: int | np.random.SeedSequence | None = None,
 ) -> PriceResult:
     """Euler full-truncation price and its standard error, one maturity, one set of paths.
 
@@ -231,8 +274,13 @@ def euler_price(
     times = np.linspace(0.0, T, n_steps + 1)
     paths = model.simulate(n_paths, times, seed=seed, state0=state)
     value, stderr = estimate_terminal(
-        paths.Z[:, -1], float(F), K_flat, float(df), kind,
-        antithetic=False, control_variate=False,
+        paths.Z[:, -1],
+        float(F),
+        K_flat,
+        float(df),
+        kind,
+        antithetic=False,
+        control_variate=False,
     )
     return PriceResult(
         value=value.reshape(K_in.shape),
@@ -243,63 +291,143 @@ def euler_price(
 
 
 def cos_interval(model: Heston, T: float, truncation: float = COS_L, *, state=None):
-    """``(a, b, c4_used)`` for the cosine grid. ``c4_used`` may have been replaced by 0."""
+    """``(a, b, c4_used)`` for the cosine grid.
+
+    ``c4_used`` is 0 when the fourth cumulant was unusable. The half-width
+    is then ``2 L sqrt(c2)``, wider than the Gaussian interval ``L sqrt(c2)``.
+    A finite positive ``c4`` is not capped.
+    """
     c1, c2, c4 = model.cumulants(float(T), state=state)
-    c2_use = max(float(c2), 0.0)
+    c2_use = c2 if np.isfinite(c2) and c2 > 0.0 else 0.0
     c4_use = float(c4)
-    cap = _C4_KURTOSIS_CAP * max(c2_use, 1e-12) ** 2
-    if not np.isfinite(c4_use) or c4_use < 0.0 or c4_use > cap:
+    if not np.isfinite(c4_use) or c4_use < 0.0:
+        half = float(truncation) * math.sqrt(c2_use) * 2.0
         c4_use = 0.0
-    half = float(truncation) * np.sqrt(c2_use + np.sqrt(c4_use))
+    else:
+        half = float(truncation) * math.sqrt(c2_use + math.sqrt(c4_use))
     if half <= 0.0:
         half = 1e-8
     return float(c1) - half, float(c1) + half, c4_use
 
 
-def _higher_cumulants(model: Heston, T: float, v0: float) -> tuple[float, float]:
-    """``(c2, c4)`` from a polynomial fit to ``log phi(-i t)`` around 0."""
-    h = 0.01
-    t = np.arange(-4, 5) * h
-    # phi(-i t) = E[exp(t X)]. log of that is the cumulant generating function.
-    psi = np.log(model.char_func(-1j * t, T, state={"v": np.array(v0)})).real
+def _higher_cumulants(model: Heston, T: float, v0: float, c1: float) -> tuple[float, float]:
+    """``(c2, c4)`` from degree-8 fits whose step scales with ``X_T``.
+
+    ``c4`` is ``nan`` when neighbouring steps do not agree. ``c2`` is still
+    returned when those steps agree on the second derivative alone.
+    """
+    scale = math.sqrt(max(2.0 * abs(c1), 1e-18))
+    rows: list[tuple[float, float]] = []
+    for factor in (0.02, 0.05, 0.1, 0.2, 0.4):
+        step = factor * scale
+        fitted = None
+        for _ in range(24):
+            fitted = _cgf_poly(model, T, v0, step)
+            if fitted is not None:
+                break
+            step *= 0.5
+        if fitted is not None:
+            rows.append(fitted)
+    c2_kept = float("nan")
+    c4_kept = float("nan")
+    for left, right in zip(rows, rows[1:], strict=False):
+        c2_left, c4_left = left
+        c2_right, c4_right = right
+        if c2_left <= 0.0 or c2_right <= 0.0:
+            continue
+        if abs(c2_left - c2_right) > _C2_AGREE * max(c2_left, c2_right):
+            continue
+        c2_kept = c2_right
+        if c4_left <= 0.0 or c4_right <= 0.0:
+            continue
+        if abs(c4_left - c4_right) <= _C4_AGREE * max(c4_left, c4_right):
+            c4_kept = c4_right
+    if not np.isfinite(c2_kept):
+        for c2_row, _c4_row in reversed(rows):
+            if np.isfinite(c2_row) and c2_row > 0.0:
+                c2_kept = c2_row
+                break
+    return c2_kept, c4_kept
+
+
+def _cgf_poly(model: Heston, T: float, v0: float, step: float):
+    """``(c2, c4)`` at one step, or None if ``phi(-i t)`` is not usable."""
+    t = np.arange(-4, 5, dtype=float) * step
+    phi = np.asarray(model.char_func(-1j * t, T, state={"v": np.array(v0)}))
+    if phi.shape != t.shape or not np.all(np.isfinite(phi)) or np.any(np.abs(phi) == 0.0):
+        return None
+    psi = np.log(phi).real
+    if not np.all(np.isfinite(psi)):
+        return None
     coeff = np.polyfit(t, psi, 8)
+    if not np.all(np.isfinite(coeff)):
+        return None
     poly = np.poly1d(coeff)
-    # The Taylor coefficient of t^n / n! is the nth cumulant, so c_n = d^n K/dt^n at 0.
     c2 = float(poly.deriv(2)(0.0))
     c4 = float(poly.deriv(4)(0.0))
+    if not np.isfinite(c2) or not np.isfinite(c4):
+        return None
     return c2, c4
 
 
-def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int, truncation: float):
+def _n_from_width(left: float, right: float, c2: float) -> int:
+    """Smallest power of two at least 256 that resolves the cosine interval."""
+    width = max(right - left, 1e-8)
+    scale = max(math.sqrt(max(c2, 0.0)), 1e-8)
+    raw = 32.0 * width / scale
+    n_terms = COS_N
+    while n_terms < raw and n_terms < _COS_N_MAX:
+        n_terms *= 2
+    return n_terms
+
+
+def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int | None, truncation: float):
     K_in = np.asarray(K, dtype=float)
     K_flat = np.atleast_1d(K_in).astype(float)
     if T <= 0.0:
         value = _intrinsic(F, K_flat, df, kind)
         return value.reshape(K_in.shape)
     state = {"v": np.array(v0)}
-    a, b, _ = cos_interval(model, T, truncation, state=state)
-    omega = np.arange(n_terms) * np.pi / (b - a)
+    left, right, _c4 = cos_interval(model, T, truncation, state=state)
+    _c1, c2, _c4_raw = model.cumulants(float(T), state=state)
+    if n_terms is not None:
+        chosen = _cos_at(model, F, K_flat, T, df, kind, state, left, right, int(n_terms))
+        return chosen.reshape(K_in.shape)
+    count = _n_from_width(left, right, c2 if np.isfinite(c2) else 0.0)
+    previous = None
+    chosen = None
+    while True:
+        chosen = _cos_at(model, F, K_flat, T, df, kind, state, left, right, count)
+        if previous is not None and float(np.max(np.abs(chosen - previous))) <= _COS_AGREE:
+            break
+        if count >= _COS_N_MAX:
+            break
+        previous = chosen
+        count *= 2
+    return np.asarray(chosen, dtype=float).reshape(K_in.shape)
+
+
+def _cos_at(model, F, K_flat, T, df, kind, state, left, right, n_terms: int):
+    omega = np.arange(n_terms) * np.pi / (right - left)
     phi = model.char_func(omega, T, state=state)
-    weight = np.real(phi * np.exp(-1j * omega * a))
+    weight = np.real(phi * np.exp(-1j * omega * left))
     weight[0] *= 0.5
     log_k = np.log(K_flat / F)
-    upper = np.clip(log_k, a, b)
-    chi, psi = _chi_psi(omega, a, upper)
+    upper = np.clip(log_k, left, right)
+    chi, psi = _chi_psi(omega, left, upper)
     payoff = np.exp(log_k)[:, None] * psi - chi
-    coefficients = 2.0 / (b - a) * payoff
+    coefficients = 2.0 / (right - left) * payoff
     put_norm = coefficients @ weight
     put = df * F * put_norm
     call = put + df * (F - K_flat)
     if isinstance(kind, str):
-        chosen = call if kind == "call" else put
         if kind not in ("call", "put"):
             raise ValueError(f"kind must be 'call' or 'put', got {kind!r}")
-    else:
-        kinds = np.asarray(kind)
-        if kinds.shape != K_flat.shape or not np.all((kinds == "call") | (kinds == "put")):
-            raise ValueError(f"kind must be 'call' or 'put' with shape {K_flat.shape}")
-        chosen = np.where(kinds == "call", call, put)
-    return np.asarray(chosen, dtype=float).reshape(K_in.shape)
+        return call if kind == "call" else put
+    kinds = np.asarray(kind)
+    if kinds.shape != K_flat.shape or not np.all((kinds == "call") | (kinds == "put")):
+        raise ValueError(f"kind must be 'call' or 'put' with shape {K_flat.shape}")
+    return np.where(kinds == "call", call, put)
 
 
 def _chi_psi(omega: np.ndarray, a: float, upper: np.ndarray):

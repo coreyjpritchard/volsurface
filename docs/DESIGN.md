@@ -679,12 +679,24 @@ accurate for the call. Parity uses `E[F_T] = F`, which the characteristic
 function satisfies, and does not add a second truncation.
 
 The interval is `[c1 - L sqrt(c2 + sqrt(c4)), c1 + L sqrt(c2 + sqrt(c4))]`
-with `L = 10` and `N = 256` terms. `c1`, `c2`, `c4` are `cumulants`. A
-negative `c4`, or one larger than `80 c2^2`, is replaced by 0 before the
-square root: that is the degree-8 stencil sitting in round-off, which
-happens as `xi` approaches 0. The replacement is recorded in the method
-docstring. Puts are integrated with the Fang and Oosterlee `chi` and `psi`
-weights. `k = 0` in the sum is halved.
+with `L = 10`. `c1`, `c2`, `c4` are `cumulants`. The step of the degree-8
+stencil scales with `sqrt(2 |c1|)`, and `c4` is kept only when two
+neighbouring steps agree. A non-finite or negative `c4` is round-off, not
+a thin tail: the half-width is then `2 L sqrt(c2)`, wider than the
+Gaussian interval. A large positive `c4` is kept. Kurtosis above 80 occurs
+inside `param_spec`, and replacing it with 0 narrows the grid. `N` is at
+least 256 and grows with `(b - a) / sqrt(c2)`, then doubles until
+successive prices agree to `1e-7`, with a cap of 65536. Puts are
+integrated with the Fang and Oosterlee `chi` and `psi` weights. `k = 0`
+in the sum is halved.
+
+Lewis quadrature is the reference inside ordinary parameters. At
+`xi = 5`, `kappa = 1`, `v0 = theta = 0.04`, `rho = -0.7` and `T = 1`
+the at-the-money put agrees with a 40-digit integral to `4e-10`. The
+put at `k = -1` is `0.166864108` against `0.166861460`, a gap of
+`2.65e-6`. That is the wing, not the at-the-money reference. The cosine
+test at these parameters still asks for `1e-5` against the library
+Lewis price.
 
 `Heston.simulate` is Euler full truncation (Lord, Koekkoek and van Dijk
 2010). The variance used in the drift and the diffusion is `max(v, 0)`.

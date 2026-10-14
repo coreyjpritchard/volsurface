@@ -57,7 +57,10 @@ def cos_error_against_n() -> pd.DataFrame:
 
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
     ax.loglog(
-        frame["N"], np.abs(frame["cos_minus_reference"]), marker="o", label="COS minus reference",
+        frame["N"],
+        np.abs(frame["cos_minus_reference"]),
+        marker="o",
+        label="COS minus reference",
     )
     ax.axhline(abs(lewis - FO_CALL), color="k", lw=0.8, label="|Lewis minus reference|")
     ax.axvline(COS_N, color="0.5", lw=0.8, ls="--", label=f"N = {COS_N}")
@@ -139,8 +142,11 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
     fitted = HestonFitter(n_starts=4, loss="vega", seed=0).fit(data)
     row = fitted.slice_report.iloc[0]
     model = Heston(
-        v0=float(row["v0"]), kappa=float(row["kappa"]), theta=float(row["theta"]),
-        xi=float(row["xi"]), rho=float(row["rho"]),
+        v0=float(row["v0"]),
+        kappa=float(row["kappa"]),
+        theta=float(row["theta"]),
+        xi=float(row["xi"]),
+        rho=float(row["rho"]),
     )
     summary = {
         "v0": model.v0,
@@ -149,7 +155,6 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         "xi": model.xi,
         "rho": model.rho,
         "feller": model.feller_ratio(),
-        "wall_time": fitted.wall_time,
         "solver_status": fitted.solver_status,
         "rmse_price": float(row["rmse_price"]),
         "max_abs_price": float(row["max_abs_price"]),
@@ -160,9 +165,7 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
 
     # Smiles at four expiries nearest 1 day, 1 week, 1 month, 1 year.
     targets = np.array([1.0 / 365.0, 7.0 / 365.0, 30.0 / 365.0, 1.0])
-    expiries = (
-        data.quotes.groupby("expiry", sort=True)["T"].first().sort_values()
-    )
+    expiries = data.quotes.groupby("expiry", sort=True)["T"].first().sort_values()
     chosen = []
     for target in targets:
         label = expiries.index[int(np.argmin(np.abs(expiries.to_numpy() - target)))]
@@ -180,12 +183,19 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         kind = group["kind"].to_numpy()
         model_price = model.price(forward, strike, maturity, discount, kind)
         model_iv = bs.implied_vol(model_price, forward, strike, maturity, discount, kind)
-        market_line, = ax.plot(
-            group["k"], 100 * group["iv"], marker="o", ms=3.5, lw=0,
+        (market_line,) = ax.plot(
+            group["k"],
+            100 * group["iv"],
+            marker="o",
+            ms=3.5,
+            lw=0,
             label=f"market T={maturity:.3f}",
         )
         ax.plot(
-            group["k"], 100 * model_iv, lw=1.2, color=market_line.get_color(),
+            group["k"],
+            100 * model_iv,
+            lw=1.2,
+            color=market_line.get_color(),
             label=f"Heston T={maturity:.3f}",
         )
         for k, market_iv, fitted_iv in zip(group["k"], group["iv"], model_iv, strict=True):
@@ -282,7 +292,8 @@ def preset() -> None:
         discount=1.0,
         note=(
             "Fang and Oosterlee (2008) parameters. Normalised call from the "
-            "cosine put plus put-call parity, N=256, L=10. F=100, df=1."
+            "cosine put plus put-call parity. N is chosen from the interval "
+            "and raised until successive prices agree to 1e-7. L=10. F=100, df=1."
         ),
     )
 
@@ -303,9 +314,7 @@ def main() -> None:
     print(
         f"skew T={short['T']:.4f} market {short['market_skew']:.3f} model {short['model_skew']:.3f}"
     )
-    print(
-        f"skew T={long['T']:.4f} market {long['market_skew']:.3f} model {long['model_skew']:.3f}"
-    )
+    print(f"skew T={long['T']:.4f} market {long['market_skew']:.3f} model {long['model_skew']:.3f}")
     print(json.loads((FIG / "p2c_spx_fit.json").read_text()))
 
 
