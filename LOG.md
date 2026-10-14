@@ -2,7 +2,17 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** SANOS at `eta = 0.25` and `omega = 0` meets the market bar on the SPX snapshot. **Next:** discrete local volatility.
+**Current state:** Discrete local volatility round-trips the call on a common strike grid. **Next:** the rough-volatility plug-in, mocked where `roughvol` is absent.
+
+## 2026-10-14 Library P3d: discrete local volatility
+
+A random nonnegative `Sigma` on 9 strikes, seed 1, step `0.2`. The columns of `Q` sum to 1 and each column has mean equal to its strike, both to `1e-12`. Torch float64 and NumPy agree to `1e-12` on seed 4, step `0.15`.
+
+Round trip, seeds 2 and 3, step `0.25`. Calls go to `Sigma`, back to `Q`, and back to calls. The calls agree to `1e-10` (the measured gap on this draw is `1.1e-16`). The recovered interior `Sigma` differs from the input by at most `1.5e-14`. A source grid `(0.7, 1, 1.3)` split onto that target and then stepped keeps the mass at 1 and the mean at the source mean, to `1e-12`. Three expiries built from seeds 5, 6 and 7 pass `check_surface` at `1e-9` with an empty violation table.
+
+SPX, the `eta = 0.25` surface, 39 steps, 37 log-moneyness nodes from `-0.25` to `0.2`. Median discrete local volatility `0.283`. The 99th percentile is `5.81`. The maximum is `212.3`. The root mean square of the second difference along strike is `15.7`. 5.4 percent of the cells are 0. The figure clips the colour scale at the 99th percentile and records the maximum in the title. The file is `docs/figures/p3d_dlv.png`.
+
+**Hypothesis:** the cells above 5 are the ratio blowing up where the strike second difference is near 0, not a second mode of local volatility. The next specification is the same ratio on a grid that drops cells whose call convexity is below a stated floor. The median `0.283` is the level that specification should keep.
 
 ## 2026-10-14 Library P3c: SANOS at eta > 0
 
