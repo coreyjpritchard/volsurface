@@ -24,6 +24,21 @@ static-arbitrage violations on the checked grid at tolerance `1e-9`, and
 an in-spread fraction strictly above 0.558. The 0.558 is the raw SVI
 figure already in `LOG.md`. The paper's 91.4 percent is a different book.
 
+A second bar holds out strikes. In each expiry, about 20 percent of the
+strikes are drawn without replacement by `numpy.random.default_rng` with
+a fixed seed, and those quotes are left out of the fit. The bar is that
+the share of held-out quotes whose model call lies inside that quote's
+bid and ask is at least the raw SVI share on the same held-out quotes,
+and that the fitted SANOS surface still has zero static-arbitrage
+violations on the dense grid.
+
+Seed 0 holds out 1,796 of 8,973 quotes. The mean fraction of strikes
+left out of an expiry is 0.2002. SANOS at `eta = 0.25` and `omega = 0`,
+fit on the other 7,177 quotes, places 0.990535 of the held-out model
+calls inside the held-out bid and ask. Raw SVI on the same split places
+0.541203. The fitted SANOS surface has 0 violations on the dense grid.
+Both fits and that check took 86.7 s.
+
 The solver is the HiGHS interior point method, with crossover off. The
 simplex run on the smooth book returns HiGHS status 15 and no solution
 vector. The objective is divided by the largest quote weight before the
