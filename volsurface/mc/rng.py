@@ -13,9 +13,18 @@ import numpy as np
 
 
 def as_seed_sequence(seed: int | np.random.SeedSequence) -> np.random.SeedSequence:
-    """Return a ``SeedSequence``. An int becomes one. A sequence is returned as itself."""
+    """Return a fresh ``SeedSequence``. An int becomes one. A sequence is copied.
+
+    ``SeedSequence.spawn`` advances ``n_children_spawned`` on the object it is
+    called on. Common random numbers pass the same seed into two repricings and
+    need the same child 0 both times. Returning the caller's object would make
+    the second call spawn the next child. The copy keeps ``entropy``,
+    ``spawn_key``, and ``pool_size``, and leaves the caller unmoved.
+    """
     if isinstance(seed, np.random.SeedSequence):
-        return seed
+        return np.random.SeedSequence(
+            seed.entropy, spawn_key=seed.spawn_key, pool_size=seed.pool_size
+        )
     return np.random.SeedSequence(int(seed))
 
 

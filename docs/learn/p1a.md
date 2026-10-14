@@ -10,8 +10,9 @@ parameter `v0`. They sit on the line. That is the whole interface: `F`, `K`,
 
 ## The definition
 
-The cash call is `df * E[(F_T - K)+]`. Divide by `df * F` and the forward
-drops out. What is left depends on the strike only through `k = log(K / F)`.
+The cash call is `df * E[(F_T - K)+]`. `F_T` is the random terminal forward.
+`F(T)` is today's forward curve. Divide by `df * F(T)` and the curve value
+drops out. What is left depends on the strike only through `k = log(K / F(T))`.
 Black-Scholes has nothing else to remember, so its state is empty. Heston
 remembers the variance. `state=None` means "use the variance the model was
 built with".
@@ -28,9 +29,10 @@ These are not results.
   by equation. The HTML summary is all we have used.
 - Labelling the SPY snapshot American and physical is correct, and it is why
   that file is the wrong input for a European martingale fit.
-- The Heston cumulant stencil is accurate enough to place a cosine grid. Phase
-  1 does not price with that grid, so this is unchecked against a published
-  cumulant formula.
+- The Heston cumulant stencil is accurate enough to place a cosine grid. `c1`
+  matches the integrated expected variance, and `c2` and `c4` match a second
+  stencil and a central difference on the Fang and Oosterlee parameter set.
+  Phase 1 does not price with the cosine grid.
 
 ## Explain it back
 
