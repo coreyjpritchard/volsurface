@@ -59,40 +59,49 @@ of `nu`, so the surface simulates the payoff instead. The plugin is not
 called. Any other `H` reads `state["dW"]` and restarts
 `volterra_components` from the clock. The same shocks drive a Black
 path at the deterministic left forward variance. That Black price is
-the control, with the sample coefficient `cov / var`. `stderr` is the
-residual standard deviation divided by `sqrt(n_mc)`. The coefficient is
-fit on the same sample, so the error is slightly optimistic.
+the control. The copies are split in half, and the coefficient on each
+half is the other half's `cov / var`, so the residual variance is not
+the in-sample minimum. `stderr` is the residual standard deviation
+divided by `sqrt(n_mc)`. The absolute price still carries that Monte
+Carlo error. Two mixtures on the same paths share a seed per regime, so
+the gap between them is the gap in the weights.
 `total_variance` is the controlled log contract `-2 E[log Z]`.
 
-Prices read the spot filter. Its observation is one-step log realised
-variance of the simulated spot, `log((d log Z)^2 / dt)`. Time 0 has no
-return, and the probability there is `p0`. The emission is Gaussian with
-mean `log(xi0) - gamma - log(2)` in every regime, because the return's
-variance is the spot variance and not `nu`. The variance in regime `j`
-is `pi^2 / 2 + nu_j^2`. `pi^2 / 2` is about 4.93. For `nu` of 0.4 and
-1.1 the extra term is 0.16 and 1.21, so the two Gaussians are close. A
-trailing window of the same series was scored on a separate draw. On
-2,000 paths and 21 times, a 5-step change in log windowed realised
-variance, and the product of the return with the one-step change in log
-realised variance, each stayed within about 0.02 of the base rate. The
-chi-squared noise in a window that still sits inside one regime visit
-dominates `nu^2` times the window length, and a longer window mixes the
-regimes. The observation in the market is therefore still the one-step
-series. A later return does not enter an earlier probability.
+The rough restart has two limits that stay open. The tenor shape is the
+constant-`nu` ratio of the raw driver, anchored at `v_t` and mixed by
+the filter. It is not the conditional curve of a path whose past `nu`
+switched, because that curve would read the latent label. The grid from
+the clock to the last expiry has to be equally spaced.
 
-The log-variance filter is the oracle upper bound. It reads
-`log v_i - log v_{i-1}`. At `H = 1/2` that increment is
-`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
-The probabilities sit in `state["regime_prob_log_v"]`. `surface_at` does
-not read that array. At any other `H` the Gaussian is not the rough
-likelihood.
+Prices read the spot filter. `price_filter` defaults to `"spot"`, and
+`regime_prob` is that filter. The windowed realised-variance filter is
+observable, and the default does not price it. `price_filter="rv"` does.
+The latent-variance benchmark is not a price.
 
-Prices from this information do not determine the latent regime.
-Quantile bins of the call and of the variance swap each contain both
-regimes. The bar is no longer that the modal accuracy is below 1. It is
-a two-sided band on the accuracy minus the base rate, the larger share
-of the latent regime at the clock. The price lift sits between 0.05 and
-0.35. The log-RV filter's lift sits between -0.10 and 0.10.
+The spot observation is one-step log realised variance,
+`log((d log Z)^2 / dt)`. Time 0 has no return, and the probability there
+is `p0`. The emission is Gaussian with mean `log(xi0) - gamma - log(2)`
+in every regime, because the return's variance is the spot variance and
+not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`. `pi^2 / 2`
+is about 4.93. For `nu` of 0.4 and 1.1 the extra term is 0.16 and 1.21,
+so the two Gaussians are close.
+
+The windowed observation refines each clock step into `n_sub` sub-steps,
+default 21, with a Brownian bridge that sums to the coarse shock. `Z`
+does not move. The emission table is the sample mean and variance of
+`log(sum of squared sub-returns / dt)` on pilot paths that stay in one
+regime. The pilot does not read `v`. Its seed is entropy 101 and spawn
+key `(7, regime)`.
+
+The latent-variance benchmark reads `log v_i - log v_{i-1}` through a
+pilot table of the same kind. That table does read `v`. It is used at
+every `H`. The exact half-Brownian likelihood is not the benchmark, and
+the market does not call it. At `H` other than `1/2` that Gaussian is
+not the rough likelihood.
+
+The bar is the Brier skill `1 - Brier / Brier_base`, scored at each
+setting. The price bins are a separate claim. Their lift over the base
+rate sits between 0.05 and 0.35.
 
 The constant-`nu` forward curve, used as the rough ratio inside that
 mixture, remains
@@ -132,32 +141,44 @@ value `1.602` and mean `-0.194`. It passes the z-rule.
 
 Six hundred paths, 21 times, clock index 10, seed entropy 12, test split.
 The generator, initial law, `rho`, and `xi0` are the pre-registered pins.
-The hedge cost `1e-4` does not enter the filter. The base rate, the
-larger share of the latent regime, is 0.5383. Eight quantile bins of the
+The hedge cost `1e-4` does not enter the filters. The chain does not
+depend on `H` or on `nu`, so both settings have 277 paths in the low
+regime and 323 in the high regime. The base rate is 0.5383. Quoting it
+scores Brier 0.4971 and log score -0.6902. Eight quantile bins of the
 at-the-money call, and the same bins of the variance swap, each contain
 both regimes. With 1,024 Monte Carlo copies the call's modal prediction
-is right on 0.6600 of the paths, a lift of 0.1217. The variance swap is
-right on 0.6600 of the paths, a lift of 0.1217. Both lifts sit inside the
-band from 0.05 to 0.35. That 0.6600 is the price bin, not the filter.
+is right on 0.6600 of the paths, a lift of 0.1217, under the spot
+weights and under the windowed weights. The variance swap is right on
+0.6600 of the paths, a lift of 0.1217. Both lifts sit inside the band
+from 0.05 to 0.35. That 0.6600 is the price bin, not a filter hit rate.
 
-The spot filter's modal hit rate on the same clock is 0.4783, a lift of
--0.0600, inside the band from -0.10 to 0.10. Confusion counts, true
-regime by modal regime, are 129, 148, 165, 158. Brier score 0.5222, log
-score -0.7185. Both are worse than quoting the base rate (Brier 0.4971,
-log score -0.6902). The log-variance filter's hit rate is 0.8067, a lift
-of 0.2683. Confusion counts 219, 58, 58, 265. Brier score 0.2832, log
-score -0.4444. Against the true-regime mixture the mean absolute call
-gap is 0.0002966 for the spot filter and 0.0001595 for the log-variance
-filter. Implied-vol root-mean-square error on 35,060 finite nodes is
-0.005305 and 0.003815. The variance swap itself does not move. The
+Market-test settings, `H = 1/2`, `nu` of 0.4 and 1.1. Spot filter: 287
+of 600, confusion 129, 148, 165, 158, Brier 0.5222, log score -0.7185,
+Brier skill -0.0505. Windowed filter: 366 of 600, confusion 209, 68,
+166, 157, Brier 0.5153, log score -0.7265, Brier skill -0.0367. Latent
+benchmark: 487 of 600, confusion 223, 54, 59, 264, Brier 0.2806, log
+score -0.4412, Brier skill 0.4355. Mean absolute call gaps against the
+true-regime mixture are 0.0002974, 0.0002496, and 0.0001596. Implied-vol
+root-mean-square error on 35,016 finite nodes is 0.005366, 0.005264,
+and 0.003856. At `H = 1/2` the stored forward variance does not depend
+on the weights, so the variance swap does not move.
+
+Pre-registered settings, `H = 0.1`, `nu` of 1.5 and 3. Spot filter: 410
+of 600, hit rate 0.6833, confusion 176, 101, 89, 234, Brier 0.4193, log
+score -0.6157, Brier skill 0.1565. Windowed filter: 463 of 600,
+confusion 227, 50, 87, 236, Brier 0.3473, log score -0.5428, Brier skill
+0.3013. Latent benchmark: 464 of 600, confusion 207, 70, 66, 257, Brier
+0.3316, log score -0.5099, Brier skill 0.3330. Mean absolute call gaps
+are 0.005651, 0.003678, and 0.004358. Implied-vol root-mean-square
+error on 31,508 finite nodes is 0.06934, 0.05539, and 0.06041. The
 figure is `docs/figures/p3f_paths.png`.
 
 One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1,
 8,192 copies, seed entropy 7, test split. The implied-vol span at
-`nu = 0.01` is 0.000391. At `nu = 1.5` the span is 0.04387. The implied
+`nu = 0.01` is 0.000390. At `nu = 1.5` the span is 0.04387. The implied
 vol at that `nu` is 0.2117 at log-moneyness -0.2 and 0.1681 at 0.2.
 With `nu = 1.1` and 1,024 copies the at-the-money relative standard
-error at expiry 1 is 0.0186.
+error at expiry 1 is 0.0187.
 
 At `H = 0.1`, eight paths, 17 times, clock index 8, maturity 1, 4,096
 copies, seed entropy 21, test split. The flat anchor `v_t (T - t)`

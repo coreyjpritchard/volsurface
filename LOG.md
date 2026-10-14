@@ -2,7 +2,21 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the spot filter. The log-variance filter is an oracle on latent `v` and is not a price. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments. Prices mix the spot filter. The windowed realised-variance filter is observable and is not the price. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. The constant-`nu` ratio and the equally spaced grid stay open. The Black control is cross-fit. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Review: windowed variance, and the latent benchmark
+
+Prices read the spot filter. A windowed filter reads log realised variance from 21 sub-steps inside each clock step. Its emission is fit on one-regime pilots and does not read `v`. The latent-variance benchmark uses a pilot table of `log v_i - log v_{i-1}` at every `H`. The half-Brownian Gaussian is not that benchmark.
+
+Six hundred paths, clock index 10, seed entropy 12, test split. The chain is the same at both settings: 277 and 323, base rate 0.5383, base-rate Brier 0.4971, base-rate log score -0.6902.
+
+Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. Spot: 287/600, Brier 0.5222, log score -0.7185, skill -0.0505. Windowed: 366/600, Brier 0.5153, log score -0.7265, skill -0.0367. Latent benchmark: 487/600, Brier 0.2806, log score -0.4412, skill 0.4355. Implied-vol root-mean-square error on 35,016 nodes: 0.005366, 0.005264, 0.003856.
+
+Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. Spot: 410/600, hit rate 0.6833, Brier 0.4193, log score -0.6157, skill 0.1565. Windowed: 463/600, Brier 0.3473, log score -0.5428, skill 0.3013. Latent benchmark: 464/600, Brier 0.3316, log score -0.5099, skill 0.3330. Implied-vol root-mean-square error on 31,508 nodes: 0.06934, 0.05539, 0.06041.
+
+The control coefficient is fit on the other half of the copies. The at-the-money relative standard error on the one-path draw is 0.0187. The rough restart still uses the constant-`nu` ratio of the raw driver, and it still requires an equally spaced grid.
+
+**Hypothesis:** with `price_filter="rv"` at the pre-registered settings, the implied-vol root-mean-square error stays below the spot filter's 0.06934. The quantity to report is that error, next to 0.05539.
 
 ## 2026-10-14 Review: spot filter and the log-variance oracle
 

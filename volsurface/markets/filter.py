@@ -70,7 +70,10 @@ def regime_scores(prob: np.ndarray, regime: np.ndarray) -> dict:
     mean of ``||p - e_r||^2``, so a perfect row scores 0 and two classes
     score at most 2. The log score is the mean of ``log(p_r)``, with the
     probability floored at ``1e-300``. The base rate is the larger share of
-    the true labels.
+    the true labels. ``base_brier`` and ``base_log_score`` are the same two
+    scores for the constant forecast that quotes the sample shares.
+    ``brier_skill`` is ``1 - brier / base_brier``. A positive skill beats
+    that forecast. The bar is this skill, scored separately at each setting.
     """
     p = np.asarray(prob, dtype=float)
     labels = np.asarray(regime, dtype=int).reshape(-1)
@@ -91,12 +94,24 @@ def regime_scores(prob: np.ndarray, regime: np.ndarray) -> dict:
     chosen = p[np.arange(labels.size), labels]
     log_score = float(np.mean(np.log(np.maximum(chosen, 1e-300))))
     counts = np.bincount(labels, minlength=n_regimes)
+    share = counts.astype(float) / labels.size
+    # Constant forecast that quotes the sample shares. For two classes the
+    # Brier score of that forecast is ``2 p (1 - p)``.
+    base_brier = float(np.sum(share * np.sum((share - np.eye(n_regimes)) ** 2, axis=1)))
+    base_log = float(np.sum(share * np.log(np.maximum(share, 1e-300))))
+    if base_brier > 0.0:
+        brier_skill = float(1.0 - brier / base_brier)
+    else:
+        brier_skill = 0.0
     return {
         "accuracy": float(np.mean(predicted == labels)),
-        "base_rate": float(counts.max() / labels.size),
+        "base_rate": float(share.max()),
         "confusion": confusion,
         "brier": brier,
         "log_score": log_score,
+        "base_brier": base_brier,
+        "base_log_score": base_log,
+        "brier_skill": brier_skill,
     }
 
 

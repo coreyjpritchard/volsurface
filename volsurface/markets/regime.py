@@ -69,14 +69,15 @@ martingale and the plugin is not called. Any other ``H`` reads
 
 The same shocks drive a Black path whose variance is the deterministic
 left forward curve. The control is that Black price. Its mean is the
-formula, not the sample mean, and the coefficient is the sample
-``cov / var``. One terminal is used for every strike. ``n_mc`` defaults
-to 1024 and must be at least 2. The returned standard error is the
-sample standard deviation of the residual divided by ``sqrt(n_mc)``.
-Fitting the coefficient on the same sample makes that error slightly
-optimistic. ``total_variance`` is the controlled log contract
-``-2 E[log Z]`` on those paths, which is the variance-swap strike, and
-``total_variance_se`` is its standard error.
+formula, not the sample mean. The copies are split in half. The
+coefficient on each half is the other half's sample ``cov / var``, so
+the residual variance is not the in-sample minimum. One terminal is
+used for every strike. ``n_mc`` defaults to 1024 and must be at least 2.
+Below 4 copies the split is too small and the coefficient falls back to
+the same sample. The returned standard error is the sample standard
+deviation of the residual divided by ``sqrt(n_mc)``. ``total_variance``
+is the controlled log contract ``-2 E[log Z]`` on those paths, which is
+the variance-swap strike, and ``total_variance_se`` is its standard error.
 
 The Monte Carlo seed is a ``SeedSequence`` with the path's entropy and
 ``spawn_key + (i_t, 4, regime)``. It is not one of the four simulation
@@ -85,39 +86,61 @@ copy, then the orthogonal shock. At any other ``H`` the plugin consumes
 the vol child and the spot child draws the orthogonal shock. The unit
 forward is 1 and the strike is ``exp(k)``.
 
-The Hamilton filter that a price reads is the spot-only filter. It uses
-one-step log realised variance of the simulated spot,
+Three Hamilton filters share one timing. Column 0 is ``p0``. The
+observation on the step that ends at ``t_i`` is emitted by the regime at
+the left endpoint. The probability stored at ``t_i`` is the updated
+belief moved one transition forward. A later observation does not enter.
+
+The spot filter reads one-step log realised variance of the simulated spot,
 
     y_i = log( (log Z_i - log Z_{i-1})^2 / dt_i ).
 
-There is no observation at ``t = 0``, and the filter probability there is
-``p0``. The emission is Gaussian. The mean is the same in every regime,
-``log(xi0) - gamma - log(2)``, which is ``E[log(xi0 * chi^2_1)]``, because
-the return's variance is the spot variance and not ``nu``. The variance in
-regime ``j`` is ``pi^2 / 2 + nu_j^2``. ``pi^2 / 2`` is about 4.93. For
-``nu`` of 0.4 and 1.1 the extra term is 0.16 and 1.21, so the two
-emissions are close and the filter does not beat the unconditional base
-rate. A trailing window of the same series was tried. The chi-squared
-noise in a window that still sits inside one regime visit dominates
-``nu^2`` times the window length, and the hit rate stays near that base
-rate. The observation is therefore still the one-step log realised
-variance. ``regime_prob`` is this filter. A price from this information
-does not determine ``r_t``. The test is a two-sided band on the hit rate
-minus the base rate.
+There is no observation at ``t = 0``. The emission is Gaussian. The mean
+is the same in every regime, ``log(xi0) - gamma - log(2)``, which is
+``E[log(xi0 * chi^2_1)]``, because the return's variance is the spot
+variance and not ``nu``. The variance in regime ``j`` is
+``pi^2 / 2 + nu_j^2``. ``pi^2 / 2`` is about 4.93. For ``nu`` of 0.4 and
+1.1 the extra term is 0.16 and 1.21, so the two emissions are close.
+``state["regime_prob_spot"]`` holds this filter. ``price_filter``
+defaults to ``"spot"``, and ``regime_prob`` is then this filter. Prices
+read ``regime_prob``. They do not read the other two filters.
 
-A second filter reads the latent variance itself. The observation on the
-step that ends at ``t_i`` is ``log v_i - log v_{i-1}``. At ``H = 1/2``
-that increment is exactly
+The windowed realised-variance filter is observable. Inside each clock
+step the spot's Brownian increment is refined to ``n_sub`` sub-steps,
+default 21, by a Brownian bridge. The bridge sums to the coarse
+increment, so the stored ``Z`` and ``v`` do not depend on ``n_sub``. The
+observation is the log of the sum of the squared sub-returns, divided by
+the clock step,
 
-    Normal(-nu_{i-1}^2 dt_i / 2, nu_{i-1}^2 dt_i),
+    y_i = log( sum_k (log Z_{i,k} - log Z_{i,k-1})^2 / dt_i ).
 
-the regime at the left endpoint. The stored probability uses the same
-timing as the spot filter: column 0 is ``p0``, and the column at ``t_i``
-is the updated belief moved one transition forward. This is an oracle
-upper bound. ``v`` is not a quote. The probabilities are stored at
-``state["regime_prob_log_v"]`` and no tradable price reads them. At any
-``H`` other than 1/2 the increment of log variance is not this Gaussian,
-so the function is the ``H = 1/2`` likelihood and not the rough likelihood.
+The emission mean and variance are a table, one row per clock step and
+one column per regime. The table is the sample mean and variance of this
+observation on pilot paths that each stay in one regime. The pilot seed
+is ``SeedSequence(entropy=101, spawn_key=(7, regime))``. It is not a
+market seed. The pilot statistic is ``y`` above. It does not read ``v``.
+A sample variance below ``1e-8`` is floored there so the Gaussian
+likelihood stays finite. The probabilities sit in
+``state["regime_prob_rv"]``. ``price_filter="rv"`` makes ``regime_prob``
+this filter. The default does not, because the spot filter is the one
+the prices were built on. Both are observable. The latent benchmark is
+not.
+
+The latent-variance benchmark reads ``log v_i - log v_{i-1}``. Its
+emission table is calibrated on the same one-regime pilots, and that
+table does read ``v``. The same table is used at every ``H``. At
+``H = 1/2`` the increment is exactly
+``Normal(-nu^2 dt / 2, nu^2 dt)``, and the pilot estimates that law.
+At any other ``H`` that Gaussian is not the rough likelihood, so the
+benchmark does not use it. :func:`filter_log_variance` is the exact
+``H = 1/2`` likelihood and is not called by the market. The benchmark
+is not an oracle and it is not a price. The probabilities sit in
+``state["regime_prob_latent"]``.
+
+The skill of a filter is ``1 - Brier / Brier_base``, where the base
+forecast quotes the sample share of each regime. The bar is this skill,
+scored at each setting on its own. A hit rate is not compared with a
+single lift band.
 
 Whether ``Z`` stays a martingale when ``nu`` switches is a hypothesis.
 The log-Euler step freezes ``v`` at the left of the interval, so each
@@ -134,7 +157,10 @@ generators, so draws in one do not move another.
   ``H`` is not 1/2 the plugin consumes this child inside
   ``volterra_components`` and this module draws nothing from it.
 - spot: one normal per path per step, the shock orthogonal to ``dW``.
-  ``dW_spot = rho dW + sqrt(1 - rho^2) dW_perp``.
+  ``dW_spot = rho dW + sqrt(1 - rho^2) dW_perp``. After those coarse
+  draws, and only when ``n_sub > 1``, the same stream draws the bridge
+  sub-steps. The coarse shock is already stored, so the extra draws do
+  not move ``Z``.
 - surrogate: spawned and not drawn.
 
 The spot update is the left-point exponential,
@@ -159,6 +185,12 @@ from volsurface.plugins import create
 # E[log(chi^2_1)] = -gamma - log(2). Var(log(chi^2_1)) = trigamma(1/2) = pi^2 / 2.
 _LOG_CHI2_MEAN = -float(np.euler_gamma) - math.log(2.0)
 _LOG_CHI2_VAR = math.pi**2 / 2.0
+# Pilot seed for the emission tables. Not a market seed.
+_PILOT_ENTROPY = 101
+_PILOT_SPAWN = (7,)
+# A one-regime pilot with no noise has sample variance 0. The floor keeps
+# the Gaussian likelihood finite. It is not an estimated noise level.
+_EMISSION_VAR_FLOOR = 1e-8
 
 
 class RegimeSwitchingBergomi:
@@ -177,6 +209,9 @@ class RegimeSwitchingBergomi:
         rate: float = 0.0,
         smile_k: np.ndarray | None = None,
         n_mc: int = 1024,
+        n_sub: int = 21,
+        n_pilot: int = 1024,
+        price_filter: str = "spot",
     ):
         self.spec = spec
         self.xi0 = float(xi0)
@@ -190,9 +225,19 @@ class RegimeSwitchingBergomi:
             np.linspace(-0.2, 0.2, 9) if smile_k is None else np.asarray(smile_k, dtype=float)
         )
         self.n_mc = int(n_mc)
+        self.n_sub = int(n_sub)
+        self.n_pilot = int(n_pilot)
+        self.price_filter = str(price_filter)
         if self.n_mc < 2:
             raise ValueError(f"n_mc must be at least 2, got {self.n_mc}")
+        if self.n_sub < 1:
+            raise ValueError(f"n_sub must be at least 1, got {self.n_sub}")
+        if self.n_pilot < 2:
+            raise ValueError(f"n_pilot must be at least 2, got {self.n_pilot}")
+        if self.price_filter not in ("spot", "rv"):
+            raise ValueError(f"price_filter must be 'spot' or 'rv', got {self.price_filter!r}")
         self._plugin = None
+        self._emission_cache: dict[tuple, dict[str, np.ndarray]] = {}
 
     def simulate_market(
         self,
@@ -203,58 +248,34 @@ class RegimeSwitchingBergomi:
         state0=None,
     ) -> MarketPaths:
         """Paths, the chain, the filter, and the trader's forward variance."""
-        spec = self._checked_spec()
-        grid = _times(times)
-        n_paths = int(n_paths)
-        if n_paths < 1:
-            raise ValueError(f"n_paths must be positive, got {n_paths}")
-        if state0:
-            raise ValueError(f"state0 is not used, got keys {sorted(state0)}")
-        streams = stream_seeds(seed)
-        regime_rng = generator(streams["regime"])
-        spot_rng = generator(streams["spot"])
-        nus = np.array([float(item["nu"]) for item in spec.params], dtype=float)
-        generator_q = np.asarray(spec.generator, dtype=float)
-        p0 = np.asarray(spec.p0, dtype=float)
-        n_regimes = nus.size
-        regime = np.empty((n_paths, grid.size), dtype=np.int8)
-        regime[:, 0] = _categorical(regime_rng, np.broadcast_to(p0, (n_paths, n_regimes)).copy())
-        if self.H == 0.5:
-            dW = np.diff(_brownian(n_paths, grid, streams["vol"]), axis=1)
-            components = None
-        else:
-            components = self._rough_components(n_paths, grid, streams["vol"])
-            dW = np.asarray(components[..., 0], dtype=float)
-        steps: list[np.ndarray] = []
-        for i in range(1, grid.size):
-            dt = float(grid[i] - grid[i - 1])
-            step = _stochastic(expm(generator_q * dt))
-            steps.append(step)
-            regime[:, i] = _categorical(regime_rng, step[regime[:, i - 1]])
-        nu_step = nus[regime[:, :-1]]
-        if components is None:
-            weights = _kernel_weights(0.5, grid, grid)
-            v = increment_variance(self.H, nu_step, self.xi0, grid, dW, weights)
-        else:
-            v = hybrid_increment_variance(self.H, nu_step, self.xi0, grid, components)
-        Z = np.ones((n_paths, grid.size))
-        rho = self.rho
-        orthogonal = math.sqrt(max(0.0, 1.0 - rho * rho))
-        for i in range(1, grid.size):
-            dt = float(grid[i] - grid[i - 1])
-            shock = rho * dW[:, i - 1] + orthogonal * math.sqrt(dt) * spot_rng.standard_normal(
-                n_paths
-            )
-            left = np.maximum(v[:, i - 1], 0.0)
-            Z[:, i] = Z[:, i - 1] * np.exp(np.sqrt(left) * shock - 0.5 * left * dt)
-        observed = _log_realised_variance(Z, grid)
+        drawn = _draw_paths(self, n_paths, times, seed, state0=state0)
+        grid = drawn["grid"]
+        nus = drawn["nus"]
+        p0 = drawn["p0"]
+        steps = drawn["steps"]
+        v = drawn["v"]
+        Z = drawn["Z"]
+        dW = drawn["dW"]
+        regime = drawn["regime"]
+        observed = drawn["y"]
+        y_rv = drawn["y_rv"]
         means, variances = self._emission(nus)
-        filtered = filter_log_realised_variance(observed, steps, means, variances, p0)
-        # Oracle only. surface_at and the variance swap read ``filtered``.
-        log_v_prob = filter_log_variance(v, steps, nus, grid, p0)
+        spot_prob = filter_log_realised_variance(observed, steps, means, variances, p0)
+        tables = self._calibrated_emissions(grid, nus)
+        rv_prob = filter_log_realised_variance(
+            y_rv, steps, tables["rv_means"], tables["rv_vars"], p0
+        )
+        y_latent = _log_variance_increments(v)
+        latent_prob = filter_log_realised_variance(
+            y_latent, steps, tables["latent_means"], tables["latent_vars"], p0
+        )
+        if self.price_filter == "rv":
+            priced = rv_prob
+        else:
+            priced = spot_prob
         Y = np.zeros((n_paths, grid.size))
         Y[:, 1:] = np.cumsum(dW, axis=1)
-        xi = trader_forward_variance(self.H, nus, v, filtered, self.xi0, grid, dW)
+        xi = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
         parent = as_seed_sequence(seed)
         plugin = self._plugin
         return MarketPaths(
@@ -265,19 +286,31 @@ class RegimeSwitchingBergomi:
                 "Y": Y,
                 "dW": dW,
                 "y": observed,
+                "y_rv": y_rv,
                 "xi": xi,
                 "xi_tenor": grid.copy(),
-                "regime_prob_log_v": log_v_prob,
+                "regime_prob_spot": spot_prob,
+                "regime_prob_rv": rv_prob,
+                "regime_prob_latent": latent_prob,
             },
             F0=_flat(self.forward),
             df=_discount(self.rate),
             regime=regime,
-            regime_prob=filtered,
+            regime_prob=priced,
             meta={
                 "model": "RegimeSwitchingBergomi",
                 "H": self.H,
                 "rho": self.rho,
                 "xi0": self.xi0,
+                "n_sub": self.n_sub,
+                "n_pilot": self.n_pilot,
+                "price_filter": self.price_filter,
+                "pilot_entropy": _PILOT_ENTROPY,
+                "pilot_spawn_key": _PILOT_SPAWN,
+                "rv_means": tables["rv_means"],
+                "rv_vars": tables["rv_vars"],
+                "latent_means": tables["latent_means"],
+                "latent_vars": tables["latent_vars"],
                 "seed_entropy": parent.entropy,
                 "spawn_key": tuple(parent.spawn_key),
                 "draw_order": DRAW_ORDER,
@@ -294,9 +327,12 @@ class RegimeSwitchingBergomi:
         The variance level is the regime-conditional forward curve
         ``xi_t(u)``, and the future kernel is restarted from the clock.
         The draws do not read ``paths.regime``. Weights are ``regime_prob``
-        at the clock, the spot filter. ``state["regime_prob_log_v"]`` is
-        not read. Two calls on the same paths use the same seed, so the
-        prices match.
+        at the clock. That array is the spot filter unless
+        ``price_filter`` is ``"rv"``. ``state["regime_prob_latent"]`` and,
+        under the default, ``state["regime_prob_rv"]`` are not read. Two
+        calls on the same paths use the same seed, so the prices match.
+        The gap between two mixtures on those shared seeds is the gap in
+        the weights. It is not a second Monte Carlo error.
         """
         if paths.regime_prob is None:
             raise ValueError("surface_at mixes filtered regime probabilities")
@@ -362,7 +398,12 @@ class RegimeSwitchingBergomi:
         """Restarted hybrid factor on the regime's forward curve ``xi``.
 
         The plugin draws the vol child. ``xi`` already holds the path's
-        past, so the factor is a fresh kernel with mean near 1.
+        past, so the factor is a fresh kernel with mean near 1. The grid
+        from the clock to the last expiry has to be equally spaced. The
+        tenor shape of ``xi`` is the constant-``nu`` ratio of the raw
+        driver, anchored at ``v_t`` and mixed by the filter. It is not
+        the conditional curve of a path whose past ``nu`` switched: that
+        curve would read the latent regime, and a price does not.
         """
         m = xi.shape[0]
         n_mc = self.n_mc
@@ -441,6 +482,60 @@ class RegimeSwitchingBergomi:
             means = np.asarray(self.obs_means, dtype=float)
         variances = np.full(nus.shape, _LOG_CHI2_VAR) + nus**2 + self.obs_sigma**2
         return means, variances
+
+    def _calibrated_emissions(self, grid: np.ndarray, nus: np.ndarray) -> dict[str, np.ndarray]:
+        """Pilot mean and variance of the windowed RV and of the log-v increment.
+
+        Each regime is its own pilot and stays in that regime. The windowed
+        table is computed from ``y_rv`` only. The latent table is computed
+        from ``log v``. The two samples are not mixed. Repeated calls on
+        the same grid reuse the tables stored on this model.
+        """
+        key = (np.asarray(grid, dtype=float).tobytes(), tuple(np.asarray(nus, dtype=float)))
+        cached = self._emission_cache.get(key)
+        if cached is not None:
+            return cached
+        n_steps = grid.size - 1
+        rv_samples = np.empty((self.n_pilot, n_steps, nus.size))
+        latent_samples = np.empty_like(rv_samples)
+        for r, nu in enumerate(nus):
+            spec = RegimeSpec(
+                generator=np.zeros((1, 1)),
+                params=[{"nu": float(nu)}],
+                p0=np.array([1.0]),
+                switch="nu",
+            )
+            pilot = RegimeSwitchingBergomi(
+                spec,
+                xi0=self.xi0,
+                rho=self.rho,
+                H=self.H,
+                n_sub=self.n_sub,
+                n_pilot=self.n_pilot,
+                n_mc=2,
+            )
+            seed = np.random.SeedSequence(
+                entropy=_PILOT_ENTROPY, spawn_key=_PILOT_SPAWN + (int(r),)
+            )
+            drawn = pilot._paths(self.n_pilot, grid, seed)
+            rv_samples[:, :, r] = drawn["y_rv"][:, 1:]
+            latent_samples[:, :, r] = _log_variance_increments(drawn["v"])[:, 1:]
+        tables = {
+            "rv_means": rv_samples.mean(axis=0),
+            "rv_vars": np.maximum(rv_samples.var(axis=0, ddof=1), _EMISSION_VAR_FLOOR),
+            "latent_means": latent_samples.mean(axis=0),
+            "latent_vars": np.maximum(latent_samples.var(axis=0, ddof=1), _EMISSION_VAR_FLOOR),
+        }
+        self._emission_cache[key] = tables
+        return tables
+
+    def _paths(self, n_paths: int, times: np.ndarray, seed) -> dict:
+        """Draw the chain, the variance, the spot, and both observations.
+
+        No filter is run. The emission pilot calls this so that calibrating
+        does not calibrate again.
+        """
+        return _draw_paths(self, n_paths, times, seed)
 
     def _rough_components(self, n_paths: int, times: np.ndarray, seed) -> np.ndarray:
         """Hybrid components ``(dW, I_1, ..., I_kappa)``. ``H = 1/2`` does not call this."""
@@ -695,13 +790,15 @@ def filter_log_variance(
     times: np.ndarray,
     p0: np.ndarray,
 ) -> np.ndarray:
-    """Oracle Hamilton filter of latent log variance. Shape ``(m, n_times, R)``.
+    """Exact ``H = 1/2`` likelihood of the latent log-variance increment.
 
     Column 0 of the return is ``p0``. Each later column is the belief about
     the regime at that time, after the increment of log variance that ends
-    there and after one transition. At ``H = 1/2`` the increment is
+    there and after one transition. The increment is
     ``Normal(-nu^2 dt / 2, nu^2 dt)`` for the regime on the left of the
-    step. A tradable price does not call this. It reads the spot filter.
+    step. That is the half-Brownian law. It is not the rough likelihood,
+    and the market does not call this function. The latent-variance
+    benchmark uses the pilot table at every ``H``.
     """
     variance = np.asarray(v, dtype=float)
     grid = np.asarray(times, dtype=float)
@@ -782,6 +879,143 @@ def _log_realised_variance(Z: np.ndarray, times: np.ndarray) -> np.ndarray:
     realised = log_ret**2 / dt[None, :]
     y[:, 1:] = np.log(np.maximum(realised, 1e-300))
     return y
+
+
+def _log_variance_increments(v: np.ndarray) -> np.ndarray:
+    """``log v_i - log v_{i-1}``. Column 0 is NaN. This series reads ``v``."""
+    variance = np.asarray(v, dtype=float)
+    y = np.full(variance.shape, np.nan)
+    y[:, 1:] = np.log(np.maximum(variance[:, 1:], 1e-300)) - np.log(
+        np.maximum(variance[:, :-1], 1e-300)
+    )
+    return y
+
+
+def _windowed_log_realised_variance(log_returns: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """Log of the sum of squared sub-returns, divided by the clock step.
+
+    ``log_returns`` has shape ``(m, n_steps, n_sub)`` and is a function of
+    the spot path. Column 0 of the return is NaN. ``v`` is not an argument.
+    """
+    returns = np.asarray(log_returns, dtype=float)
+    grid = np.asarray(times, dtype=float)
+    if returns.ndim != 3 or returns.shape[1] != grid.size - 1:
+        raise ValueError(
+            f"log_returns must have shape (m, {grid.size - 1}, n_sub), got {returns.shape}"
+        )
+    dt = np.diff(grid)
+    realised = np.sum(returns * returns, axis=2) / dt[None, :]
+    y = np.full((returns.shape[0], grid.size), np.nan)
+    y[:, 1:] = np.log(np.maximum(realised, 1e-300))
+    return y
+
+
+def _bridge_log_returns(v_left, dW, perp, times, rho, n_sub, rng) -> np.ndarray:
+    """Sub-step log returns whose sum is the coarse log return.
+
+    Shape ``(m, n_steps, n_sub)``. ``v_left`` is the variance at the left
+    of each clock step. The bridge is a refinement of ``dW_spot``, so the
+    stored coarse ``Z`` does not move. ``n_sub = 1`` is that coarse return
+    and draws nothing.
+    """
+    increments = np.asarray(dW, dtype=float)
+    orthogonal_shock = np.asarray(perp, dtype=float)
+    left = np.maximum(np.asarray(v_left, dtype=float), 0.0)
+    grid = np.asarray(times, dtype=float)
+    n_sub = int(n_sub)
+    m, n_steps = increments.shape
+    if orthogonal_shock.shape != increments.shape or left.shape != increments.shape:
+        raise ValueError("dW, perp, and v_left must share shape (m, n_steps)")
+    if grid.size != n_steps + 1:
+        raise ValueError(f"times length {grid.size} does not match {n_steps} steps")
+    orthogonal = math.sqrt(max(0.0, 1.0 - float(rho) * float(rho)))
+    out = np.empty((m, n_steps, n_sub))
+    dt = np.diff(grid)
+    for i in range(n_steps):
+        step = float(dt[i])
+        shock = (
+            float(rho) * increments[:, i]
+            + orthogonal * math.sqrt(step) * orthogonal_shock[:, i]
+        )
+        if n_sub == 1:
+            z = shock[:, None]
+        else:
+            dt_sub = step / n_sub
+            z = math.sqrt(dt_sub) * rng.standard_normal((m, n_sub))
+            z += (shock - z.sum(axis=1))[:, None] / n_sub
+        level = left[:, i]
+        out[:, i, :] = np.sqrt(level)[:, None] * z - 0.5 * level[:, None] * (step / n_sub)
+    return out
+
+
+def _draw_paths(model, n_paths: int, times: np.ndarray, seed, state0=None) -> dict:
+    """Chain, variance, coarse spot, and the two spot observations.
+
+    The emission pilot calls this. It does not run a filter, so a pilot
+    does not calibrate another pilot.
+    """
+    spec = model._checked_spec()
+    grid = _times(times)
+    n_paths = int(n_paths)
+    if n_paths < 1:
+        raise ValueError(f"n_paths must be positive, got {n_paths}")
+    if state0:
+        raise ValueError(f"state0 is not used, got keys {sorted(state0)}")
+    streams = stream_seeds(seed)
+    regime_rng = generator(streams["regime"])
+    spot_rng = generator(streams["spot"])
+    nus = np.array([float(item["nu"]) for item in spec.params], dtype=float)
+    generator_q = np.asarray(spec.generator, dtype=float)
+    p0 = np.asarray(spec.p0, dtype=float)
+    n_regimes = nus.size
+    regime = np.empty((n_paths, grid.size), dtype=np.int8)
+    regime[:, 0] = _categorical(regime_rng, np.broadcast_to(p0, (n_paths, n_regimes)).copy())
+    if model.H == 0.5:
+        dW = np.diff(_brownian(n_paths, grid, streams["vol"]), axis=1)
+        components = None
+    else:
+        components = model._rough_components(n_paths, grid, streams["vol"])
+        dW = np.asarray(components[..., 0], dtype=float)
+    steps: list[np.ndarray] = []
+    for i in range(1, grid.size):
+        dt = float(grid[i] - grid[i - 1])
+        step = _stochastic(expm(generator_q * dt))
+        steps.append(step)
+        regime[:, i] = _categorical(regime_rng, step[regime[:, i - 1]])
+    nu_step = nus[regime[:, :-1]]
+    if components is None:
+        weights = _kernel_weights(0.5, grid, grid)
+        v = increment_variance(model.H, nu_step, model.xi0, grid, dW, weights)
+    else:
+        v = hybrid_increment_variance(model.H, nu_step, model.xi0, grid, components)
+    Z = np.ones((n_paths, grid.size))
+    rho = model.rho
+    orthogonal = math.sqrt(max(0.0, 1.0 - rho * rho))
+    # Coarse orthogonals first. The bridge, drawn afterwards on this same
+    # stream, refines a shock that is already stored.
+    perp = np.empty((n_paths, max(grid.size - 1, 0)))
+    for i in range(1, grid.size):
+        dt = float(grid[i] - grid[i - 1])
+        perp[:, i - 1] = spot_rng.standard_normal(n_paths)
+        shock = rho * dW[:, i - 1] + orthogonal * math.sqrt(dt) * perp[:, i - 1]
+        left = np.maximum(v[:, i - 1], 0.0)
+        Z[:, i] = Z[:, i - 1] * np.exp(np.sqrt(left) * shock - 0.5 * left * dt)
+    if grid.size == 1:
+        log_sub = np.empty((n_paths, 0, model.n_sub))
+    else:
+        log_sub = _bridge_log_returns(v[:, :-1], dW, perp, grid, rho, model.n_sub, spot_rng)
+    return {
+        "grid": grid,
+        "nus": nus,
+        "p0": p0,
+        "steps": steps,
+        "regime": regime,
+        "v": v,
+        "Z": Z,
+        "dW": dW,
+        "y": _log_realised_variance(Z, grid),
+        "y_rv": _windowed_log_realised_variance(log_sub, grid),
+    }
 
 
 def _expiry_indices(n_times: int, i_t: int) -> np.ndarray:
@@ -921,12 +1155,32 @@ def _control_means(y: np.ndarray, x: np.ndarray, known: np.ndarray):
     """Controlled mean and standard error.
 
     ``y`` and ``x`` have shape ``(m, n_mc, n_k)``. ``known`` has shape
-    ``(m, n_k)`` and is the mean of ``x``, not the sample mean. The
-    coefficient is the sample ``cov(y, x) / var(x)``. A tiny variance sets
-    it to 0. The standard error divides the residual's sample standard
-    deviation by ``sqrt(n_mc)``. Fitting the coefficient on the same sample
-    makes that error slightly optimistic.
+    ``(m, n_k)`` and is the mean of ``x``, not the sample mean. With at
+    least 4 copies the coefficient on each half is the other half's
+    ``cov / var``. Below 4 copies the split is too small and the
+    coefficient is the full sample. A tiny variance sets the coefficient
+    to 0. The standard error divides the residual's sample standard
+    deviation by ``sqrt(n_mc)``.
     """
+    n_mc = y.shape[1]
+    if n_mc >= 4:
+        mid = n_mc // 2
+        beta_left = _control_beta(y[:, :mid], x[:, :mid])
+        beta_right = _control_beta(y[:, mid:], x[:, mid:])
+        gap = x - known[:, None, :]
+        residual = np.empty_like(y)
+        residual[:, :mid] = y[:, :mid] - beta_right[:, None, :] * gap[:, :mid]
+        residual[:, mid:] = y[:, mid:] - beta_left[:, None, :] * gap[:, mid:]
+    else:
+        beta = _control_beta(y, x)
+        residual = y - beta[:, None, :] * (x - known[:, None, :])
+    mean = residual.mean(axis=1)
+    stderr = residual.std(axis=1, ddof=1) / math.sqrt(n_mc)
+    return mean, stderr
+
+
+def _control_beta(y: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Sample ``cov(y, x) / var(x)`` along the copy axis. Shape ``(m, n_k)``."""
     n_mc = y.shape[1]
     y_centred = y - y.mean(axis=1, keepdims=True)
     x_centred = x - x.mean(axis=1, keepdims=True)
@@ -935,10 +1189,7 @@ def _control_means(y: np.ndarray, x: np.ndarray, known: np.ndarray):
     beta = np.zeros_like(cov)
     usable = var_x > 1e-18
     beta[usable] = cov[usable] / var_x[usable]
-    residual = y - beta[:, None, :] * (x - known[:, None, :])
-    mean = residual.mean(axis=1)
-    stderr = residual.std(axis=1, ddof=1) / math.sqrt(n_mc)
-    return mean, stderr
+    return beta
 
 
 def _controlled_log_contract(log_z, log_z_bs, total):
