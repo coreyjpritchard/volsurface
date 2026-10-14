@@ -2,7 +2,85 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** The rough-volatility plug-in calibrates through `create("rbergomi")` and reads forward variance from the SANOS log contract. `roughvol` is not installed here, so the SPX figure has no rBergomi curve. **Next:** market paths, the three pricers, and the `nu`-only regime chain.
+**Current state:** Switching `nu` acts on new increments. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Review: the forward curve, and the differenced window
+
+The forward curve at `H = 0.1` was using the closed-form diagonal as a ratio. That diagonal drops the hybrid near field, so the curve sat above `xi0`. A later date is now the closed form, and the diagonal is `v_t`. Constant `nu`, eight runs of 500 paths, clock index 8. The mean of the curve after the clock, divided by `xi0`, is 1.019 at `nu = 1.5` and 1.031 at `nu = 3`. Both pass the z-rule.
+
+`y_rv` is `v` at the start of the step plus chi-squared noise on 21 degrees. It is not integrated variance. The windowed filter reads the change in that level, emitted by the regime two steps back. On 4,000 pre-registered paths its Brier skill at clocks 5, 10 and 20 is 0.2079, 0.2071 and 0.2089.
+
+Six hundred paths, clock index 10, and the same draw at 4,000 paths. Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. Spot skill -0.0505 and -0.0292. Windowed skill 0.0035 and 0.0094. Latent skill 0.4355 and 0.4785. Calibration errors at 600 paths are 0.0713, 0.0295 and 0.0221. Implied-vol root-mean-square error on 35,032 nodes is 0.005348, 0.005232 and 0.003915.
+
+Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. Spot skill 0.1565 and 0.1178. Windowed skill 0.2838 and 0.2071. Latent skill 0.3330 and 0.2849. Calibration errors at 600 paths are 0.0632, 0.0255 and 0.0487. Implied-vol root-mean-square error on 31,684 nodes is 0.02069, 0.01906 and 0.01805. Prices still read the spot filter. The surface seed is `spawn_key + (4, regime)`, the same at every hedge date.
+
+**Hypothesis:** on a fresh 4,000-path pre-registered draw the windowed Brier skill at clocks 5, 10 and 20 stays inside 0.02 of 0.207. The quantity to report is those three skills, next to 0.2079, 0.2071 and 0.2089.
+
+## 2026-10-14 Review: windowed variance, and the latent benchmark
+
+Prices read the spot filter. A windowed filter reads log realised variance from 21 sub-steps inside each clock step. Its emission is fit on one-regime pilots and does not read `v`. The latent-variance benchmark uses a pilot table of `log v_i - log v_{i-1}` at every `H`. The half-Brownian Gaussian is not that benchmark.
+
+Six hundred paths, clock index 10, seed entropy 12, test split. The chain is the same at both settings: 277 and 323, base rate 0.5383, base-rate Brier 0.4971, base-rate log score -0.6902.
+
+Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. Spot: 287/600, Brier 0.5222, log score -0.7185, skill -0.0505. Windowed: 366/600, Brier 0.5153, log score -0.7265, skill -0.0367. Latent benchmark: 487/600, Brier 0.2806, log score -0.4412, skill 0.4355. Implied-vol root-mean-square error on 35,016 nodes: 0.005366, 0.005264, 0.003856.
+
+Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. Spot: 410/600, hit rate 0.6833, Brier 0.4193, log score -0.6157, skill 0.1565. Windowed: 463/600, Brier 0.3473, log score -0.5428, skill 0.3013. Latent benchmark: 464/600, Brier 0.3316, log score -0.5099, skill 0.3330. Implied-vol root-mean-square error on 31,508 nodes: 0.06934, 0.05539, 0.06041.
+
+The control coefficient is fit on the other half of the copies. The at-the-money relative standard error on the one-path draw is 0.0187. The rough restart still uses the constant-`nu` ratio of the raw driver, and it still requires an equally spaced grid.
+
+**Hypothesis:** with `price_filter="rv"` at the pre-registered settings, the implied-vol root-mean-square error stays below the spot filter's 0.06934. The quantity to report is that error, next to 0.05539.
+
+## 2026-10-14 Review: spot filter and the log-variance oracle
+
+The price reads one-step log realised variance. A second Hamilton filter reads `log v_i - log v_{i-1}`. At `H = 1/2` that increment is `Normal(-nu^2 dt / 2, nu^2 dt)`. The probabilities are stored and not priced.
+
+Six hundred paths, clock index 10, seed entropy 12, test split. Generator `[[-1.5, 1.5], [0.8, -0.8]]`, initial law `(0.7, 0.3)`, `rho = -0.4`, `xi0 = 0.04`. The hedge cost `1e-4` is not an input. Base rate 0.5383. Spot filter hit rate 0.4783, confusion `[[129, 148], [165, 158]]`, Brier 0.5222, log score -0.7185. Log-variance filter hit rate 0.8067, confusion `[[219, 58], [58, 265]]`, Brier 0.2832, log score -0.4444. Quoting the base rate scores Brier 0.4971 and log score -0.6902.
+
+The call-bin accuracy on this draw stays 0.6600. That number is not the spot filter. With 1,024 copies the mean absolute call gap against the true-regime mixture is 0.0002966 (spot) and 0.0001595 (log variance). Implied-vol root-mean-square error on 35,060 finite nodes is 0.005305 and 0.003815. The variance swap does not move.
+
+**Hypothesis:** at the pilot vol-of-vol pair 1.5 and 3 the spot filter's lift stays inside [-0.10, 0.10] and the log-variance filter's lift stays above 0.15. The quantities to report are those two lifts, next to -0.0600 and 0.2683.
+
+## 2026-10-14 Review: the forward curve inside the surface
+
+At `H` other than `1/2`, `surface_at` multiplies the regime-conditional forward curve `xi_t(u)` by a fresh hybrid factor and mixes the calls with `regime_prob`. The past Volterra integral is in that curve. A Black path with the same shocks, at the left forward variance, is the control. `n_mc` defaults to 1024. `stderr` is the residual standard deviation over `sqrt(n_mc)`.
+
+Eight paths, `H = 0.1`, clock 0.5, maturity 1, 4,096 copies, seed entropy 21, test split. The flat anchor `v_t (T - t)` misses the variance swap by a median relative gap of 0.258. The surface log contract `-2 E[log Z]` stays inside 4 standard errors of that swap on every expiry. The largest absolute z-score is 1.50. The out-of-the-money strip, log-moneyness from -0.8 to 0.8, stays inside 4 standard errors on the last expiry. Its largest absolute z-score is 1.31.
+
+One path, `v = 0.04`, `nu = 1.1`, `H = 1/2`, 32 steps, expiry 1, 1,024 copies, seed entropy 7, test split. The at-the-money relative standard error is 0.0186.
+
+The smile sample from the previous entry, with the control. The implied-vol span at `nu = 0.01` is 0.000391. At `nu = 1.5` the span is 0.04387, with implied vol 0.2117 at log-moneyness -0.2 and 0.1681 at 0.2.
+
+Six hundred paths, clock index 10, 1,024 copies. The at-the-money call's modal accuracy is 0.6600, a lift of 0.1217 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217.
+
+Corey ratified the held-out SANOS bar on 14 Oct 2026: SANOS held-out in-spread at least raw SVI held-out in-spread, with zero static-arbitrage violations.
+
+**Hypothesis:** the z-score of this log contract against the variance swap at `H = 0.1` stays inside 4 when the step count rises from 16 to 64. The quantity to report is the maximum absolute z-score, next to the 1.50 measured here.
+
+## 2026-10-14 Review: the Monte Carlo smile
+
+`surface_at` simulates the call under each regime's constant `nu`, from `v_t`, and mixes the payoffs with `regime_prob`. The seed is the path entropy and `spawn_key + (i_t, 4, regime)`. `n_mc` defaults to 256. At `H = 1/2` the variance step is `v <- v exp(nu dW - nu^2 dt / 2)`, and the plugin is not called. At any other `H` the hybrid kernel restarts on a uniform grid from the clock, anchored at `v_t`.
+
+One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies, seed entropy 7, test split. The implied-vol span at `nu = 0.01` is 0.0044. At `nu = 1.5` the span is 0.0401, with implied vol 0.2066 at log-moneyness -0.2 and 0.1668 at 0.2.
+
+Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
+
+**Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Library P3f: market paths and regimes
+
+`xi_level` and `both` raise. `H = 0.1` with no plugin raises `RuntimeError` and does not build a substitute driver. A stand-in `driver_y` is called and is not labelled rBergomi. Train spawn key `(0,)` and test spawn key `(2,)` produce different first draws. The same seed repeats `Z`, the regime, and the filter probability.
+
+The chain, 4,000 paths, seed entropy 1, test split, time 1. Generator rates 1.5 and 0.8, initial law `(0.7, 0.3)`. Counts 1,550 and 2,450. The law `p0 expm(Q t)` expects 1,532.5 and 2,467.5. Chi-square statistic `0.323`, p-value `0.570`. The bar in the test is p-value above `0.001`.
+
+Terminal time 1, eight runs, 2,000 paths each, `nu` in `{0.4, 1.1}`, `rho = -0.4`, `xi0 = 0.04`, `H = 0.5`. The z-score of `E[Z] - 1` has maximum absolute value `1.193` and mean `-0.209`. The z-score of `E[v] - xi0` has maximum absolute value `1.838` and mean `-0.246`. Both sets pass the z-rule. This is the martingale hypothesis under switching, for the left-point log-Euler, not a proof for the continuous limit.
+
+The variance swap at inception against realised left-point variance, eight runs, 1,500 paths. The z-score of the gap has maximum absolute value `1.819` and mean `-0.473`. It passes the z-rule.
+
+The filter, 2,500 paths, 30 dates, observation means `-1` and `1`, variance `0.25`. Replacing the series after date 10 leaves the probabilities up to date 10 unchanged, to `1e-12`. Two bins at the last date have at least 40 paths. The largest gap between the hit rate and the mean predicted probability is `0.00108`. Both bins sit inside the 0.1 and 99.9 percent binomial quantiles.
+
+Black-Scholes along one path, forward 100, strike 90, expiry 1, rate 0.01. The pricer matches the formula to `1e-12` at `t = 0` and at `t = 0.5`. At expiry and one step later the value is the payoff, the same number. A surrogate whose validation error is 10 bp against a bar of 5 bp raises. One whose error is 2 bp keeps that error. The figure is `docs/figures/p3f_paths.png`.
+
+**Hypothesis:** the terminal mean of `Z` under this switch stays inside the z-rule at `H = 0.5`. The next specification is the same eight-run check when `Y` comes from `driver_y` at an `H` below one half. The quantity to report is the maximum absolute z-score, next to the `1.193` measured here.
 
 ## 2026-10-14 Library P3e: rough-volatility plug-in
 

@@ -891,7 +891,9 @@ A second bar holds strikes out of the same snapshot. In each expiry, about
 out of the fit. The bar is that the share of held-out quotes whose model
 call lies inside that quote's bid and ask is at least the raw SVI share
 on the same held-out quotes, and that the fitted SANOS surface still has
-zero static-arbitrage violations on the dense grid.
+zero static-arbitrage violations on the dense grid. Corey has ratified
+this bar: SANOS held-out in-spread at least raw SVI held-out in-spread,
+with zero static-arbitrage violations, ratified 14 Oct 2026.
 
 ## 19. Discrete local volatility
 
@@ -993,21 +995,229 @@ bar it was given.
 `RegimeSpec.switch` is `"nu"`, `"xi_level"`, or `"both"`. The market
 implemented in this phase switches `nu` only. The other two values raise.
 The chain is a continuous-time Markov chain, independent of the Brownian
-drivers. The variance is
+drivers.
+
+A switch of `nu` acts on increments only. After a switch, the new `nu`
+multiplies new Volterra increments. It does not rescale the integral
+already accumulated, so `v` has no jump at a switch. With `nu_s` the vol
+of vol in force at time `s`,
 
 ```
-v_t = xi0(t) exp(nu_{r_t} sqrt(2H) Y_t - nu_{r_t}^2 t^{2H} / 2).
+I_t(u) = int_0^t nu_s (u - s)^{H - 1/2} dW_s,
+v_t = xi0(t) exp(sqrt(2H) I_t(t) - H int_0^t nu_s^2 (t - s)^{2H - 1} ds).
 ```
 
-`Y` is independent of the chain and has variance `t^{2H} / (2H)`, so
-`E[v_t | chain] = xi0(t)`. Whether `Z` stays a martingale when `nu`
-switches is a hypothesis. The test is the z-rule. It is not a theorem in
-this file. The simulator used here takes `H = 0.5`, so `Y` is Brownian.
-The rough driver, when the plugin of section 20 is installed, is that
-plugin's `Y`. It is not reimplemented here.
+On a discrete grid the increment over `(t_{i-1}, t_i]` uses the `nu` of
+the regime at `t_{i-1}`. The regime recorded at `t_i` applies to later
+increments. At `H = 1/2` the kernel is 1, and the step is
+`v_i = v_{i-1} exp(nu_{i-1} dW_i - nu_{i-1}^2 dt_i / 2)`, with
+`v_0 = xi0`. Constant `nu` reduces to the compensator `nu^2 t^{2H} / 2`.
+There is no separate plan file in this repository. This paragraph is the
+specification of that increment rule.
 
-The Hamilton filter turns a simulated regime-switching series into
-`regime_prob`. Reliability is checked against binomial bands.
+`H = 1/2` is drawn in this module, as Brownian increments. Any other `H`
+calls `volterra_components` on the rBergomi plugin of section 20. The
+method returns the hybrid components `(dW, I_1, ..., I_kappa)` of shape
+`(n_paths, n_steps, kappa + 1)` on a uniform grid, drawn as the plugin's
+volatility child with no further spawn. `kappa` is the plugin's, 1 or 2.
+This module multiplies each step's whole vector by the `nu` in force on
+that step. `I_k` lands at lag `k`. The tail uses the plugin's
+power-kernel weights, whose first `kappa` entries are 0. `dW` alone is
+not enough: it is the regression of the kernel onto the Wiener increment,
+and at `H = 0.1` that regression keeps `5/9` of `Var(I_1)`, so `E[v]`
+falls short of `xi0`. The compensator stays the exact one,
+`sum_j nu_j^2 ((t - t_j)^{2H} - (t - t_{j+1})^{2H}) / 2`. The Cholesky
+of the hybrid scheme stays in the plugin. If the method is missing, this
+module raises. It does not build a substitute rough driver, and it does
+not silently replace the requested `H` with `1/2`.
+
+Every price, including the variance swap and `surface_at`, is computed
+under the trader's information. The forward variance is the mixture of
+the regime-conditional curves, weighted by the filtered probabilities
+`regime_prob`. It is not conditioned on the true label `r_t`. At
+`H = 1/2` each regime-conditional expectation of future variance equals
+`v_t xi0(u) / xi0(t)`, so the mixture equals that common curve.
+`state["xi"]` stores the mixture. `VarianceSwapPricer` integrates it.
+`surface_at` is a Monte Carlo of the call under the same mixture. Each
+regime holds `nu` fixed. The variance level is that regime's forward
+curve `xi_t(u)`, and the future kernel is restarted from the clock. At
+`H = 1/2` the curve is flat at `v_t` and the step is the exponential
+martingale. A Black call on the expected variance would be flat in
+strike and independent of `nu`. The plugin is not called at that `H`.
+Any other `H` reads `state["dW"]` and restarts `volterra_components`
+from the clock. The past Volterra integral sits in `xi_t(u)` and is
+not drawn again. A later date is the closed-form constant-`nu` curve
+for that regime, and the clock entry is `v_t`. The closed-form diagonal
+is the kernel integral against `dW`. It drops the hybrid near field, so
+dividing by it lifts the curve. One limit of that restart stays open.
+The curve is not the conditional curve of a path whose past `nu`
+switched, because that curve would read the latent label, and a price
+does not. The grid from the clock to the last expiry
+has to be equally spaced. A non-uniform grid raises. The fresh factor
+is a martingale up to the hybrid scheme's error. The z-rule bounds
+`E[v] - xi0`. It is not an identity. The weights are `regime_prob` at
+the clock. The same shocks drive a Black path whose variance is the
+deterministic left forward curve. The control is that Black price. The
+copies are split in half, and the coefficient on each half is the other
+half's `cov / var`, so the residual variance is not the in-sample
+minimum. The known mean is the formula. One terminal is used for every
+strike. `n_mc` defaults to 1024. The seed is the path entropy and
+`spawn_key + (4, regime)`. The clock is not in the key, so every hedge
+date draws the same shocks. `SurfaceBatch.stderr` is the residual
+standard deviation divided by `sqrt(n_mc)`. The absolute price still
+carries that Monte Carlo error. A comparison of two mixtures on the
+same paths uses one seed per regime, so the gap is the gap in the
+weights.
+`total_variance` is the controlled log contract `-2 E[log Z]`, the
+variance-swap strike of those paths. Whether `Z` stays a martingale
+when `nu` switches is a hypothesis. The test is the z-rule. It is not
+a theorem in this file.
+
+Three Hamilton filters are defined. Prices read the spot filter.
+
+`price_filter` defaults to `"spot"`. `regime_prob` is then that filter,
+and `surface_at` mixes it. The variance swap integrates `state["xi"]`,
+which was mixed with the same probabilities when the path was drawn.
+At `H = 1/2` that curve does not depend on the weights. At any other
+`H` it does. Replacing `regime_prob` after the draw does not rebuild
+`xi`. The windowed filter is observable, so a price is allowed to read
+it, and the default does not. Set `price_filter` to `"rv"` to do that.
+The latent-variance benchmark is not a price in either case. Neither
+`state["regime_prob_rv"]` nor `state["regime_prob_latent"]` is read by
+`surface_at` under the default.
+
+The spot filter reads one-step log realised variance of the simulated
+spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
+side signal, and it does not read `v`. There is no observation at
+`t = 0`, and the filter probability there is `p0`. The emission is
+Gaussian. The mean is `log(xi0) - gamma - log(2)` in every regime, the
+mean of `log(xi0 * chi^2_1)`, because the return's variance is the spot
+variance and not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
+`pi^2 / 2` is about 4.93. For `nu` of 0.4 and 1.1 the extra term is 0.16
+and 1.21, so the two emissions are close. The probabilities sit in
+`state["regime_prob_spot"]`.
+
+The windowed realised-variance filter uses the returns inside each clock
+step. The coarse Brownian increment is refined to `n_sub` sub-steps,
+default 21, by a bridge that sums to the stored shock, so `Z` and `v`
+do not depend on `n_sub`. Variance is frozen at the start of the step.
+The level `y_i = log(sum_k (d log Z_k)^2 / dt)` is `log v` at that
+start plus the log of a chi-squared on 21 degrees, scaled by 21, up to
+the drift and the bridge constraint. It is not the log of integrated
+variance. `v` does not move inside the step. The filter does not read
+the level. The same level at every date would count one piece of
+information again, and the skill would fall as the clock moved. The
+observation at date `i >= 2` is the change `y_i - y_{i-1}`. That change
+is emitted by the regime two steps back. The emission is a table, one
+row per change and one column per regime, fit on pilot paths that each
+stay in one regime. The pilot seed is
+`SeedSequence(entropy=101, spawn_key=(7, regime))`. It is not a market
+seed. The fitted statistic is the change in `y`. The pilot does not read
+`v`. A sample variance below `1e-8` is floored there. The probabilities
+sit in `state["regime_prob_rv"]`.
+
+The latent-variance benchmark reads `log v_i - log v_{i-1}`. Its
+emission table is fit on the same pilots, and that fit does read `v`.
+The same table is used at every `H`. At `H = 1/2` the increment is
+`Normal(-nu^2 dt / 2, nu^2 dt)` and the pilot estimates that law. At
+any other `H` that Gaussian is not the rough likelihood, so the
+benchmark does not use it and it is not an oracle. The probabilities
+sit in `state["regime_prob_latent"]`.
+
+The bar is the Brier skill against the constant forecast that quotes
+the sample share of each regime, `1 - Brier / Brier_base`. It is scored
+at each setting on its own. There is no single lift band.
+
+On 600 paths, 21 times, clock index 10, seed entropy 12, test split, the
+generator is `[[-1.5, 1.5], [0.8, -0.8]]`, the initial law is
+`(0.7, 0.3)`, `rho = -0.4`, and `xi0` is flat at 0.04. The spot hedge
+cost `1e-4` is not an input to any filter. The chain does not depend on
+`H` or on `nu`, so both settings below have the same labels at the
+clock: 277 paths in the low regime and 323 in the high regime. The base
+rate is 0.5383. The base-rate forecast scores Brier 0.4971 and log
+score -0.6902. Confusion matrices have the true regime in the row and
+the modal regime in the column, low `nu` then high `nu`.
+
+Market-test settings, `H = 1/2`, `nu` of 0.4 and 1.1, 600 paths. The
+spot filter is right on 287 paths, confusion `[[129, 148], [165, 158]]`,
+Brier 0.5222, log score -0.7185, Brier skill -0.0505, calibration error
+0.0713. It has no skill at these settings. The windowed filter is right
+on 345 paths, confusion `[[109, 168], [87, 236]]`, Brier 0.4953, log
+score -0.6893, Brier skill 0.0035, calibration error 0.0295. The latent
+benchmark is right on 487 paths, confusion `[[223, 54], [59, 264]]`,
+Brier 0.2806, log score -0.4412, Brier skill 0.4355, calibration error
+0.0221. With 1,024 copies, the mean absolute call gap against the
+true-regime mixture is 0.0002898 (spot), 0.0002834 (windowed), and
+0.0001549 (latent). The log-contract gaps are 0.0004526, 0.0004396, and
+0.0002434. On the 35,032 nodes where all four implied vols are finite,
+out of 37,800, the implied-vol root-mean-square error is 0.005348,
+0.005232, and 0.003915.
+
+The same market-test settings on 4,000 paths, same seed and same clock.
+Base rate 0.5383, from 1,847 and 2,153. Spot: hit rate 0.5023, confusion
+`[[894, 953], [1038, 1115]]`, Brier skill -0.0292, calibration error
+0.0591. Windowed: hit rate 0.5543, confusion `[[677, 1170], [613, 1540]]`,
+Brier skill 0.0094, calibration error 0.0106. Latent: hit rate 0.8295,
+confusion `[[1561, 286], [396, 1757]]`, Brier skill 0.4785, calibration
+error 0.0066.
+
+Pre-registered settings, `H = 0.1`, `nu` of 1.5 and 3, 600 paths. The
+spot filter is right on 410 paths, confusion `[[176, 101], [89, 234]]`,
+Brier 0.4193, log score -0.6157, Brier skill 0.1565, calibration error
+0.0632. The hit rate is 0.6833. The windowed filter is right on 452
+paths, confusion `[[207, 70], [78, 245]]`, Brier 0.3560, log score
+-0.5406, Brier skill 0.2838, calibration error 0.0255. The
+latent-variance benchmark is right on 464 paths, confusion
+`[[207, 70], [66, 257]]`, Brier 0.3316, log score -0.5099, Brier skill
+0.3330, calibration error 0.0487. With 1,024 copies the mean absolute
+call gaps are 0.001650, 0.001452, and 0.001310. The log-contract gaps
+are 0.002470, 0.001941, and 0.001788. On the 31,684 nodes where all
+four implied vols are finite, the implied-vol root-mean-square errors
+are 0.02069, 0.01906, and 0.01805. Prices still read the spot filter.
+
+The same pre-registered settings on 4,000 paths. Spot: hit rate 0.6608,
+confusion `[[1174, 673], [684, 1469]]`, Brier skill 0.1178, calibration
+error 0.0527. Windowed: hit rate 0.7048, confusion
+`[[1336, 511], [670, 1483]]`, Brier skill 0.2071, calibration error
+0.0319. Latent: hit rate 0.7438, confusion `[[1394, 453], [572, 1581]]`,
+Brier skill 0.2849, calibration error 0.0338. The windowed skill at
+clocks 5, 10 and 20 is 0.2079, 0.2071 and 0.2089. It does not fall with
+the clock.
+
+Calibration error is the path-weighted mean absolute gap between the
+bin hit rate and the mean predicted probability of the high regime.
+Five bins, and a bin with fewer than 40 paths is left out. The score is
+at clock index 10 except where a clock is named. The differenced
+windowed filter is also inside binomial bands at clocks 5, 10 and 20 on
+a 1,600-path pre-registered draw.
+
+Constant `nu`, `H = 0.1`, flat `xi0 = 0.04`, eight runs of 500 paths,
+clock index 8 on 17 times. The mean of the forward curve on the dates
+after the clock, divided by `xi0`, is 1.019 at `nu = 1.5` and 1.031 at
+`nu = 3`. Both sets pass the z-rule. The diagonal is `v_t` and is not
+in that average.
+
+The same market-test paths, read from eight quantile bins, give a call
+modal accuracy of 0.6600 with 1,024 Monte Carlo copies (lift 0.1217)
+and a variance-swap modal accuracy of 0.6600 (lift 0.1217). That 0.6600
+is the price bin. It is not a filter hit rate. Both lifts sit between
+0.05 and 0.35. The call bin is 0.6600 under the spot weights and under
+the windowed weights. On one path with `v = 0.04`, `rho = -0.4`,
+32 steps and 8,192 copies, seed entropy 7, test split, the implied-vol
+span at expiry 1 is 0.000383 when `nu = 0.01` and 0.04358 when
+`nu = 1.5`. At `nu = 1.5` the implied vol is 0.2107 at log-moneyness
+-0.2 and 0.1676 at log-moneyness 0.2. On one path with `nu = 1.1` and
+1,024 copies the at-the-money relative standard error at expiry 1 is
+0.0207. At `H = 0.1`, eight paths, clock 0.5, maturity 1, 4,096 copies,
+seed entropy 21, test split, the flat anchor `v_t (T - t)` misses the
+variance swap by a median relative gap of 0.281. The surface log
+contract stays inside 4 standard errors of that swap on every expiry.
+The one-step expiry has a numerical residual. The largest absolute
+z-score on a later expiry is 1.80. The out-of-the-money strip on
+log-moneyness from -0.8 to 0.8 stays inside 4 standard errors on the
+last expiry. Its largest absolute z-score is 1.56.
+Reliability of the filter on a hand-built Gaussian series is checked
+against binomial bands.
 
 Seeds use `numpy.random.SeedSequence(entropy=E, spawn_key=(split,))`.
 `split` is 0 for train, 1 for validation, and 2 for test. Children of a
@@ -1016,10 +1226,10 @@ the spot-orthogonal driver, 3 surrogate noise. That order is part of the
 model docstring. Two splits have disjoint spawn keys, so they do not share
 a stream.
 
-`volsurface/dynamic/dysanos.py` is a small replication of the DYSANOS v3
-baseline, not a new model. Paper statements in that module, its note, and
-its log entry are marked UNVERIFIED: the design was written from the plan's
-citations, not from a full reading of arXiv:2608.12587. The decoder maps a
+`volsurface/dynamic/dysanos.py` is a toy, not a replication of the DYSANOS
+v3 baseline. Paper statements in that module, its note, and its log entry
+are marked UNVERIFIED: the design was written from the plan's citations,
+not from a full reading of arXiv:2608.12587. The decoder maps a
 latent to nonnegative discrete local volatilities and increasing variances,
 then to a SANOS surface. The default grid is seven expiries (2, 5, 10, 20,
 40, 126, and 252 business days) and 20 to 50 strikes. The 18 by 200 grid is
