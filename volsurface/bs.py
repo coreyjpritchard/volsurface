@@ -41,7 +41,12 @@ def price(
     F: ArrayLike, K: ArrayLike, T: ArrayLike, sigma: ArrayLike, df: ArrayLike = 1.0,
     kind="call",
 ) -> np.ndarray:
-    """Discounted Black price ``df * E[(F_T - K)^+]`` (call) or ``df * E[(K - F_T)^+]``."""
+    """Discounted Black price.
+
+    ``F`` is today's forward curve ``F(T)``. The expectation is over the random
+    terminal forward ``F_T``: ``df * E[(F_T - K)+]`` for a call and
+    ``df * E[(K - F_T)+]`` for a put.
+    """
     F, K, T, sigma, df = (np.asarray(a, dtype=float) for a in (F, K, T, sigma, df))
     is_call = _is_call(kind)
     d1, d2 = _d1_d2(F, K, T, sigma)

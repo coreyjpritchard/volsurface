@@ -63,11 +63,46 @@ def test_call_derivatives_match_finite_differences():
 
 def test_vogt_slice_has_negative_g():
     """Gatheral and Jacquier (2014), Example 3.1, parameters (3.8)."""
+    from volsurface.surface.svi import VOGT_2014
+
     vogt = RawSVI.vogt()
     k = np.linspace(-1.5, 1.5, 601)
     assert vogt.g(k).min() < 0.0
     # SVI-JW ATM total variance quoted in their Example 5.1.
     assert vogt.w(0.0) == pytest.approx(0.01742625, abs=1e-8)
+    # The printed tuple is (a, b, m, rho, sigma). The dataclass is (a, b, rho, m, sigma).
+    a, b, m, rho, sigma = VOGT_2014
+    assert RawSVI(a=a, b=b, rho=rho, m=m, sigma=sigma) == vogt
+    assert RawSVI(*VOGT_2014) != vogt
+
+
+def test_svi_surface_accepts_python_lists():
+    """In-spread sampling passes one quote as two lists. That used to raise TypeError."""
+    from volsurface.surface.svi import SVISurface
+
+    surface = SVISurface([(1.0, RawSVI.vogt())], _flat_market(), Domain(1.0, 1.0, -1.0, 1.0))
+    value = surface.call([1.0], [0.0])
+    assert value.shape == (1, 1)
+    assert np.isfinite(value[0, 0])
+    assert np.isfinite(surface.g([1.0], [0.1])[0, 0])
+    outside = surface.extrapolated([1.0], [2.0])
+    assert bool(outside[0, 0])
+    assert not bool(surface.extrapolated([1.0], [0.0])[0, 0])
+
+
+def test_floor_penalty_keeps_a_constant_residual_length():
+    from volsurface.fit.svi import _initial, _residual
+
+    k = np.linspace(-0.2, 0.2, 8)
+    total_var = np.full_like(k, 0.04)
+    start = _initial(k, total_var)
+    start[0] = -5.0
+    gap = _residual(start, k, total_var, np.ones_like(k))
+    assert gap.shape == (k.size + 1,)
+    assert gap[-1] < 0.0
+    safe = _residual(_initial(k, total_var), k, total_var, np.ones_like(k))
+    assert safe.shape == (k.size + 1,)
+    assert safe[-1] == pytest.approx(0.0)
 
 
 def test_raw_svi_fit_recovers_a_slice():

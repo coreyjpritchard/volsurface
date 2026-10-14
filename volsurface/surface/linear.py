@@ -218,7 +218,14 @@ def _on_pillar(pillar: dict, k: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.
             # gamma = s_right - s_left = exp(-2k) (C_kk - C_k) => C_kk = gamma exp(2k) + C_k.
             ckk[j] = (s_right - s_left) * xj**2 + ck[j]
             continue
-        if xj <= nodes[0] or xj >= nodes[-1]:
+        if at.size and slopes.size and int(at[0]) in (0, nodes.size - 1):
+            # Endpoint: the one-sided interior slope, and convexity 0 (ckk = ck).
+            # The flat extension outside the quotes is a different point.
+            s = slopes[0] if int(at[0]) == 0 else slopes[-1]
+            ck[j] = s * xj
+            ckk[j] = ck[j]
+            continue
+        if xj < nodes[0] or xj > nodes[-1] or slopes.size == 0:
             ck[j] = 0.0
             ckk[j] = 0.0
             continue

@@ -3,10 +3,11 @@
 ``docs/DESIGN.md`` section 3 is the definition. The notes below are the
 calculus a reader needs in order to use the objects.
 
-The forward measure prices a call as ``df * E[(F_T - K)+]``. Dividing by
-``df * F`` gives the normalised call ``C``, a number between the intrinsic
-value ``(1 - K/F)+`` and 1. Log-moneyness ``k = log(K / F)`` is the strike
-coordinate of every surface.
+The forward measure prices a call as ``df * E[(F_T - K)+]``. ``F_T`` is the
+random terminal forward. ``F`` in the calling code is today's forward curve
+``F(T)``. Dividing by ``df * F(T)`` gives the normalised call ``C``, a number
+between the intrinsic value ``(1 - K/F(T))+`` and 1. Log-moneyness
+``k = log(K / F(T))`` is the strike coordinate of every surface.
 """
 
 from __future__ import annotations
@@ -148,13 +149,22 @@ class Domain:
 
 @dataclass(frozen=True)
 class FitResult:
-    """Output of a fitter. ``in_spread`` is a fraction, or NaN if there is no spread."""
+    """Output of a fitter.
+
+    ``in_spread`` is the fraction of two-sided quotes whose model call sits
+    inside the bid and ask, or NaN when the snapshot has no two-sided quote.
+
+    ``slice_report`` is one row per fitted expiry when the fitter fills it,
+    and None otherwise. The raw SVI fitter's columns are ``T``, ``min_g``,
+    ``lee_ok``, ``calendar_ok``, and ``in_spread``.
+    """
 
     surface: Any
     residuals: np.ndarray
     in_spread: float
     wall_time: float
     solver_status: str
+    slice_report: pd.DataFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +183,14 @@ class ArbTol:
 class ArbReport:
     """Pointwise arbitrage report. See ``docs/DESIGN.md`` section 6.
 
+    ``ok`` is True when every checked node passed, False when a violation was
+    recorded, and None when nothing was checked (``n_checked == 0``). An empty
+    quote file is the None case. There is no pass to report.
+
+    ``n_checked`` counts the nodes that entered the test. For a surface that
+    is the size of the grid. For quotes it is the number of quote rows that
+    entered the linear program.
+
     ``note`` is part of the result. For a surface check it records that the
     nodes do not constrain the surface between them.
     """
@@ -180,8 +198,9 @@ class ArbReport:
     violations: pd.DataFrame
     masks: dict[str, np.ndarray]
     min_density: float
-    ok: bool
+    ok: bool | None
     note: str
+    n_checked: int
 
 
 @dataclass(frozen=True)
