@@ -276,6 +276,8 @@ def spx_fit() -> dict:
     axes[0].plot(report["T"], report["alpha"], marker="o", ms=3, label="alpha")
     axes[0].plot(report["T"], report["nu"], marker="o", ms=3, label="nu")
     axes[0].plot(report["T"], report["rho"], marker="o", ms=3, label="rho")
+    axes[0].axhline(4.0, color="C1", ls="--", lw=0.8, label="nu = 4")
+    axes[0].axhline(-0.999, color="C2", ls="--", lw=0.8, label="rho = -0.999")
     axes[0].set_ylabel("parameter")
     axes[0].legend(frameon=False, fontsize=8)
     axes[0].grid(True, alpha=0.3)
