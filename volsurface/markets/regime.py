@@ -85,8 +85,8 @@ copy, then the orthogonal shock. At any other ``H`` the plugin consumes
 the vol child and the spot child draws the orthogonal shock. The unit
 forward is 1 and the strike is ``exp(k)``.
 
-The Hamilton filter reads one-step log realised variance of the simulated
-spot,
+The Hamilton filter that a price reads is the spot-only filter. It uses
+one-step log realised variance of the simulated spot,
 
     y_i = log( (log Z_i - log Z_{i-1})^2 / dt_i ).
 
@@ -101,8 +101,23 @@ rate. A trailing window of the same series was tried. The chi-squared
 noise in a window that still sits inside one regime visit dominates
 ``nu^2`` times the window length, and the hit rate stays near that base
 rate. The observation is therefore still the one-step log realised
-variance. A price from this information does not determine ``r_t``. The
-test is a two-sided band on the hit rate minus the base rate.
+variance. ``regime_prob`` is this filter. A price from this information
+does not determine ``r_t``. The test is a two-sided band on the hit rate
+minus the base rate.
+
+A second filter reads the latent variance itself. The observation on the
+step that ends at ``t_i`` is ``log v_i - log v_{i-1}``. At ``H = 1/2``
+that increment is exactly
+
+    Normal(-nu_{i-1}^2 dt_i / 2, nu_{i-1}^2 dt_i),
+
+the regime at the left endpoint. The stored probability uses the same
+timing as the spot filter: column 0 is ``p0``, and the column at ``t_i``
+is the updated belief moved one transition forward. This is an oracle
+upper bound. ``v`` is not a quote. The probabilities are stored at
+``state["regime_prob_log_v"]`` and no tradable price reads them. At any
+``H`` other than 1/2 the increment of log variance is not this Gaussian,
+so the function is the ``H = 1/2`` likelihood and not the rough likelihood.
 
 Whether ``Z`` stays a martingale when ``nu`` switches is a hypothesis.
 The log-Euler step freezes ``v`` at the left of the interval, so each
@@ -235,6 +250,8 @@ class RegimeSwitchingBergomi:
         observed = _log_realised_variance(Z, grid)
         means, variances = self._emission(nus)
         filtered = filter_log_realised_variance(observed, steps, means, variances, p0)
+        # Oracle only. surface_at and the variance swap read ``filtered``.
+        log_v_prob = filter_log_variance(v, steps, nus, grid, p0)
         Y = np.zeros((n_paths, grid.size))
         Y[:, 1:] = np.cumsum(dW, axis=1)
         xi = trader_forward_variance(self.H, nus, v, filtered, self.xi0, grid, dW)
@@ -243,7 +260,15 @@ class RegimeSwitchingBergomi:
         return MarketPaths(
             times=grid,
             Z=Z,
-            state={"v": v, "Y": Y, "dW": dW, "y": observed, "xi": xi, "xi_tenor": grid.copy()},
+            state={
+                "v": v,
+                "Y": Y,
+                "dW": dW,
+                "y": observed,
+                "xi": xi,
+                "xi_tenor": grid.copy(),
+                "regime_prob_log_v": log_v_prob,
+            },
             F0=_flat(self.forward),
             df=_discount(self.rate),
             regime=regime,
@@ -269,8 +294,9 @@ class RegimeSwitchingBergomi:
         The variance level is the regime-conditional forward curve
         ``xi_t(u)``, and the future kernel is restarted from the clock.
         The draws do not read ``paths.regime``. Weights are ``regime_prob``
-        at the clock. Two calls on the same paths use the same seed, so
-        the prices match.
+        at the clock, the spot filter. ``state["regime_prob_log_v"]`` is
+        not read. Two calls on the same paths use the same seed, so the
+        prices match.
         """
         if paths.regime_prob is None:
             raise ValueError("surface_at mixes filtered regime probabilities")
@@ -660,6 +686,56 @@ def trader_forward_variance(
         ratio = np.where(ahead[None, :, :], component / diag[:, :, None], 0.0)
         mixed += probs[:, :, r][:, :, None] * variance[:, :, None] * ratio
     return np.where(ahead[None, :, :], mixed, np.nan)
+
+
+def filter_log_variance(
+    v: np.ndarray,
+    steps: list[np.ndarray],
+    nus: np.ndarray,
+    times: np.ndarray,
+    p0: np.ndarray,
+) -> np.ndarray:
+    """Oracle Hamilton filter of latent log variance. Shape ``(m, n_times, R)``.
+
+    Column 0 of the return is ``p0``. Each later column is the belief about
+    the regime at that time, after the increment of log variance that ends
+    there and after one transition. At ``H = 1/2`` the increment is
+    ``Normal(-nu^2 dt / 2, nu^2 dt)`` for the regime on the left of the
+    step. A tradable price does not call this. It reads the spot filter.
+    """
+    variance = np.asarray(v, dtype=float)
+    grid = np.asarray(times, dtype=float)
+    vol = np.asarray(nus, dtype=float).reshape(-1)
+    if variance.ndim != 2:
+        raise ValueError(f"v must have shape (m, n_times), got {variance.shape}")
+    m, n_times = variance.shape
+    if grid.shape != (n_times,):
+        raise ValueError(f"times length {grid.size} does not match v shape {variance.shape}")
+    if np.any(vol <= 0.0):
+        raise ValueError("each nu must be positive")
+    prior = np.asarray(p0, dtype=float).reshape(-1)
+    if prior.shape != vol.shape:
+        raise ValueError("p0 must have one entry per regime")
+    out = np.empty((m, n_times, prior.size))
+    out[:, 0, :] = prior
+    n_steps = n_times - 1
+    if n_steps == 0:
+        return out
+    if len(steps) != n_steps:
+        raise ValueError(f"expected {n_steps} transition matrices, got {len(steps)}")
+    dt = np.diff(grid)
+    if np.any(dt <= 0.0):
+        raise ValueError("times must be strictly increasing")
+    increment = np.log(np.maximum(variance[:, 1:], 1e-300)) - np.log(
+        np.maximum(variance[:, :-1], 1e-300)
+    )
+    means = -0.5 * (vol**2)[None, :] * dt[:, None]
+    variances = (vol**2)[None, :] * dt[:, None]
+    transition = np.eye(prior.size) if n_steps == 1 else steps[:-1]
+    filtered = hamilton_filter(increment, transition, means, variances, prior)
+    for i in range(1, n_times):
+        out[:, i, :] = filtered[:, i - 1, :] @ steps[i - 1]
+    return out
 
 
 def filter_log_realised_variance(

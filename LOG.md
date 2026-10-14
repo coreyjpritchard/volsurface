@@ -2,7 +2,17 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments. Prices mix the spot filter. The log-variance filter is an oracle on latent `v` and is not a price. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+
+## 2026-10-14 Review: spot filter and the log-variance oracle
+
+The price reads one-step log realised variance. A second Hamilton filter reads `log v_i - log v_{i-1}`. At `H = 1/2` that increment is `Normal(-nu^2 dt / 2, nu^2 dt)`. The probabilities are stored and not priced.
+
+Six hundred paths, clock index 10, seed entropy 12, test split. Generator `[[-1.5, 1.5], [0.8, -0.8]]`, initial law `(0.7, 0.3)`, `rho = -0.4`, `xi0 = 0.04`. The hedge cost `1e-4` is not an input. Base rate 0.5383. Spot filter hit rate 0.4783, confusion `[[129, 148], [165, 158]]`, Brier 0.5222, log score -0.7185. Log-variance filter hit rate 0.8067, confusion `[[219, 58], [58, 265]]`, Brier 0.2832, log score -0.4444. Quoting the base rate scores Brier 0.4971 and log score -0.6902.
+
+The call-bin accuracy on this draw stays 0.6600. That number is not the spot filter. With 1,024 copies the mean absolute call gap against the true-regime mixture is 0.0002966 (spot) and 0.0001595 (log variance). Implied-vol root-mean-square error on 35,060 finite nodes is 0.005305 and 0.003815. The variance swap does not move.
+
+**Hypothesis:** at the pilot vol-of-vol pair 1.5 and 3 the spot filter's lift stays inside [-0.10, 0.10] and the log-variance filter's lift stays above 0.15. The quantities to report are those two lifts, next to -0.0600 and 0.2683.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 

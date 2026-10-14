@@ -1059,27 +1059,65 @@ variance-swap strike of those paths. Whether `Z` stays a martingale
 when `nu` switches is a hypothesis. The test is the z-rule. It is not
 a theorem in this file.
 
-The Hamilton filter reads one-step log realised variance of the simulated
+Two Hamilton filters are defined. Prices read only the first.
+
+The spot filter reads one-step log realised variance of the simulated
 spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
-side signal. There is no observation at `t = 0`, and the filter
-probability there is `p0`. The emission is Gaussian. The mean is
-`log(xi0) - gamma - log(2)` in every regime, the mean of
-`log(xi0 * chi^2_1)`, because the return's variance is the spot variance
-and not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
+side signal, and it does not read `v`. There is no observation at
+`t = 0`, and the filter probability there is `p0`. The emission is
+Gaussian. The mean is `log(xi0) - gamma - log(2)` in every regime, the
+mean of `log(xi0 * chi^2_1)`, because the return's variance is the spot
+variance and not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
 `pi^2 / 2` is about 4.93. For `nu` of 0.4 and 1.1 the extra term is 0.16
 and 1.21, so the two emissions are close. A trailing window of the same
 series does not fix that. The chi-squared noise in a window short enough
 to sit inside one regime visit dominates `nu^2` times the window length,
-and a longer window mixes the regimes. On 600 paths, 21 times, clock
-index 10, seed entropy 12, test split, the filter's modal hit rate is
-0.4783 against the base rate 0.5383, the larger share of the latent
-regime at that clock. The lift is -0.0600. The bar is a two-sided band
-on that lift, from -0.10 to 0.10, not a claim that the hit rate is below
-1. The same paths, read from eight quantile bins, give a call modal
+and a longer window mixes the regimes. `regime_prob` is this filter.
+`surface_at` and the variance swap read it. They do not read
+`state["regime_prob_log_v"]`.
+
+The log-variance filter is an oracle upper bound. The observation on the
+step that ends at `t_i` is `log v_i - log v_{i-1}`, the true latent log
+variance, not a quote. At `H = 1/2` that increment is
+`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
+The stored column uses the same timing as the spot filter. At any other
+`H` this Gaussian is not the law of the increment, so the function is the
+`H = 1/2` likelihood. A tradable price does not call it.
+
+On 600 paths, 21 times, clock index 10, seed entropy 12, test split, the
+pins are the pre-registered generator `[[-1.5, 1.5], [0.8, -0.8]]`,
+initial law `(0.7, 0.3)`, `rho = -0.4`, and flat `xi0 = 0.04`. The spot
+hedge cost `1e-4` is not an input to either filter. The vol-of-vol pair
+on this draw is `0.4` and `1.1`, which is the market-test pair. It is not
+the pilot pair `1.5` and `3`. The base rate, the larger share of the
+latent regime at that clock, is 0.5383 (323 of 600). The spot filter's
+modal hit rate is 0.4783 (287 of 600), lift -0.0600. Its confusion
+matrix, rows the true regime and columns the modal regime, low `nu` then
+high `nu`, is `[[129, 148], [165, 158]]`. The Brier score, the mean of
+`||p - e_r||^2`, is 0.5222. The log score, the mean of `log(p_r)`, is
+-0.7185. A forecast that always quotes the base rate scores Brier 0.4971
+and log score -0.6902, so the spot filter does not beat that forecast.
+The bar on the spot filter remains a two-sided band on the lift, from
+-0.10 to 0.10. The log-variance filter's modal hit rate on the same clock
+is 0.8067 (484 of 600), lift 0.2683. Its confusion matrix is
+`[[219, 58], [58, 265]]`. Its Brier score is 0.2832 and its log score is
+-0.4444.
+
+The same paths, read from eight quantile bins, give a call modal
 accuracy of 0.6600 with 1,024 Monte Carlo copies (lift 0.1217) and a
-variance-swap modal accuracy of 0.6600 (lift 0.1217). Both lifts sit
-between 0.05 and 0.35, so the price is not the unconditional law and
-it is not the latent label. On one path with `v = 0.04`, `rho = -0.4`,
+variance-swap modal accuracy of 0.6600 (lift 0.1217). That 0.6600 is the
+price bin. It is not the spot filter's hit rate. Both lifts sit between
+0.05 and 0.35, so the price is not the unconditional law and it is not
+the latent label. Replacing the mixture weights with the true regime,
+same 1,024 copies, moves the mixed call by a mean absolute amount of
+0.0002966 under the spot filter and 0.0001595 under the log-variance
+filter. On the 35,060 nodes where all three implied vols are finite, out
+of 37,800, the root-mean-square implied-vol error is 0.005305 for the
+spot filter and 0.003815 for the log-variance filter. The variance-swap
+pricer does not move: at `H = 1/2` the forward variance does not depend
+on the weights. The surface log contract does. Its mean absolute gap
+against the true-regime mixture is 0.0004628 for the spot filter and
+0.0002455 for the log-variance filter. On one path with `v = 0.04`, `rho = -0.4`,
 32 steps and 8,192 copies, seed entropy 7, test split, the implied-vol
 span at expiry 1 is 0.000391 when `nu = 0.01` and 0.04387 when
 `nu = 1.5`. At `nu = 1.5` the implied vol is 0.2117 at log-moneyness

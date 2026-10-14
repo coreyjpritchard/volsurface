@@ -11,13 +11,15 @@ from scipy.stats import binom, chisquare
 from volsurface import bs
 from volsurface.core.protocols import capabilities
 from volsurface.core.types import Contract, Digital, MarketPaths, RegimeSpec, Vanilla
-from volsurface.markets.filter import hamilton_filter
+from volsurface.markets.filter import hamilton_filter, regime_scores
 from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, VarianceSwapPricer
 from volsurface.markets.regime import (
     RegimeSwitchingBergomi,
     _kernel_weights,
+    _stochastic,
     bergomi_forward_variance,
     filter_log_realised_variance,
+    filter_log_variance,
     hybrid_increment_variance,
     increment_variance,
     trader_forward_variance,
@@ -503,6 +505,74 @@ def test_filter_reads_log_realised_variance_from_the_spot():
     assert np.allclose(paths.regime_prob[:, 0, :], _spec().p0)
 
 
+def test_log_variance_filter_matches_the_gaussian_increment():
+    """One step, dt = 0.2, increment 0.05, prior (0.7, 0.3), identity transition.
+
+    The emission is Normal(-nu^2 dt / 2, nu^2 dt). The posterior is
+    (0.86427398, 0.13572602). Column 0 stays the prior.
+    """
+    from scipy.stats import norm
+
+    dt = 0.2
+    nu = np.array([0.4, 1.1])
+    mean = -0.5 * nu**2 * dt
+    var = nu**2 * dt
+    prior = np.array([0.7, 0.3])
+    like = np.exp(norm.logpdf(0.05, mean, np.sqrt(var)))
+    posterior = prior * like
+    posterior = posterior / posterior.sum()
+    v = np.array([[0.04, 0.04 * np.exp(0.05)]])
+    got = filter_log_variance(v, [np.eye(2)], nu, np.array([0.0, dt]), prior)
+    assert got[0, 0] == pytest.approx(prior)
+    assert got[0, 1] == pytest.approx(posterior)
+    assert got[0, 1] == pytest.approx([0.86427398, 0.13572602], abs=1e-8)
+
+
+def test_log_variance_filter_does_not_use_a_later_increment():
+    """Changing the last increment of log variance moves only the last probability."""
+    times = np.linspace(0.0, 0.3, 4)
+    v = np.array([[0.04, 0.041, 0.039, 0.042]])
+    step = np.array([[0.9, 0.1], [0.2, 0.8]])
+    nu = np.array([0.4, 1.1])
+    prior = np.array([0.7, 0.3])
+    first = filter_log_variance(v, [step, step, step], nu, times, prior)
+    moved = v.copy()
+    moved[0, -1] = 0.2
+    second = filter_log_variance(moved, [step, step, step], nu, times, prior)
+    assert np.allclose(first[0, :-1], second[0, :-1])
+    assert not np.allclose(first[0, -1], second[0, -1])
+
+
+def test_prices_read_the_spot_filter_not_the_log_variance_filter():
+    """``surface_at`` ignores ``state['regime_prob_log_v']`` and uses ``regime_prob``."""
+    model = _model(n_mc=16)
+    times = np.linspace(0.0, 0.4, 5)
+    paths = model.simulate_market(6, times, seed=run_seed(4, 2))
+    direct = filter_log_variance(
+        paths.state["v"],
+        [_stochastic_step(model, float(times[i] - times[i - 1])) for i in range(1, times.size)],
+        np.array([0.4, 1.1]),
+        times,
+        _spec().p0,
+    )
+    assert np.allclose(paths.state["regime_prob_log_v"], direct)
+    assert not np.allclose(paths.regime_prob, paths.state["regime_prob_log_v"])
+    tweaked = dict(paths.state)
+    oracle = np.zeros_like(paths.state["regime_prob_log_v"])
+    oracle[..., 0] = 1.0
+    tweaked["regime_prob_log_v"] = oracle
+    left = model.surface_at(paths, 2).call
+    right = model.surface_at(replace(paths, state=tweaked), 2).call
+    assert np.array_equal(left, right)
+    flipped = paths.regime_prob[:, :, ::-1].copy()
+    changed = model.surface_at(replace(paths, regime_prob=flipped), 2).call
+    assert not np.allclose(left, changed)
+
+
+def _stochastic_step(model: RegimeSwitchingBergomi, dt: float) -> np.ndarray:
+    return _stochastic(expm(np.asarray(model.spec.generator, dtype=float) * dt))
+
+
 def test_rv_filter_does_not_use_a_later_return():
     """Changing the last log-RV moves only the last probability."""
     y = np.array([[np.nan, 0.0, 1.0, -2.0]])
@@ -573,6 +643,83 @@ def test_regime_cannot_be_read_exactly_from_prices():
     predicted = paths.regime_prob[:, 10].argmax(axis=1)
     filter_accuracy = float(np.mean(predicted == labels))
     assert -0.10 < filter_accuracy - base < 0.10
+
+
+def _implied_vol_strip(batch, clock: float) -> np.ndarray:
+    """Implied vol on expiries after ``clock``. Shape ``(m, n_exp, n_k)``."""
+    columns = []
+    for j, maturity in enumerate(batch.T):
+        tau = float(maturity - clock)
+        if tau <= 0.0:
+            continue
+        columns.append(bs.implied_vol(batch.call[:, j, :], 1.0, np.exp(batch.k), tau))
+    return np.stack(columns, axis=1)
+
+
+def test_log_variance_oracle_beats_the_spot_filter_on_the_pinned_draw():
+    """Six hundred paths, clock index 10, 1,024 copies. Real scores, not a target.
+
+    The pins are the pre-registered generator, initial law ``(0.7, 0.3)``,
+    ``rho = -0.4``, and ``xi0 = 0.04``. The hedge cost ``1e-4`` is not an
+    input. The base rate is 323/600. The call-bin accuracy 0.6600 on this
+    draw is not the spot filter: the spot filter is right on 287/600 paths.
+    The log-variance filter is right on 484/600. Brier is the mean of
+    ``||p - e_r||^2``. The log score is the mean of ``log(p_r)``.
+    """
+    model = _model(n_mc=1024)
+    times = np.linspace(0.0, 1.0, 21)
+    paths = model.simulate_market(600, times, seed=run_seed(12, 2))
+    labels = paths.regime[:, 10]
+    spot = regime_scores(paths.regime_prob[:, 10], labels)
+    oracle = regime_scores(paths.state["regime_prob_log_v"][:, 10], labels)
+    assert spot["base_rate"] == pytest.approx(323 / 600)
+    assert spot["accuracy"] == pytest.approx(287 / 600)
+    assert oracle["accuracy"] == pytest.approx(484 / 600)
+    assert spot["confusion"].tolist() == [[129, 148], [165, 158]]
+    assert oracle["confusion"].tolist() == [[219, 58], [58, 265]]
+    assert spot["brier"] == pytest.approx(0.5221569169178578, abs=1e-12)
+    assert oracle["brier"] == pytest.approx(0.28324409971623526, abs=1e-12)
+    assert spot["log_score"] == pytest.approx(-0.7184579069520304, abs=1e-12)
+    assert oracle["log_score"] == pytest.approx(-0.44442118403744624, abs=1e-12)
+    # Quoting the base rate beats the spot filter and loses to the oracle.
+    share = np.array([277, 323], dtype=float) / 600.0
+    base_brier = float(2.0 * share[0] * share[1])
+    assert spot["brier"] > base_brier > oracle["brier"]
+
+    one_hot = np.eye(2)[labels.astype(int)]
+    true_prob = paths.regime_prob.copy()
+    true_prob[:, 10, :] = one_hot
+    log_prob = paths.regime_prob.copy()
+    log_prob[:, 10, :] = paths.state["regime_prob_log_v"][:, 10, :]
+    spot_batch = model.surface_at(paths, 10)
+    log_batch = model.surface_at(replace(paths, regime_prob=log_prob), 10)
+    true_batch = model.surface_at(replace(paths, regime_prob=true_prob), 10)
+    spot_gap = np.abs(spot_batch.call - true_batch.call)
+    log_gap = np.abs(log_batch.call - true_batch.call)
+    assert float(spot_gap.mean()) == pytest.approx(0.0002966213202520645, abs=1e-12)
+    assert float(log_gap.mean()) == pytest.approx(0.0001594601008180083, abs=1e-12)
+    assert float(np.mean(np.abs(spot_batch.total_variance - true_batch.total_variance))) == (
+        pytest.approx(0.0004628258201420169, abs=1e-12)
+    )
+    assert float(np.mean(np.abs(log_batch.total_variance - true_batch.total_variance))) == (
+        pytest.approx(0.00024548567329425096, abs=1e-12)
+    )
+    contract = [Contract(Vanilla(model.forward), T=1.0)]
+    swap = VarianceSwapPricer().price_along(paths, contract)
+    swap_oracle = VarianceSwapPricer().price_along(replace(paths, regime_prob=log_prob), contract)
+    assert np.array_equal(swap, swap_oracle)
+
+    clock = float(times[10])
+    iv_spot = _implied_vol_strip(spot_batch, clock)
+    iv_log = _implied_vol_strip(log_batch, clock)
+    iv_true = _implied_vol_strip(true_batch, clock)
+    finite = np.isfinite(iv_spot) & np.isfinite(iv_log) & np.isfinite(iv_true)
+    assert int(finite.sum()) == 35060
+    spot_iv = float(np.sqrt(np.mean((iv_spot[finite] - iv_true[finite]) ** 2)))
+    log_iv = float(np.sqrt(np.mean((iv_log[finite] - iv_true[finite]) ** 2)))
+    assert spot_iv == pytest.approx(0.005304554649174312, abs=1e-12)
+    assert log_iv == pytest.approx(0.0038149002915683116, abs=1e-12)
+    assert log_iv < spot_iv
 
 
 def _single_regime(nu: float, n_mc: int, **kwargs) -> RegimeSwitchingBergomi:

@@ -64,10 +64,10 @@ residual standard deviation divided by `sqrt(n_mc)`. The coefficient is
 fit on the same sample, so the error is slightly optimistic.
 `total_variance` is the controlled log contract `-2 E[log Z]`.
 
-The filter observation is one-step log realised variance of the simulated
-spot, `log((d log Z)^2 / dt)`. Time 0 has no return, and the probability
-there is `p0`. The emission is Gaussian with mean
-`log(xi0) - gamma - log(2)` in every regime, because the return's
+Prices read the spot filter. Its observation is one-step log realised
+variance of the simulated spot, `log((d log Z)^2 / dt)`. Time 0 has no
+return, and the probability there is `p0`. The emission is Gaussian with
+mean `log(xi0) - gamma - log(2)` in every regime, because the return's
 variance is the spot variance and not `nu`. The variance in regime `j`
 is `pi^2 / 2 + nu_j^2`. `pi^2 / 2` is about 4.93. For `nu` of 0.4 and
 1.1 the extra term is 0.16 and 1.21, so the two Gaussians are close. A
@@ -79,6 +79,13 @@ chi-squared noise in a window that still sits inside one regime visit
 dominates `nu^2` times the window length, and a longer window mixes the
 regimes. The observation in the market is therefore still the one-step
 series. A later return does not enter an earlier probability.
+
+The log-variance filter is the oracle upper bound. It reads
+`log v_i - log v_{i-1}`. At `H = 1/2` that increment is
+`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
+The probabilities sit in `state["regime_prob_log_v"]`. `surface_at` does
+not read that array. At any other `H` the Gaussian is not the rough
+likelihood.
 
 Prices from this information do not determine the latent regime.
 Quantile bins of the call and of the variance swap each contain both
@@ -124,14 +131,26 @@ eight runs, 1,500 paths. The z-score of the gap has maximum absolute
 value `1.602` and mean `-0.194`. It passes the z-rule.
 
 Six hundred paths, 21 times, clock index 10, seed entropy 12, test split.
-The base rate, the larger share of the latent regime, is 0.5383. Eight
-quantile bins of the at-the-money call, and the same bins of the variance
-swap, each contain both regimes. With 1,024 Monte Carlo copies the call's
-modal prediction is right on 0.6600 of the paths, a lift of 0.1217. The
-variance swap is right on 0.6600 of the paths, a lift of 0.1217. Both
-lifts sit inside the band from 0.05 to 0.35. The log-RV filter's modal
-hit rate on the same paths is 0.4783, a lift of -0.0600, inside the band
-from -0.10 to 0.10. The figure is `docs/figures/p3f_paths.png`.
+The generator, initial law, `rho`, and `xi0` are the pre-registered pins.
+The hedge cost `1e-4` does not enter the filter. The base rate, the
+larger share of the latent regime, is 0.5383. Eight quantile bins of the
+at-the-money call, and the same bins of the variance swap, each contain
+both regimes. With 1,024 Monte Carlo copies the call's modal prediction
+is right on 0.6600 of the paths, a lift of 0.1217. The variance swap is
+right on 0.6600 of the paths, a lift of 0.1217. Both lifts sit inside the
+band from 0.05 to 0.35. That 0.6600 is the price bin, not the filter.
+
+The spot filter's modal hit rate on the same clock is 0.4783, a lift of
+-0.0600, inside the band from -0.10 to 0.10. Confusion counts, true
+regime by modal regime, are 129, 148, 165, 158. Brier score 0.5222, log
+score -0.7185. Both are worse than quoting the base rate (Brier 0.4971,
+log score -0.6902). The log-variance filter's hit rate is 0.8067, a lift
+of 0.2683. Confusion counts 219, 58, 58, 265. Brier score 0.2832, log
+score -0.4444. Against the true-regime mixture the mean absolute call
+gap is 0.0002966 for the spot filter and 0.0001595 for the log-variance
+filter. Implied-vol root-mean-square error on 35,060 finite nodes is
+0.005305 and 0.003815. The variance swap itself does not move. The
+figure is `docs/figures/p3f_paths.png`.
 
 One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1,
 8,192 copies, seed entropy 7, test split. The implied-vol span at
