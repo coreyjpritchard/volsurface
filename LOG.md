@@ -2,7 +2,7 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. A minimal DYSANOS dynamic surface runs on synthetic history, and `experiments/regime/PREREG.md` holds H1, H2 and H3 as a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 
@@ -29,6 +29,26 @@ One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies,
 Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
 
 **Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Library P3g: minimal DYSANOS
+
+UNVERIFIED against arXiv:2608.12587. The paper text was not read in full. The module is a small replication of the baseline. It is not a new model, and it does not reproduce the paper's numbers. There is no daily SPX file. The history is synthetic.
+
+Five random `(L, S)`. The largest modulus of an eigenvalue of `A_D` is `0.99995719`, from a one-day step. Every draw is strictly below 1, at a one-day step and at `D = 1`. The real parts of the eigenvalues of `kappa` stay at or above `2e-4`.
+
+Recovery, `D = 1`, 6,000 dates, seed 2, 200 residual-bootstrap draws. The true diagonal of `A` is `0.8353` and `0.8877`, inside `[0.8159, 0.8392]` and `[0.8747, 0.8990]`. The innovation variances `0.0229` and `0.0144` are inside `[0.0225, 0.0241]` and `[0.0139, 0.0150]`. The bands are the 2.5 and 97.5 percentiles. Least squares on the factors is the Gaussian MLE of this linear transition, and it is the stated two-stage deviation from joint training.
+
+One decoded surface, `eta = 0.3460`, seven expiries, 21 strikes. `check_surface` at `1e-9` reports 0 violations. The plan's Sigma exponent is UNVERIFIED: the operator squares Sigma, and this code bounds Sigma in `[0.01, 3]`.
+
+Front-expiry draws, 2,000, seed 3. The probability-integral transform has Kolmogorov-Smirnov statistic `0.0230` and p-value `0.2376`, above the `0.001` bar. The paper's copula formulae are UNVERIFIED. The draw is the mixture the surface prices, and it adds no drift.
+
+Held to the last expiry, three strikes, 4,000 draws, seed 4. Mean P&L `5.76e-3`, `4.60e-3`, `3.63e-3` at log-moneyness `-0.1`, `0`, `0.1`. Standard errors `2.76e-3`, `2.28e-3`, `1.72e-3`. The means sit about two standard errors above zero on shared draws. None is below `-3.5` standard errors.
+
+Implied-vol changes, 40 dates. The generated surface's first component takes `0.9989` of the variance. A regime path, priced by the Black call on integrated forward variance, takes `0.9520`. That second surface has no strike slope. The figure is `docs/figures/p3g_pca.png`. The paper's figure is UNVERIFIED, so this is not a match to it.
+
+`experiments/regime/PREREG.md` records H1, H2 and H3 as a draft, to freeze before the pilot ends. The pilot is a CPU run. No GPU. The regime variable is `nu` only. H4 and H5 are not gate hypotheses.
+
+**Hypothesis:** the day-to-day implied-vol change of this four-control decoder is nearly rank one on a 40-date sample (share `0.9989`). The next specification is the same PCA with more than four affine controls and a longer synthetic history. The share to beat is `0.9989`.
 
 ## 2026-10-14 Library P3f: market paths and regimes
 
