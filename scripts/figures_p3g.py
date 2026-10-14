@@ -76,6 +76,30 @@ def _first_loading(panel: np.ndarray) -> tuple[np.ndarray, float]:
     return vt[0], share
 
 
+def _forward_ratios() -> None:
+    """Mean of the H=0.1 forward curve after the clock, divided by xi0.
+
+    One regime, 2,000 paths, clock index 8, seed entropy 80, test split.
+    Later dates are the closed form. The diagonal is v_t and is not in
+    the average.
+    """
+    times = np.linspace(0.0, 1.0, 17)
+    clock = 8
+    for nu in (1.5, 3.0):
+        spec = RegimeSpec(
+            generator=np.zeros((1, 1)),
+            params=[{"nu": nu}],
+            p0=np.array([1.0]),
+            switch="nu",
+        )
+        model = RegimeSwitchingBergomi(
+            spec, xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_pilot=2
+        )
+        paths = model.simulate_market(2000, times, seed=run_seed(80, 2))
+        future = paths.state["xi"][:, clock, clock + 1 :]
+        print(f"forward_mean_ratio nu={nu:.1f}: {float(future.mean()) / 0.04:.6f}")
+
+
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     modulus = _modulus()
@@ -148,6 +172,7 @@ def main() -> None:
     print(f"pca_dysanos_share: {share_d:.4f}")
     print(f"pca_regime_share: {share_r:.4f}")
     print(f"iv_finite_fraction: {float(np.isfinite(history).mean()):.4f}")
+    _forward_ratios()
 
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.4))
     grid = loading_d.reshape(maturities.size, log_k.size)
