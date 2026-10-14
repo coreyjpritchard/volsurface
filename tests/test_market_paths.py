@@ -15,7 +15,9 @@ from volsurface.markets.filter import hamilton_filter, regime_scores
 from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, VarianceSwapPricer
 from volsurface.markets.regime import (
     RegimeSwitchingBergomi,
+    _bridge_log_returns,
     _kernel_weights,
+    _log_variance_increments,
     _stochastic,
     bergomi_forward_variance,
     filter_log_realised_variance,
@@ -66,18 +68,19 @@ def test_missing_rough_driver_is_not_replaced(monkeypatch):
 
 def test_plugin_driver_is_called_and_not_labelled_rbergomi(monkeypatch):
     pytest.importorskip("roughvol")
-    seen = {}
+    seen = []
 
     class _StandIn:
         def volterra_components(self, n_paths, times, *, seed, H):
-            seen["H"] = H
-            seen["n"] = n_paths
+            seen.append((H, n_paths))
             return np.zeros((n_paths, len(times) - 1, 2))
 
     monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
     model = _model(H=0.1)
     paths = model.simulate_market(6, np.linspace(0.0, 0.2, 4), seed=3)
-    assert seen == {"H": 0.1, "n": 6}
+    # The market draw is the call with 6 paths. The emission pilot calls
+    # the same plugin again, once per regime, and is not the market draw.
+    assert (0.1, 6) in seen
     assert paths.meta["roughvol"] is False
     assert paths.meta["label"] == "_StandIn"
     assert "market_simulate" in capabilities(model)
@@ -506,10 +509,12 @@ def test_filter_reads_log_realised_variance_from_the_spot():
 
 
 def test_log_variance_filter_matches_the_gaussian_increment():
-    """One step, dt = 0.2, increment 0.05, prior (0.7, 0.3), identity transition.
+    """The exact half-Brownian likelihood, not the latent-variance benchmark.
 
+    One step, dt = 0.2, increment 0.05, prior (0.7, 0.3), identity transition.
     The emission is Normal(-nu^2 dt / 2, nu^2 dt). The posterior is
-    (0.86427398, 0.13572602). Column 0 stays the prior.
+    (0.86427398, 0.13572602). Column 0 stays the prior. The market does
+    not call this function.
     """
     from scipy.stats import norm
 
@@ -543,24 +548,38 @@ def test_log_variance_filter_does_not_use_a_later_increment():
     assert not np.allclose(first[0, -1], second[0, -1])
 
 
-def test_prices_read_the_spot_filter_not_the_log_variance_filter():
-    """``surface_at`` ignores ``state['regime_prob_log_v']`` and uses ``regime_prob``."""
+def test_prices_read_the_spot_filter_not_the_latent_benchmark():
+    """``surface_at`` reads ``regime_prob``, the spot filter under the default.
+
+    The windowed filter and the latent-variance benchmark are stored beside
+    it. Replacing the latent array does not move the call. Replacing
+    ``regime_prob`` does. The market does not call the exact half-Brownian
+    likelihood.
+    """
     model = _model(n_mc=16)
     times = np.linspace(0.0, 0.4, 5)
     paths = model.simulate_market(6, times, seed=run_seed(4, 2))
-    direct = filter_log_variance(
-        paths.state["v"],
-        [_stochastic_step(model, float(times[i] - times[i - 1])) for i in range(1, times.size)],
-        np.array([0.4, 1.1]),
-        times,
+    assert paths.meta["price_filter"] == "spot"
+    assert np.allclose(paths.regime_prob, paths.state["regime_prob_spot"])
+    steps = [_stochastic_step(model, float(times[i] - times[i - 1])) for i in range(1, times.size)]
+    window = filter_log_realised_variance(
+        paths.state["y_rv"], steps, paths.meta["rv_means"], paths.meta["rv_vars"], _spec().p0
+    )
+    latent = filter_log_realised_variance(
+        _log_variance_increments(paths.state["v"]),
+        steps,
+        paths.meta["latent_means"],
+        paths.meta["latent_vars"],
         _spec().p0,
     )
-    assert np.allclose(paths.state["regime_prob_log_v"], direct)
-    assert not np.allclose(paths.regime_prob, paths.state["regime_prob_log_v"])
+    assert np.allclose(paths.state["regime_prob_rv"], window)
+    assert np.allclose(paths.state["regime_prob_latent"], latent)
+    assert not np.allclose(paths.regime_prob, paths.state["regime_prob_latent"])
     tweaked = dict(paths.state)
-    oracle = np.zeros_like(paths.state["regime_prob_log_v"])
-    oracle[..., 0] = 1.0
-    tweaked["regime_prob_log_v"] = oracle
+    benchmark = np.zeros_like(paths.state["regime_prob_latent"])
+    benchmark[..., 0] = 1.0
+    tweaked["regime_prob_latent"] = benchmark
+    tweaked["regime_prob_rv"] = benchmark
     left = model.surface_at(paths, 2).call
     right = model.surface_at(replace(paths, state=tweaked), 2).call
     assert np.array_equal(left, right)
@@ -571,6 +590,43 @@ def test_prices_read_the_spot_filter_not_the_log_variance_filter():
 
 def _stochastic_step(model: RegimeSwitchingBergomi, dt: float) -> np.ndarray:
     return _stochastic(expm(np.asarray(model.spec.generator, dtype=float) * dt))
+
+
+def test_windowed_returns_sum_to_the_coarse_return():
+    """``n_sub`` refines the coarse spot shock. The stored path does not move."""
+    v_left = np.array([[0.04, 0.05]])
+    dW = np.array([[0.1, -0.2]])
+    perp = np.array([[0.3, 0.0]])
+    times = np.array([0.0, 0.1, 0.3])
+    rho = -0.4
+    log_sub = _bridge_log_returns(
+        v_left, dW, perp, times, rho, 21, generator(run_seed(1, 0))
+    )
+    orthogonal = math.sqrt(1.0 - rho * rho)
+    for i, dt in enumerate(np.diff(times)):
+        shock = rho * dW[0, i] + orthogonal * math.sqrt(dt) * perp[0, i]
+        coarse = math.sqrt(v_left[0, i]) * shock - 0.5 * v_left[0, i] * dt
+        assert float(log_sub[0, i].sum()) == pytest.approx(coarse)
+
+    times = np.linspace(0.0, 0.5, 6)
+    fine = _model(n_sub=21).simulate_market(8, times, seed=run_seed(6, 1))
+    coarse = _model(n_sub=1).simulate_market(8, times, seed=run_seed(6, 1))
+    assert np.array_equal(fine.Z, coarse.Z)
+    assert np.array_equal(fine.state["v"], coarse.state["v"])
+    assert coarse.state["y_rv"][:, 1:] == pytest.approx(coarse.state["y"][:, 1:])
+    assert not np.allclose(fine.state["y_rv"][:, 1:], fine.state["y"][:, 1:])
+
+
+def test_market_does_not_call_the_half_gaussian_likelihood(monkeypatch):
+    """The latent benchmark is the pilot table, including at ``H = 1/2``."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("analytic log-variance likelihood")
+
+    monkeypatch.setattr("volsurface.markets.regime.filter_log_variance", boom)
+    paths = _model().simulate_market(4, np.linspace(0.0, 0.2, 3), seed=run_seed(2, 2))
+    assert paths.state["regime_prob_latent"].shape == (4, 3, 2)
+    assert not np.allclose(paths.meta["latent_means"][:, 0], paths.meta["latent_means"][:, 1])
 
 
 def test_rv_filter_does_not_use_a_later_return():
@@ -614,16 +670,16 @@ def _bayes_accuracy(price: np.ndarray, regime: np.ndarray) -> tuple[float, bool]
 
 
 def test_regime_cannot_be_read_exactly_from_prices():
-    """Six hundred paths, clock index 10. Lifts over the base rate, both sides.
+    """Six hundred paths, clock index 10, market-test settings.
 
-    The base rate is the larger share of the latent regime at that clock.
-    Eight quantile bins of the call and of the variance swap each contain
-    both regimes. Their modal accuracy beats the base rate by more than
-    0.05 and by less than 0.35, so the price is not the unconditional law
-    and it is not the label.     With 1,024 Monte Carlo copies the call accuracy
-    is 0.6600 (lift 0.1217) and the variance-swap accuracy is 0.6600
-    (lift 0.1217). The log-RV filter's modal hit rate stays within 0.10 of
-    the same base rate. One-step log realised variance has one mean in both
+    The settings are ``H = 1/2`` and ``nu`` of 0.4 and 1.1. The base rate
+    is the larger share of the latent regime at that clock. Eight quantile
+    bins of the call and of the variance swap each contain both regimes.
+    Their modal accuracy beats the base rate by more than 0.05 and by less
+    than 0.35, so the price is not the unconditional law and it is not the
+    label. The spot filter's bar at these settings is the Brier skill
+    against the constant forecast that quotes the sample shares. That skill
+    is not positive: one-step log realised variance has one mean in both
     regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
     """
     model = _model()
@@ -640,9 +696,9 @@ def test_regime_cannot_be_read_exactly_from_prices():
     assert call_both and swap_both
     assert 0.05 < call_accuracy - base < 0.35
     assert 0.05 < swap_accuracy - base < 0.35
-    predicted = paths.regime_prob[:, 10].argmax(axis=1)
-    filter_accuracy = float(np.mean(predicted == labels))
-    assert -0.10 < filter_accuracy - base < 0.10
+    spot = regime_scores(paths.state["regime_prob_spot"][:, 10], labels)
+    assert spot["brier_skill"] <= 0.0
+    assert spot["accuracy"] <= spot["base_rate"]
 
 
 def _implied_vol_strip(batch, clock: float) -> np.ndarray:
@@ -656,70 +712,150 @@ def _implied_vol_strip(batch, clock: float) -> np.ndarray:
     return np.stack(columns, axis=1)
 
 
-def test_log_variance_oracle_beats_the_spot_filter_on_the_pinned_draw():
-    """Six hundred paths, clock index 10, 1,024 copies. Real scores, not a target.
-
-    The pins are the pre-registered generator, initial law ``(0.7, 0.3)``,
-    ``rho = -0.4``, and ``xi0 = 0.04``. The hedge cost ``1e-4`` is not an
-    input. The base rate is 323/600. The call-bin accuracy 0.6600 on this
-    draw is not the spot filter: the spot filter is right on 287/600 paths.
-    The log-variance filter is right on 484/600. Brier is the mean of
-    ``||p - e_r||^2``. The log score is the mean of ``log(p_r)``.
-    """
-    model = _model(n_mc=1024)
+def _filter_draw(nus, H, n_mc):
+    """Six hundred paths, 21 times, clock index 10, seed entropy 12, test split."""
+    spec = RegimeSpec(
+        generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+        params=[{"nu": float(nu)} for nu in nus],
+        p0=np.array([0.7, 0.3]),
+        switch="nu",
+    )
+    model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=H, n_mc=n_mc)
     times = np.linspace(0.0, 1.0, 21)
     paths = model.simulate_market(600, times, seed=run_seed(12, 2))
-    labels = paths.regime[:, 10]
-    spot = regime_scores(paths.regime_prob[:, 10], labels)
-    oracle = regime_scores(paths.state["regime_prob_log_v"][:, 10], labels)
-    assert spot["base_rate"] == pytest.approx(323 / 600)
-    assert spot["accuracy"] == pytest.approx(287 / 600)
-    assert oracle["accuracy"] == pytest.approx(484 / 600)
-    assert spot["confusion"].tolist() == [[129, 148], [165, 158]]
-    assert oracle["confusion"].tolist() == [[219, 58], [58, 265]]
-    assert spot["brier"] == pytest.approx(0.5221569169178578, abs=1e-12)
-    assert oracle["brier"] == pytest.approx(0.28324409971623526, abs=1e-12)
-    assert spot["log_score"] == pytest.approx(-0.7184579069520304, abs=1e-12)
-    assert oracle["log_score"] == pytest.approx(-0.44442118403744624, abs=1e-12)
-    # Quoting the base rate beats the spot filter and loses to the oracle.
-    share = np.array([277, 323], dtype=float) / 600.0
-    base_brier = float(2.0 * share[0] * share[1])
-    assert spot["brier"] > base_brier > oracle["brier"]
+    return model, times, paths
 
+
+def _mixture_gaps(model, paths, clock_index):
+    """Call gap, log-contract gap, and implied vol against the true-regime mixture."""
+    labels = paths.regime[:, clock_index]
     one_hot = np.eye(2)[labels.astype(int)]
-    true_prob = paths.regime_prob.copy()
-    true_prob[:, 10, :] = one_hot
-    log_prob = paths.regime_prob.copy()
-    log_prob[:, 10, :] = paths.state["regime_prob_log_v"][:, 10, :]
-    spot_batch = model.surface_at(paths, 10)
-    log_batch = model.surface_at(replace(paths, regime_prob=log_prob), 10)
-    true_batch = model.surface_at(replace(paths, regime_prob=true_prob), 10)
-    spot_gap = np.abs(spot_batch.call - true_batch.call)
-    log_gap = np.abs(log_batch.call - true_batch.call)
-    assert float(spot_gap.mean()) == pytest.approx(0.0002966213202520645, abs=1e-12)
-    assert float(log_gap.mean()) == pytest.approx(0.0001594601008180083, abs=1e-12)
-    assert float(np.mean(np.abs(spot_batch.total_variance - true_batch.total_variance))) == (
-        pytest.approx(0.0004628258201420169, abs=1e-12)
-    )
-    assert float(np.mean(np.abs(log_batch.total_variance - true_batch.total_variance))) == (
-        pytest.approx(0.00024548567329425096, abs=1e-12)
-    )
-    contract = [Contract(Vanilla(model.forward), T=1.0)]
-    swap = VarianceSwapPricer().price_along(paths, contract)
-    swap_oracle = VarianceSwapPricer().price_along(replace(paths, regime_prob=log_prob), contract)
-    assert np.array_equal(swap, swap_oracle)
+    true_weights = paths.regime_prob.copy()
+    true_weights[:, clock_index, :] = one_hot
+    true = model.surface_at(replace(paths, regime_prob=true_weights), clock_index)
+    clock = float(paths.times[clock_index])
+    iv_true = _implied_vol_strip(true, clock)
+    out = {"true": true, "iv_true": iv_true}
+    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
+        weights = paths.regime_prob.copy()
+        weights[:, clock_index, :] = paths.state[name][:, clock_index, :]
+        batch = model.surface_at(replace(paths, regime_prob=weights), clock_index)
+        out[name] = batch
+        out["iv_" + name] = _implied_vol_strip(batch, clock)
+    finite = np.isfinite(iv_true)
+    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
+        finite = finite & np.isfinite(out["iv_" + name])
+    out["finite"] = finite
+    return out
 
+
+def test_market_test_filters_are_scored_against_the_base_rate():
+    """H = 1/2, nu 0.4 and 1.1. Integer counts are the pin. Floats sit at 1e-9.
+
+    The spot filter has no Brier skill. The windowed filter's hit rate is
+    above the base rate and its Brier skill is still negative. The latent
+    benchmark is the pilot table, right on 487 of 600 paths. Prices read
+    the spot filter. The variance swap does not depend on the weights.
+    """
+    model, times, paths = _filter_draw((0.4, 1.1), 0.5, 1024)
+    assert model.price_filter == "spot"
+    labels = paths.regime[:, 10]
+    spot = regime_scores(paths.state["regime_prob_spot"][:, 10], labels)
+    window = regime_scores(paths.state["regime_prob_rv"][:, 10], labels)
+    latent = regime_scores(paths.state["regime_prob_latent"][:, 10], labels)
+    assert spot["confusion"].tolist() == [[129, 148], [165, 158]]
+    assert window["confusion"].tolist() == [[209, 68], [166, 157]]
+    assert latent["confusion"].tolist() == [[223, 54], [59, 264]]
+    assert int(spot["confusion"].sum()) == 600
+    assert spot["base_rate"] == pytest.approx(323 / 600)
+    assert spot["brier_skill"] < 0.0
+    assert window["brier_skill"] < 0.0
+    assert latent["brier_skill"] > 0.0
+    assert spot["brier"] == pytest.approx(0.5221569169178578, abs=1e-9)
+    assert window["brier"] == pytest.approx(0.5152963456122025, abs=1e-9)
+    assert latent["brier"] == pytest.approx(0.2805716276927648, abs=1e-9)
+    assert spot["log_score"] == pytest.approx(-0.7184579069520304, abs=1e-9)
+    assert window["log_score"] == pytest.approx(-0.7265316948384318, abs=1e-9)
+    assert latent["log_score"] == pytest.approx(-0.4411708645577869, abs=1e-9)
+    assert spot["base_brier"] == pytest.approx(0.4970611111111111, abs=1e-9)
+    assert spot["base_log_score"] == pytest.approx(-0.6902054058581284, abs=1e-9)
+
+    gaps = _mixture_gaps(model, paths, 10)
+    assert int(gaps["finite"].sum()) == 35016
     clock = float(times[10])
-    iv_spot = _implied_vol_strip(spot_batch, clock)
-    iv_log = _implied_vol_strip(log_batch, clock)
-    iv_true = _implied_vol_strip(true_batch, clock)
-    finite = np.isfinite(iv_spot) & np.isfinite(iv_log) & np.isfinite(iv_true)
-    assert int(finite.sum()) == 35060
-    spot_iv = float(np.sqrt(np.mean((iv_spot[finite] - iv_true[finite]) ** 2)))
-    log_iv = float(np.sqrt(np.mean((iv_log[finite] - iv_true[finite]) ** 2)))
-    assert spot_iv == pytest.approx(0.005304554649174312, abs=1e-12)
-    assert log_iv == pytest.approx(0.0038149002915683116, abs=1e-12)
-    assert log_iv < spot_iv
+    assert clock == pytest.approx(0.5)
+    for name, call_gap, variance_gap, iv_error in (
+        ("regime_prob_spot", 0.0002973824424503753, 0.0004635244302312637, 0.0053663837216426985),
+        ("regime_prob_rv", 0.00024964505926035346, 0.00038953401145281106, 0.0052640550779876226),
+        ("regime_prob_latent", 0.00015957636977995975, 0.0002451333270678601, 0.003855812446369273),
+    ):
+        batch = gaps[name]
+        iv = gaps["iv_" + name]
+        finite = gaps["finite"]
+        assert float(np.mean(np.abs(batch.call - gaps["true"].call))) == pytest.approx(
+            call_gap, abs=1e-9
+        )
+        assert float(np.mean(np.abs(batch.total_variance - gaps["true"].total_variance))) == (
+            pytest.approx(variance_gap, abs=1e-9)
+        )
+        got = float(np.sqrt(np.mean((iv[finite] - gaps["iv_true"][finite]) ** 2)))
+        assert got == pytest.approx(iv_error, abs=1e-9)
+    nus = np.array([0.4, 1.1])
+    v = paths.state["v"]
+    dW = paths.state["dW"]
+    left = trader_forward_variance(0.5, nus, v, paths.state["regime_prob_spot"], 0.04, times, dW)
+    right = trader_forward_variance(0.5, nus, v, paths.state["regime_prob_rv"], 0.04, times, dW)
+    assert np.allclose(left, right, equal_nan=True)
+
+
+def test_preregistered_filters_are_scored_against_the_base_rate(monkeypatch):
+    """H = 0.1, nu 1.5 and 3. The spot hit rate is 410 of 600.
+
+    That is the measured rate at these settings. The windowed filter and
+    the latent benchmark both beat the base-rate forecast. The benchmark
+    is the pilot table: the market does not call the half-Brownian
+    likelihood. Prices still read the spot filter.
+    """
+    pytest.importorskip("roughvol")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("analytic log-variance likelihood")
+
+    monkeypatch.setattr("volsurface.markets.regime.filter_log_variance", boom)
+    model, _times, paths = _filter_draw((1.5, 3.0), 0.1, 1024)
+    assert model.price_filter == "spot"
+    labels = paths.regime[:, 10]
+    spot = regime_scores(paths.state["regime_prob_spot"][:, 10], labels)
+    window = regime_scores(paths.state["regime_prob_rv"][:, 10], labels)
+    latent = regime_scores(paths.state["regime_prob_latent"][:, 10], labels)
+    assert spot["confusion"].tolist() == [[176, 101], [89, 234]]
+    assert window["confusion"].tolist() == [[227, 50], [87, 236]]
+    assert latent["confusion"].tolist() == [[207, 70], [66, 257]]
+    assert spot["brier_skill"] > 0.0
+    assert window["brier_skill"] > 0.0
+    assert latent["brier_skill"] > window["brier_skill"] > spot["brier_skill"]
+    assert spot["brier"] == pytest.approx(0.41927448869043304, abs=1e-9)
+    assert window["brier"] == pytest.approx(0.34729313232387965, abs=1e-9)
+    assert latent["brier"] == pytest.approx(0.33155110233077373, abs=1e-9)
+    assert spot["log_score"] == pytest.approx(-0.6156778597945741, abs=1e-9)
+    assert window["log_score"] == pytest.approx(-0.5428351870378959, abs=1e-9)
+    assert latent["log_score"] == pytest.approx(-0.5098968565249987, abs=1e-9)
+
+    gaps = _mixture_gaps(model, paths, 10)
+    assert int(gaps["finite"].sum()) == 31508
+    for name, call_gap, iv_error in (
+        ("regime_prob_spot", 0.005650842641547755, 0.06934422499248466),
+        ("regime_prob_rv", 0.003678213834494267, 0.05538732082611836),
+        ("regime_prob_latent", 0.00435803106464533, 0.06040905254812784),
+    ):
+        batch = gaps[name]
+        iv = gaps["iv_" + name]
+        finite = gaps["finite"]
+        assert float(np.mean(np.abs(batch.call - gaps["true"].call))) == pytest.approx(
+            call_gap, abs=1e-9
+        )
+        got = float(np.sqrt(np.mean((iv[finite] - gaps["iv_true"][finite]) ** 2)))
+        assert got == pytest.approx(iv_error, abs=1e-9)
 
 
 def _single_regime(nu: float, n_mc: int, **kwargs) -> RegimeSwitchingBergomi:
@@ -781,7 +917,7 @@ def test_surface_mixes_the_filter_and_repeats():
 def test_half_smile_is_not_flat_and_moves_with_nu():
     """H = 1/2, one path, 32 steps, 8,192 Monte Carlo copies, seed entropy 7.
 
-    The implied-vol span at nu = 1.5 is 0.04387, against 0.000391 at nu = 0.01.
+    The implied-vol span at nu = 1.5 is 0.04387, against 0.000390 at nu = 0.01.
     With rho = -0.4 the low-strike implied vol is 0.2117 and the high-strike
     implied vol is 0.1681. The control removes the Monte Carlo smile that a
     raw mean left at nu = 0.01.
@@ -832,9 +968,9 @@ def test_rough_surface_requires_the_forward_driver():
 def test_surface_standard_error_is_below_the_raw_monte_carlo_noise():
     """One path, nu = 1.1, H = 1/2, 32 steps, 1,024 copies, seed entropy 7.
 
-    The at-the-money relative standard error at expiry 1 is 0.0186. The raw
-    mean at 256 copies was about 8 percent of the price. The coefficient is
-    the sample cov / var, so this standard error is slightly optimistic.
+    The at-the-money relative standard error at expiry 1 is 0.0187. The raw
+    mean at 256 copies was about 8 percent of the price. The coefficient on
+    each half of the copies is fit on the other half.
     """
     paths = _quoted_paths(0.04, 32, np.array([1.0]))
     batch = _single_regime(1.1, 1024).surface_at(paths, 0)

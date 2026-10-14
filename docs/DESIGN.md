@@ -1046,20 +1046,42 @@ martingale. A Black call on the expected variance would be flat in
 strike and independent of `nu`. The plugin is not called at that `H`.
 Any other `H` reads `state["dW"]` and restarts `volterra_components`
 from the clock. The past Volterra integral sits in `xi_t(u)` and is
-not drawn again. The weights are `regime_prob` at the clock. The same
-shocks drive a Black path whose variance is the deterministic left
-forward curve. The control is that Black price, with the sample
-coefficient `cov / var` and the formula as the known mean. One terminal
-is used for every strike. `n_mc` defaults to 1024. The seed is the path
-entropy and `spawn_key + (i_t, 4, regime)`. `SurfaceBatch.stderr` is
-the residual standard deviation divided by `sqrt(n_mc)`. Fitting the
-coefficient on the same sample makes that error slightly optimistic.
+not drawn again. Two limits of that restart stay open. The tenor shape
+is the constant-`nu` ratio of the raw driver, anchored at `v_t` and
+then mixed by the filter. It is not the conditional curve of a path
+whose past `nu` switched, because that curve would read the latent
+label, and a price does not. The grid from the clock to the last expiry
+has to be equally spaced. A non-uniform grid raises. The fresh factor
+is a martingale up to the hybrid scheme's error. The z-rule bounds
+`E[v] - xi0`. It is not an identity. The weights are `regime_prob` at
+the clock. The same shocks drive a Black path whose variance is the
+deterministic left forward curve. The control is that Black price. The
+copies are split in half, and the coefficient on each half is the other
+half's `cov / var`, so the residual variance is not the in-sample
+minimum. The known mean is the formula. One terminal is used for every
+strike. `n_mc` defaults to 1024. The seed is the path entropy and
+`spawn_key + (i_t, 4, regime)`. `SurfaceBatch.stderr` is the residual
+standard deviation divided by `sqrt(n_mc)`. The absolute price still
+carries that Monte Carlo error. A comparison of two mixtures on the
+same paths uses one seed per regime, so the gap is the gap in the
+weights.
 `total_variance` is the controlled log contract `-2 E[log Z]`, the
 variance-swap strike of those paths. Whether `Z` stays a martingale
 when `nu` switches is a hypothesis. The test is the z-rule. It is not
 a theorem in this file.
 
-Two Hamilton filters are defined. Prices read only the first.
+Three Hamilton filters are defined. Prices read the spot filter.
+
+`price_filter` defaults to `"spot"`. `regime_prob` is then that filter,
+and `surface_at` mixes it. The variance swap integrates `state["xi"]`,
+which was mixed with the same probabilities when the path was drawn.
+At `H = 1/2` that curve does not depend on the weights. At any other
+`H` it does. Replacing `regime_prob` after the draw does not rebuild
+`xi`. The windowed filter is observable, so a price is allowed to read
+it, and the default does not. Set `price_filter` to `"rv"` to do that.
+The latent-variance benchmark is not a price in either case. Neither
+`state["regime_prob_rv"]` nor `state["regime_prob_latent"]` is read by
+`surface_at` under the default.
 
 The spot filter reads one-step log realised variance of the simulated
 spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic
@@ -1069,61 +1091,84 @@ Gaussian. The mean is `log(xi0) - gamma - log(2)` in every regime, the
 mean of `log(xi0 * chi^2_1)`, because the return's variance is the spot
 variance and not `nu`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
 `pi^2 / 2` is about 4.93. For `nu` of 0.4 and 1.1 the extra term is 0.16
-and 1.21, so the two emissions are close. A trailing window of the same
-series does not fix that. The chi-squared noise in a window short enough
-to sit inside one regime visit dominates `nu^2` times the window length,
-and a longer window mixes the regimes. `regime_prob` is this filter.
-`surface_at` and the variance swap read it. They do not read
-`state["regime_prob_log_v"]`.
+and 1.21, so the two emissions are close. The probabilities sit in
+`state["regime_prob_spot"]`.
 
-The log-variance filter is an oracle upper bound. The observation on the
-step that ends at `t_i` is `log v_i - log v_{i-1}`, the true latent log
-variance, not a quote. At `H = 1/2` that increment is
-`Normal(-nu^2 dt / 2, nu^2 dt)` for the regime on the left of the step.
-The stored column uses the same timing as the spot filter. At any other
-`H` this Gaussian is not the law of the increment, so the function is the
-`H = 1/2` likelihood. A tradable price does not call it.
+The windowed realised-variance filter uses the returns inside each clock
+step. The coarse Brownian increment is refined to `n_sub` sub-steps,
+default 21, by a bridge that sums to the stored shock, so `Z` and `v`
+do not depend on `n_sub`. The observation is
+`log(sum_k (d log Z_k)^2 / dt)`. The emission is a table, one row per
+clock step and one column per regime, fit on pilot paths that each stay
+in one regime. The pilot seed is `SeedSequence(entropy=101, spawn_key=(7, regime))`.
+It is not a market seed. The fitted statistic is that log realised
+variance. The pilot does not read `v`. A sample variance below `1e-8`
+is floored there. The probabilities sit in `state["regime_prob_rv"]`.
+
+The latent-variance benchmark reads `log v_i - log v_{i-1}`. Its
+emission table is fit on the same pilots, and that fit does read `v`.
+The same table is used at every `H`. At `H = 1/2` the increment is
+`Normal(-nu^2 dt / 2, nu^2 dt)` and the pilot estimates that law. At
+any other `H` that Gaussian is not the rough likelihood, so the
+benchmark does not use it and it is not an oracle. The probabilities
+sit in `state["regime_prob_latent"]`.
+
+The bar is the Brier skill against the constant forecast that quotes
+the sample share of each regime, `1 - Brier / Brier_base`. It is scored
+at each setting on its own. There is no single lift band.
 
 On 600 paths, 21 times, clock index 10, seed entropy 12, test split, the
-pins are the pre-registered generator `[[-1.5, 1.5], [0.8, -0.8]]`,
-initial law `(0.7, 0.3)`, `rho = -0.4`, and flat `xi0 = 0.04`. The spot
-hedge cost `1e-4` is not an input to either filter. The vol-of-vol pair
-on this draw is `0.4` and `1.1`, which is the market-test pair. It is not
-the pilot pair `1.5` and `3`. The base rate, the larger share of the
-latent regime at that clock, is 0.5383 (323 of 600). The spot filter's
-modal hit rate is 0.4783 (287 of 600), lift -0.0600. Its confusion
-matrix, rows the true regime and columns the modal regime, low `nu` then
-high `nu`, is `[[129, 148], [165, 158]]`. The Brier score, the mean of
-`||p - e_r||^2`, is 0.5222. The log score, the mean of `log(p_r)`, is
--0.7185. A forecast that always quotes the base rate scores Brier 0.4971
-and log score -0.6902, so the spot filter does not beat that forecast.
-The bar on the spot filter remains a two-sided band on the lift, from
--0.10 to 0.10. The log-variance filter's modal hit rate on the same clock
-is 0.8067 (484 of 600), lift 0.2683. Its confusion matrix is
-`[[219, 58], [58, 265]]`. Its Brier score is 0.2832 and its log score is
--0.4444.
+generator is `[[-1.5, 1.5], [0.8, -0.8]]`, the initial law is
+`(0.7, 0.3)`, `rho = -0.4`, and `xi0` is flat at 0.04. The spot hedge
+cost `1e-4` is not an input to any filter. The chain does not depend on
+`H` or on `nu`, so both settings below have the same labels at the
+clock: 277 paths in the low regime and 323 in the high regime. The base
+rate is 0.5383. The base-rate forecast scores Brier 0.4971 and log
+score -0.6902. Confusion matrices have the true regime in the row and
+the modal regime in the column, low `nu` then high `nu`.
 
-The same paths, read from eight quantile bins, give a call modal
-accuracy of 0.6600 with 1,024 Monte Carlo copies (lift 0.1217) and a
-variance-swap modal accuracy of 0.6600 (lift 0.1217). That 0.6600 is the
-price bin. It is not the spot filter's hit rate. Both lifts sit between
-0.05 and 0.35, so the price is not the unconditional law and it is not
-the latent label. Replacing the mixture weights with the true regime,
-same 1,024 copies, moves the mixed call by a mean absolute amount of
-0.0002966 under the spot filter and 0.0001595 under the log-variance
-filter. On the 35,060 nodes where all three implied vols are finite, out
-of 37,800, the root-mean-square implied-vol error is 0.005305 for the
-spot filter and 0.003815 for the log-variance filter. The variance-swap
-pricer does not move: at `H = 1/2` the forward variance does not depend
-on the weights. The surface log contract does. Its mean absolute gap
-against the true-regime mixture is 0.0004628 for the spot filter and
-0.0002455 for the log-variance filter. On one path with `v = 0.04`, `rho = -0.4`,
+Market-test settings, `H = 1/2`, `nu` of 0.4 and 1.1. The spot filter
+is right on 287 paths, confusion `[[129, 148], [165, 158]]`, Brier
+0.5222, log score -0.7185, Brier skill -0.0505. It has no skill at
+these settings. The windowed filter is right on 366 paths, confusion
+`[[209, 68], [166, 157]]`, Brier 0.5153, log score -0.7265, Brier skill
+-0.0367. The hit rate is above the base rate and the probability scores
+are not. The latent-variance benchmark is right on 487 paths, confusion
+`[[223, 54], [59, 264]]`, Brier 0.2806, log score -0.4412, Brier skill
+0.4355. With 1,024 copies, the mean absolute call gap against the
+true-regime mixture is 0.0002974 (spot), 0.0002496 (windowed), and
+0.0001596 (latent). The log-contract gaps are 0.0004635, 0.0003895, and
+0.0002451. On the 35,016 nodes where all four implied vols are finite,
+out of 37,800, the implied-vol root-mean-square error is 0.005366,
+0.005264, and 0.003856.
+
+Pre-registered settings, `H = 0.1`, `nu` of 1.5 and 3. The spot filter
+is right on 410 paths, confusion `[[176, 101], [89, 234]]`, Brier
+0.4193, log score -0.6157, Brier skill 0.1565. The hit rate is 0.6833.
+The windowed filter is right on 463 paths, confusion
+`[[227, 50], [87, 236]]`, Brier 0.3473, log score -0.5428, Brier skill
+0.3013. The latent-variance benchmark is right on 464 paths, confusion
+`[[207, 70], [66, 257]]`, Brier 0.3316, log score -0.5099, Brier skill
+0.3330. With 1,024 copies the mean absolute call gaps are 0.005651,
+0.003678, and 0.004358. The log-contract gaps are 0.02433, 0.01669, and
+0.01591. On the 31,508 nodes where all four implied vols are finite,
+the implied-vol root-mean-square errors are 0.06934, 0.05539, and
+0.06041. At these settings the observable windowed filter has a smaller
+implied-vol error than the latent benchmark. Prices still read the spot
+filter.
+
+The same market-test paths, read from eight quantile bins, give a call
+modal accuracy of 0.6600 with 1,024 Monte Carlo copies (lift 0.1217)
+and a variance-swap modal accuracy of 0.6600 (lift 0.1217). That 0.6600
+is the price bin. It is not a filter hit rate. Both lifts sit between
+0.05 and 0.35. The call bin is 0.6600 under the spot weights and under
+the windowed weights. On one path with `v = 0.04`, `rho = -0.4`,
 32 steps and 8,192 copies, seed entropy 7, test split, the implied-vol
-span at expiry 1 is 0.000391 when `nu = 0.01` and 0.04387 when
+span at expiry 1 is 0.000390 when `nu = 0.01` and 0.04387 when
 `nu = 1.5`. At `nu = 1.5` the implied vol is 0.2117 at log-moneyness
 -0.2 and 0.1681 at log-moneyness 0.2. On one path with `nu = 1.1` and
 1,024 copies the at-the-money relative standard error at expiry 1 is
-0.0186. At `H = 0.1`, eight paths, clock 0.5, maturity 1, 4,096 copies,
+0.0187. At `H = 0.1`, eight paths, clock 0.5, maturity 1, 4,096 copies,
 seed entropy 21, test split, the flat anchor `v_t (T - t)` misses the
 variance swap by a median relative gap of 0.258. The surface log
 contract stays inside 4 standard errors of that swap on every expiry.
