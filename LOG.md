@@ -2,7 +2,16 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
+**Current state:** Phase 3 interfaces are specified in `docs/DESIGN.md` sections 17 to 22. No Phase 3 numerical result yet. **Next:** the sparse quote linear program.
+
+## 2026-10-14 Library P3-0: Phase 3 interfaces
+
+Sections 17 to 22 name the sparse linear program, the SANOS fit, discrete
+local volatility, the rough-volatility entry point, market paths and
+pricers, and the regime seed order. `MarketPaths`, `RegimeSpec`,
+`SurfaceBatch`, `Pricer`, and `SupportsMarketSimulate` are stubs. No fit
+was run. Rough Bergomi stays in the `roughvol` package. The hedger stays
+in deep-hedging. Rough Heston is not specified.
 
 ## 2026-10-14 Library P2f: SABR, Hagan's formula, log-Euler
 

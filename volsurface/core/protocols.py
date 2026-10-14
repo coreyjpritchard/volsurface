@@ -8,17 +8,21 @@ should call instead of keeping its own flag list.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from volsurface.core.types import (
+    Contract,
     FitResult,
     GreeksResult,
     MarketData,
+    MarketPaths,
     Paths,
     State,
+    SurfaceBatch,
 )
 
 
@@ -136,12 +140,46 @@ class GreeksEngine(Protocol):
     ) -> GreeksResult: ...
 
 
+@runtime_checkable
+class Pricer(Protocol):
+    """Cash prices of a book along a path.
+
+    ``price_along`` returns shape ``(m, n + 1, c)``. After a contract's
+    expiry the entry is the payoff, held unchanged. ``supports`` says
+    whether this pricer will price that model and that contract.
+    """
+
+    def price_along(self, paths: MarketPaths, contracts: Sequence[Contract]) -> np.ndarray: ...
+
+    def supports(self, model, contract) -> bool: ...
+
+
+@runtime_checkable
+class SupportsMarketSimulate(Protocol):
+    """A model whose state at one date decodes into a full surface.
+
+    ``simulate_market`` returns :class:`MarketPaths`. ``surface_at`` returns
+    the normalised call for every path at time index ``i_t``.
+    """
+
+    def simulate_market(
+        self,
+        n_paths: int,
+        times: np.ndarray,
+        *,
+        seed: int | np.random.SeedSequence,
+        state0: State | None = None,
+    ) -> MarketPaths: ...
+
+    def surface_at(self, paths: MarketPaths, i_t: int) -> SurfaceBatch: ...
+
+
 def capabilities(model: object) -> set[str]:
     """Names of the protocols ``model`` satisfies.
 
-    The strings are ``"price"``, ``"simulate"``, ``"char_func"``, and
-    ``"parametric"``. Membership is structural, so a hand-kept flag cannot
-    drift away from the methods.
+    The strings are ``"price"``, ``"simulate"``, ``"char_func"``,
+    ``"parametric"``, and ``"market_simulate"``. Membership is structural,
+    so a hand-kept flag cannot drift away from the methods.
     """
     found: set[str] = set()
     if isinstance(model, Model):
@@ -152,4 +190,6 @@ def capabilities(model: object) -> set[str]:
         found.add("char_func")
     if isinstance(model, Parametric):
         found.add("parametric")
+    if isinstance(model, SupportsMarketSimulate):
+        found.add("market_simulate")
     return found
