@@ -1,0 +1,15 @@
+n_expiries,dense,n_checked,ok,wall_s,rss_gb,status
+2,False,278,True,0.7510171569999784,0.21260452270507812,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+4,False,842,True,1.037929141999939,0.300018310546875,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+8,False,1685,True,1.446904346999986,0.3980712890625,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+12,False,2353,True,1.7340562060001048,0.4736289978027344,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+16,False,3253,True,2.3815541280000616,0.604217529296875,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+24,False,4398,True,2.867747774999998,0.7088851928710938,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+32,False,6189,True,4.19756991099996,0.9689750671386719,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+40,False,8973,True,6.639471567999976,1.5515899658203125,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+2,True,278,True,0.7452157370000805,0.22861480712890625,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+4,True,842,True,1.1338885480000727,0.43033599853515625,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+8,True,1685,True,2.0512007089999997,1.0768470764160156,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+12,True,2353,True,3.1174171269999533,1.9327049255371094,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+16,True,3253,True,4.913909504999992,3.503101348876953,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
+24,True,4398,True,8.556819485000005,6.178306579589844,HiGHS status Optimization terminated successfully. (HiGHS Status 7: Optimal). Objective (total slack) 0.000e+00.
