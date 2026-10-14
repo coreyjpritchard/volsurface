@@ -17,10 +17,12 @@ The coefficients of that program did not change. What changed is the
 storage. The previous code allocated a dense row of length `n_var` for
 every constraint and stacked the rows. On the first 24 expiries of the
 committed SPX file that matrix is large enough that the dense solve's
-resident set reaches several gigabytes. The same rows, written as a SciPy
-CSR matrix and passed to HiGHS, are the nonzero call coefficients and the
+resident set reaches 6.178 GB. The same rows, written as a SciPy CSR
+matrix and passed to HiGHS, are the nonzero call coefficients and the
 slack columns. `dense=True` turns that CSR matrix back into an array and
-solves the identical program, which is the comparison the test runs.
+solves the identical program. The fast comparison uses the first 8
+expiries, 1,685 quotes, where a fresh dense solve peaked at 1.179 GB in
+1.35 s. The 24-expiry comparison is marked slow.
 
 HiGHS returns a status on all 40 expiries. The scale bar is a peak resident
 set below 2 GB, measured in a fresh process.

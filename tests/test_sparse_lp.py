@@ -55,8 +55,19 @@ def test_sparse_matches_dense_on_two_expiries():
     _same(sparse, dense)
 
 
+def test_sparse_matches_dense_on_eight_expiries():
+    """1,685 quotes. Dense peak RSS on this book is about 1.2 GB."""
+    book = _book(8)
+    sparse = check_quotes(book)
+    dense = check_quotes(book, dense=True)
+    assert sparse.n_checked == 1685
+    assert sparse.n_checked == len(book.quotes)
+    _same(sparse, dense)
+
+
+@pytest.mark.slow
 def test_sparse_matches_dense_on_the_first_24_expiries():
-    """4,398 quotes, objective 0, the same empty violation set."""
+    """4,398 quotes. Dense peak RSS on this book reached 6.2 GB, so it is not fast."""
     book = _book(24)
     sparse = check_quotes(book)
     dense = check_quotes(book, dense=True)
