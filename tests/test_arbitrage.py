@@ -20,7 +20,7 @@ def test_planted_violations_have_the_right_node_and_magnitude():
     T = np.array([0.3, 0.5, 1.0])
     k = np.array([-0.2, 0.0, 0.2])
     report = check_surface(surface, T, k, tol=ArbTol(price=1e-12))
-    assert not report.ok
+    assert report.ok is False
     assert "between the nodes" in report.note
     expected = {
         "call_spread": (0.5, 0.0, 0.25),
@@ -142,6 +142,7 @@ def test_random_marginal_passes_and_a_dent_is_flagged():
 
 def _market(rows: list[dict]) -> MarketData:
     frame = pd.DataFrame(rows)
+
     def one(t):
         return np.ones_like(np.asarray(t, dtype=float), dtype=float)
 
@@ -216,7 +217,7 @@ def test_quote_lp_calendar_slack_equals_the_price_gap():
     for strike, price in zip(x, _calls_from_q(x, calm, x), strict=True):
         rows.append(_quote_row(1.0, strike, price, price, expiry="long"))
     report = check_quotes(_market(rows), side="bidask", tol=ArbTol(price=1e-8))
-    assert not report.ok
+    assert report.ok is False
     at_one = report.violations[np.isclose(report.violations["k"], 0.0)]
     assert at_one["magnitude"].sum() == pytest.approx(0.25, abs=1e-4)
 
@@ -261,14 +262,18 @@ def test_committed_snapshot_runs_the_checker():
     for surface in (linear, spline):
         report = check_surface(surface, T, k)
         assert list(report.violations.columns) == [
-            "kind", "T", "k", "magnitude", "magnitude_in_spreads",
+            "kind",
+            "T",
+            "k",
+            "magnitude",
+            "magnitude_in_spreads",
         ]
         assert "between the nodes" in report.note
         assert report.n_checked == T.size * k.size
         assert np.isfinite(report.min_density)
-        assert report.violations["kind"].isin(
-            ["bounds", "call_spread", "butterfly", "calendar"]
-        ).all()
+        assert (
+            report.violations["kind"].isin(["bounds", "call_spread", "butterfly", "calendar"]).all()
+        )
 
 
 def test_flat_black_surface_passes_at_the_default_tolerance():
@@ -276,9 +281,7 @@ def test_flat_black_surface_passes_at_the_default_tolerance():
     from volsurface.models import BlackScholes
     from volsurface.surface.model import ModelSurface
 
-    surface = ModelSurface(
-        BlackScholes(0.2), _flat_market(), Domain(0.05, 1.0, -0.5, 0.5)
-    )
+    surface = ModelSurface(BlackScholes(0.2), _flat_market(), Domain(0.05, 1.0, -0.5, 0.5))
     report = check_surface(surface, np.array([0.25, 1.0]), np.linspace(-0.4, 0.4, 9))
     assert report.ok, report.violations
     assert "finite difference" not in report.note
@@ -289,9 +292,7 @@ def test_mixin_iv_recovers_a_deep_in_the_money_strike():
     from volsurface.models import BlackScholes
     from volsurface.surface.model import ModelSurface
 
-    surface = ModelSurface(
-        BlackScholes(0.2), _flat_market(), Domain(0.05, 2.0, -2.0, 0.5)
-    )
+    surface = ModelSurface(BlackScholes(0.2), _flat_market(), Domain(0.05, 2.0, -2.0, 0.5))
     # k = -0.8 is in the money as a call and out of the money as a put.
     # Several standard deviations further in, the normalised call no longer
     # carries the put's time value in float64.
@@ -370,13 +371,71 @@ def test_two_sided_book_runs_quotes_fit_and_both_builders():
     fitted = SVIFitter().fit(data)
     assert np.isfinite(fitted.in_spread)
     assert 0.0 <= fitted.in_spread <= 1.0
-    assert set(fitted.slice_report.columns) == {"T", "min_g", "lee_ok", "calendar_ok", "in_spread"}
+    assert set(fitted.slice_report.columns) == {
+        "T",
+        "min_g",
+        "lee_ok",
+        "calendar_ok",
+        "in_spread",
+        "n_one_sided",
+    }
+    assert int(fitted.slice_report["n_one_sided"].sum()) == 0
     assert fitted.slice_report["min_g"].notna().all()
     assert len(fitted.slice_report) == 2
 
     market = Curves(data.F, data.df)
     linear_surface(data.quotes, market)
     spline_surface(data.quotes, market)
+
+
+def test_one_sided_quotes_take_the_median_two_sided_weight():
+    """A last trade does not keep weight 1 next to a tight two-sided market.
+
+    Three quotes have spreads. Their inverse-variance weights differ. The
+    fourth has a bid only. After the common rescaling to mean 1, that row
+    equals the median of the three two-sided weights.
+    """
+    from volsurface.fit.svi import _spread_weights
+
+    rows = []
+    for k, bid, ask in (
+        (-0.1, 1.0, 1.2),
+        (0.0, 2.0, 2.1),
+        (0.1, 0.4, 0.9),
+        (0.2, 0.5, np.nan),
+    ):
+        rows.append(
+            {
+                "k": k,
+                "T": 1.0,
+                "iv": 0.2,
+                "F": 100.0,
+                "df": 1.0,
+                "K": 100.0 * np.exp(k),
+                "bid": bid,
+                "ask": ask,
+            }
+        )
+    weights = _spread_weights(pd.DataFrame(rows))
+    median = float(np.median(weights[:3]))
+    assert weights[3] == pytest.approx(median)
+    assert weights.mean() == pytest.approx(1.0)
+
+
+def test_highs_failure_is_neither_a_pass_nor_a_violation(monkeypatch):
+    """A solver that returns no point sets ``ok`` to None and keeps the message."""
+    from scipy.optimize import OptimizeResult
+
+    def failed(*args, **kwargs):
+        return OptimizeResult(success=False, message="numerical failure in test", x=None)
+
+    monkeypatch.setattr("volsurface.arbitrage.check.linprog", failed)
+    data = _two_sided()
+    report = check_quotes(data, side="bidask")
+    assert report.ok is None
+    assert report.violations.empty
+    assert "numerical failure in test" in report.note
+    assert report.n_checked == len(data.quotes)
 
 
 def test_two_sided_calendar_break_is_reported():

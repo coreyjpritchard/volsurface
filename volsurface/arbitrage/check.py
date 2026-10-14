@@ -372,11 +372,15 @@ def _solve(books: dict, tol: ArbTol, n_checked: int) -> ArbReport:
         method="highs",
     )
     if not solved.success or solved.x is None:
+        # A solver failure is not a violation and not a pass. ``ok is None``
+        # matches the empty-book case: nothing was decided. The message is the
+        # one HiGHS returned, so a later run can tell a numerical failure from
+        # an infeasible book.
         return ArbReport(
             violations=_empty(),
             masks={},
             min_density=float("nan"),
-            ok=False,
+            ok=None,
             note=f"HiGHS did not return a solution ({solved.message}).",
             n_checked=n_checked,
         )

@@ -4,6 +4,86 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
+## 2026-10-14 Library P2c: Heston cosine price, Euler, calibration
+
+The published Fang and Oosterlee at-the-money one-year call is
+`5.785155450`, nine digits. A 40-digit Lewis integral is `5.785155434376`.
+The library Lewis is `5.785155434375`. COS with the term count chosen from
+the interval is `5.785155412` (`2.2e-8` under the integral). Fixed
+`N = 256` is `5.785155373` (`6.1e-8` under the integral). The old
+`-7.7e-8` against `5.785155450` was mostly that published rounding
+(`1.56e-8`). On the same parameters, `k` from `-1` to `1` and maturities
+from one week to two years, the largest |Lewis minus COS| on the heatmap
+is `2.2e-8`. The Feller
+ratio there is `0.38`. A second violating set (ratio `0.32`) stays within
+`1e-6`. With `v0 = theta` and `xi = 1e-4` the fourth cumulant is round-off,
+`L` is raised until the price settles, and both prices sit within `5e-4`
+of Black.
+
+The stencil step is `f / sqrt(c2)`, not a fraction of `sqrt(c2)`. On the
+Fang and Oosterlee set, `c4` is finite at one day and at one week (one-week
+kurtosis `0.572`). A fourth cumulant above `80 c2^2` is kept, and `L`
+still doubles until successive prices agree, because kurtosis near 1000
+leaves a tail outside `L = 10`. Puts at `F = 100` and `k` in
+`{-1, -0.4, 0, 0.3}`: largest |Lewis minus COS| is `2.5e-7` at `xi = 1.5`,
+`kappa = 0.5`, `rho = -0.9`, `T = 0.25`, and `9.0e-8` at `T = 1`. At
+`xi = 5`, `kappa = 1`, `rho = -0.7` it is `6.2e-6` at `T = 0.25` and
+`5.6e-6` at `T = 1`. The corner `v0 = 6.582e-4`, `kappa = 2.1`,
+`theta = 0.00999`, `xi = 3.56`, `rho = -0.54`, `T = 0.25` has kurtosis
+1049 and a put gap of `1.0e-8`. A one-day slice with `v0 = 1e-4` and
+`xi = 5` (kurtosis 1095) has a gap of `1.1e-5`. A `T = 1` draw with
+kurtosis about 24,000 has a gap of `7.3e-6`. A `T = 3` slice with kurtosis
+about 42,000 hits the 65536-term cap before two widths agree: the cosine
+price warns, `converged` is false, and Lewis is the method to use there.
+
+Euler full truncation, 8,000 paths, 64 steps, 24 independent nodes (six
+strikes, four maturities). The z-rule bound at `n = 24` is max |z| below
+`4.10`, fraction |z| < 2 inside `[0.792, 1]`, |mean z| below `0.71`. The
+fixed seed in the test passes. Across 200 further seeds the pass rate is
+`200/200`. The median max |z| is `2.23`. The mean of the per-grid mean z is
+`-0.013` (sample sd `0.20`). Bias at 64 steps on 240,000 paths is `-0.035`,
+`-0.023`, `-0.013` at strikes 90, 100, 110, against 8,000-path standard
+errors of about `0.17`, `0.13`, `0.10`. On the Fang and Oosterlee
+parameters (Feller ratio `0.38`), 64 steps, the bias at strikes 90, 100
+and 110 averaged over four runs of 1,000,000 paths (seeds 0 to 3) is
+`+0.0159`, `+0.0241` and `+0.0205` (sample sd `0.0067`, `0.0068`,
+`0.0037`). The z-rule test subtracts that budget. The budget is smaller
+than the 8,000-path standard error, and the bound on the mean z is 0.71,
+so the test does not have power to detect it. It is a smoke test.
+
+Synthetic recovery, four starts, vega-weighted prices: parameters return to
+better than `1e-8` and the largest price residual is `9.6e-12`. Wall time
+about `0.4` seconds. The Feller ratio is reported (`0.75` on that set) and
+not enforced. `check_surface` on a Heston `ModelSurface`, five expiries by
+nine strikes, returns no violations.
+
+SPXW mids of 14 October 2026, thinned to `|k| <= 0.4` and at most 11 strikes
+an expiry: 440 quotes, 40 expiries. Four starts, seed 0, vega-weighted
+prices, 27.2 seconds on that run. The fit file does not store the clock.
+`v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`,
+`rho = -0.6508`, Feller ratio `0.141`. Solver `xtol`, cost `6.912e-2`.
+Root-mean-square price residual `5.48` index points, largest `20.68`, on a
+spot of `7805.45`. ATM skew on the full quote set, not the thinned fit set.
+At `T = 0.00114`: market `-2.965`, model `-3.050` (level `0.151` against
+`0.087`). At `T = 0.00388`: market `-1.989`, model `-2.890`. At
+`T = 0.0203`: market `-1.057`, model `-1.498`. At `T = 0.963`: market
+`-0.282`, model `-0.239` (level `0.160` against `0.164`). The short-dated
+model skew is steeper than the market. The long end is a little flat.
+
+**Hypothesis:** that pattern is this loss and this thinning, not the only
+thing Heston can do. The session 00 fit on this same file, ATM level and
+skew with `kappa` capped at 20, misses the front the other way (model skew
+`-1.865` against the market's `-2.965`). A fit aimed at the skew, or a cap
+on `xi`, is the next specification.
+
+Phase 1 follow-ups in the same branch. One-sided SVI quotes take the median
+two-sided weight. A HiGHS failure sets `ok` to None and keeps the message.
+Over seeds `10000` to `10199`, finite-difference standard-error ratios are
+`1.073` (forward delta), `0.976` (sigma) and `1.020` (forward gamma), inside
+`[0.9, 1.1]`, `[0.9, 1.1]` and `[0.8, 1.2]`. Heston `c2` and `c4` are pinned
+to the mpmath values `0.031571152013` and `7.486782e-3`. SSVI and eSSVI are
+listed as out of scope.
+
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 

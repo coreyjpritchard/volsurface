@@ -112,7 +112,8 @@ into a cash price.
 (a fraction, or NaN when the quotes have no two-sided market),
 `wall_time`, `solver_status`, and `slice_report` (a dataframe with one row
 per fitted expiry, or None). The raw SVI fitter fills `min_g`, `lee_ok`,
-`calendar_ok`, and a per-slice `in_spread`.
+`calendar_ok`, a per-slice `in_spread`, and `n_one_sided` (quotes on that
+expiry with no two-sided market).
 
 `ArbTol` is `price` (default `1e-9`, in normalised-call units) and
 `spreads` (a half-spread in the same units, or None).
@@ -204,9 +205,13 @@ Black-Scholes and Heston implement `Model`, `Parametric`, and
 Gatheral form already in `volsurface/heston.py`. Its first cumulant is the
 closed form `-1/2 * integral E[v_t] dt`. The second and fourth are
 derivatives of `log phi` at the origin, read from a fixed polynomial
-stencil (see the method docstring). Heston does not implement
-`SupportsSimulate`: the Euler scheme in `heston.simulate` has a different
-signature and stays where it is until a later phase wraps it.
+stencil (see the method docstring). Heston also implements
+`SupportsSimulate`. The scheme is Euler full truncation on an arbitrary
+time grid. Draw order is in the class docstring: one forward normal and
+one variance normal per step. `price` stays the Lewis integral.
+`cos_price` is the Fang and Oosterlee cosine expansion of section 14.
+The function `heston.simulate` keeps its old signature; the protocol
+method is the one on the class.
 
 `volsurface/plugins.py` holds an in-tree registry, `@register("name")`,
 and resolves `volsurface.models` entry points the same way. A plugin in
@@ -391,8 +396,8 @@ pre-open quote. It would not be an American early-exercise premium.
 
 `ok` is True when every slack is within `tol.price` and at least one quote
 entered the program. `n_checked` is that quote count. When every quote was
-dropped, `ok` is None and `n_checked` is 0. A solver that returns no point
-sets `ok` False.
+dropped, `ok` is None and `n_checked` is 0. A solver that returns no point sets `ok` to None and copies the solver
+message into `note`. That is not a recorded violation and not a pass.
 
 ## 7. Monte Carlo and the z-rule
 
@@ -659,3 +664,66 @@ SANOS stages S1 to S5 beyond the feasibility LP in `check_quotes`, Heston
 calibration and the cosine pricer, Dupire simulation, SABR, rough Bergomi,
 the deep-hedging adapter, and the dashboard JSON. `check_quotes` is the LP
 those stages will call, not a fit to the market.
+
+SSVI and eSSVI are out of scope as well. The fitter in `volsurface/fit/svi.py`
+is raw SVI, one parameter set per expiry. A surface SVI would tie the slices
+together and change the arbitrage counts this phase reports.
+
+## 14. Heston cosine price, Euler scheme, calibration
+
+`Heston.cos_price` expands the put in a Fourier cosine series on the
+log-forward and recovers the call by put-call parity. The put payoff is
+bounded. The call payoff grows like the forward, and its cosine coefficients
+decay slowly, so the same truncation that is accurate for the put is not
+accurate for the call. Parity uses `E[F_T] = F`, which the characteristic
+function satisfies, and does not add a second truncation.
+
+The interval is `[c1 - L sqrt(c2 + sqrt(c4)), c1 + L sqrt(c2 + sqrt(c4))]`
+with `L = 10` when `c4` is usable. `c1` is the integrated expected
+variance. `c2` and `c4` come from a degree-8 fit of `log phi(-i t)`. The
+step is `f / sqrt(c2)` with `f` in `0.001`, `0.002` and `0.005`, halved
+while `phi(-i t)` is not finite. A first pass uses `sqrt(-2 c1)` as the
+scale and a second pass uses the `c2` that pass kept. `c4` is kept only
+when two neighbouring steps agree to `1e-3` relative, and the finest such
+pair is the one kept. Steps of `0.02 / sqrt(c2)` and wider return a
+negative `c4` on a draw with kurtosis near 1000, so they are not used.
+When those three factors do not agree, the fit is repeated at `0.0005`,
+`0.001` and `0.002`. On the Fang and Oosterlee parameters the kept values
+remain `c2 = 0.031571152013` and `c4 = 0.007486782` to the protocol
+tolerances, and `c4` is now finite at one day and at one week.
+
+`L` then doubles and `N` is chosen again until two successive prices agree
+to `1e-7`, or the next width would pass `L = 160` or 65536 terms. The
+price kept is the narrower of the two that agreed. If they never agree,
+the widest width whose last doubling of `N` moved the price by at most
+`2.5e-4` is kept, a `RuntimeWarning` is emitted, and `converged` on the
+result is false. Long-dated, very-high-kurtosis slices can hit the term
+cap; use Lewis there. A fixed multiple of `sqrt(c2)` is not that test.
+Kurtosis near 1000 still leaves a tail outside `L = 10`, so the doubling
+runs when `c4` is usable as well. A large positive `c4` stays inside the
+formula. `N` is at least 256 and grows with `(b - a) / sqrt(c2)`. Puts
+are integrated with the Fang and Oosterlee `chi` and `psi` weights.
+`k = 0` in the sum is halved.
+
+The cosine price is checked against the library Lewis price. On the
+Fang and Oosterlee at-the-money one-year call the two differ by `2.2e-8`.
+Puts at the kurtosis-1049 corner (`v0 = 6.582e-4`, `kappa = 2.1`,
+`theta = 0.00999`, `xi = 3.56`, `rho = -0.54`, `T = 0.25`) differ by
+`1.0e-8`. A one-day slice with `v0 = 1e-4` and `xi = 5` (kurtosis about
+1095) differs by `1.1e-5`. A `T = 1` draw with kurtosis about 24,000
+differs by `7.3e-6`. A seed-0 sample of 12 draws and four maturities, 48
+prices, has largest gap `8.6e-6`. `c4` is non-finite on 8 of those 48.
+The largest kurtosis in that sample is about 6700.
+
+`Heston.simulate` is Euler full truncation (Lord, Koekkoek and van Dijk
+2010). The variance used in the drift and the diffusion is `max(v, 0)`.
+The updated variance is allowed to go negative and is stored that way.
+`Z` is the unit-mean forward. One `SeedSequence` child covers the run.
+Each step draws the forward normal, then the variance normal.
+
+`HestonFitter` minimises a vega-weighted price residual, or the distance
+outside the bid-ask spread when `loss="in_spread"`. The search is in the
+unconstrained coordinates of `param_spec`, with bounds taken from that
+spec. Several starts are tried. The Feller ratio `2 kappa theta / xi^2`
+is reported and not constrained. The returned surface is a `ModelSurface`
+around the fitted model, so `check_surface` can read it.

@@ -102,15 +102,15 @@ class SVISurface(SurfaceMixin):
     def total_variance(self, T, k) -> np.ndarray:
         return self._parts(T, k)[2]
 
-    def dcall_dk(self, T, k, h: float = 1e-4) -> np.ndarray:
+    def dcall_dk(self, T, k) -> np.ndarray:
         _, k, w, w_k, _, _, _ = self._parts(T, k)
         return dcall_dk_from_w(k[None, :], w, w_k)
 
-    def d2call_dk2(self, T, k, h: float = 1e-4) -> np.ndarray:
+    def d2call_dk2(self, T, k) -> np.ndarray:
         _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return d2call_dk2_from_w(k[None, :], w, w_k, w_kk)
 
-    def dcall_dT(self, T, k, h: float = 1e-4) -> np.ndarray:
+    def dcall_dT(self, T, k) -> np.ndarray:
         _, k, w, _, _, w_T, _ = self._parts(T, k)
         return dcall_dw(k[None, :], w) * w_T
 
@@ -118,7 +118,7 @@ class SVISurface(SurfaceMixin):
         _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return log_density(k[None, :], w, w_k, w_kk)
 
-    def local_var(self, T, k, h: float = 1e-4) -> np.ndarray:
+    def local_var(self, T, k) -> np.ndarray:
         """``(dw/dT) / g(k)``. NaN where a single expiry gives no ``dw/dT``."""
         _, k, w, w_k, w_kk, w_T, calendar = self._parts(T, k)
         g = durrleman_g(k[None, :], w, w_k, w_kk)
