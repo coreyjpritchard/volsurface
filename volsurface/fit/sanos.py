@@ -10,9 +10,11 @@ tighter bid and the tighter ask.
 from __future__ import annotations
 
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import OptimizeWarning
 
 from volsurface import bs
 from volsurface.core.types import Curves, Domain, FitResult, MarketData
@@ -220,6 +222,10 @@ class SanosFitter:
 
     ``dx`` is the largest gap, in normalised strike, before an interior
     strike is inserted. It is stored on ``FitResult.detail``.
+
+    The default solver is the HiGHS interior point method with crossover
+    off. On the smooth SPX book the simplex run returns HiGHS status 15
+    (model status unknown, primal feasible) and no solution vector.
     """
 
     def __init__(
@@ -228,7 +234,7 @@ class SanosFitter:
         eta: float = 0.0,
         omega: float = 0.0,
         dx: float = 0.05,
-        method: str = "highs",
+        method: str = "highs-ipm",
         time_interp: str = "linear",
     ):
         if not 0.0 <= eta < 1.0:
@@ -444,15 +450,28 @@ class SanosFitter:
 
         a_ub, b_ub = inequalities.to_csr(n_var)
         a_eq, b_eq = equalities.to_csr(n_var)
-        solved = solve_linear(
-            cost,
-            A_ub=a_ub,
-            b_ub=b_ub,
-            A_eq=a_eq,
-            b_eq=b_eq,
-            bounds=[(0.0, None)] * n_var,
-            method=self.method,
-        )
+        # Quote weights reach 1/spread ~ 1e5. Dividing the cost by that scale
+        # leaves the minimiser unchanged and keeps the objective entries near 1.
+        cost_scale = float(max(np.max(cost), 1.0))
+        # run_crossover is a HiGHS option SciPy does not list. It is applied.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Unrecognized options detected",
+                category=OptimizeWarning,
+            )
+            solved = solve_linear(
+                cost / cost_scale,
+                A_ub=a_ub,
+                b_ub=b_ub,
+                A_eq=a_eq,
+                b_eq=b_eq,
+                bounds=(0.0, None),
+                method=self.method,
+                options={"run_crossover": "off"} if self.method == "highs-ipm" else None,
+            )
+        if solved.fun is not None:
+            solved.fun = float(solved.fun) * cost_scale
         return solved, quote_index
 
 

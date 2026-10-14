@@ -2,7 +2,23 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Linear SANOS (`eta = 0`, `omega = 0`) fits the SPX book inside every two-sided spread. **Next:** SANOS at `eta > 0`, with the market bar.
+**Current state:** SANOS at `eta = 0.25` and `omega = 0` meets the market bar on the SPX snapshot. **Next:** discrete local volatility.
+
+## 2026-10-14 Library P3c: SANOS at eta > 0
+
+Theorem 3.1, fixed weights, atoms at 0.5, 1 and 1.5. The `eta = 0.25` call minus the `eta = 0` call is nonnegative at `T = 0.5`, `0.75` and `1`, to `1e-12`. On a 20,001-point grid the mixture density at each pillar has mass 1 and mean 1, to `1e-8`. The Heston book with cash half-spread 0.15, `eta = 0.25` and PCHIP in time, has no `check_surface` violation at `1e-9` and a positive minimum density.
+
+On SPX, `T = 0.0203`, the finite-difference jump in `dC/dT` at `k = 0` is `0.00206` at step `1e-4`, `2.11e-4` at step `1e-5`, and `2.1e-5` at step `1e-6`. It scales with the step. At `k = 0.15` the jump stays at `-1.41e-4` when the step goes from `1e-4` to `1e-6`.
+
+Market bar, `eta = 0.25`, `omega = 0`, PCHIP, `dx = 0.05`, interior point method. Grid: every pillar, every midpoint, and 71 log-moneyness nodes from `-0.4` to `0.3` (5,609 nodes), tolerance `1e-9`. Violations: 0. `in_spread = 1`, above 0.558. Objective `6.302e-05`. Wall time 149.8 s. Projection L1 `3.29e-13`. Minimum density on that grid `1.10e-38`, which is the wing of the shortest expiry. Every expiry's own in-spread fraction is 1.
+
+Eta sweep, same solver and `omega = 0`. `eta = 0`: objective `1.633e-05`, 0 violations, 116.1 s, minimum density 0 because the call is piecewise linear. `eta = 0.0625`: objective `2.093e-05`, 0 violations, 146.1 s, minimum density `5.46e-142`. `eta = 0.25` is the bar above. The `eta = 0` objective here is the interior point value. The simplex value on the same book is the P3b entry, `1.752e-06`. Both have `in_spread = 1`.
+
+`omega = 1` at `eta = 0.25` is labelled not guaranteed. Objective `5.529e-04`, `in_spread = 1`, wall time 171.2 s. On the same 5,609 nodes the report is not ok: 6 calendar violations, largest magnitude `4.5e-5`, all near `T = 0.10` and `k = 0.16` or `0.17`.
+
+Shoot-out on that grid. Linear: `in_spread = 1`, 1,167 violations, minimum density 0, 0.030 s. Spline: `in_spread = 1`, 3,170 violations, minimum density `-197.0`, root mean square second difference of local variance `11.84`, 0.055 s. Raw SVI: `in_spread = 0.55823`, 2,244 violations, minimum density `-0.00330`, local-variance second-difference `64.52`, 8.56 s. That in-spread fraction is the same 0.558 as the earlier log entry. SANOS `eta = 0.25`: `in_spread = 1`, 0 violations, 149.8 s. The finite-difference local variance of SANOS on this sample has root mean square second difference `1.45e6`. That sample includes the front expiry, where the implied-vol step is unstable. It is not a smoothness of the mixture density.
+
+**Hypothesis:** moving `eta` from 0 to 0.25 raises the objective from `1.633e-05` to `6.302e-05` and does not move the in-spread fraction off 1. The next specification is the discrete local variance of these marginals. The finite-difference Dupire ratio is not yet a stable object on the front of this book.
 
 ## 2026-10-14 Library P3b: SANOS at eta = 0
 
