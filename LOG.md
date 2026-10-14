@@ -7,6 +7,27 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
+## 2026-10-14 Library P1b review: checker, SVI diagnostics, two-sided quotes
+
+`SVISurface` accepts list inputs, which is what `in_spread` passes. The floor
+penalty in the SVI residual is always one row, so the Jacobian length stays
+put. Each fitted slice reports `min_g`, Lee's bound, calendar order, and its
+own `in_spread`. Spreads weight the fit when they exist. On the saved SPY
+chain they do not, and 14 of 24 slices still have `g < 0` on `k` in
+`[-0.5, 0.5]`. The figure says so, and shows the short-dated slice where `g`
+reaches about -0.18.
+
+The quote linear program carries a tail mass and moment instead of a strike
+at 1.5 times the last quote. A normalised call of 0.8 at the money is
+feasible. A call of 1 is not, up to a cap of `1e6` on the tail strike. An
+empty bid-ask file returns `ok is None` and `n_checked == 0`. A flat Black
+surface passes the default butterfly tolerance because its derivatives are
+analytic. The mixin second-difference step is `1e-3`, with a `1e-8` floor
+when the checker is still differencing.
+
+No g-penalty and no SSVI fit. Both would change the 14 of 24 count instead
+of reporting it.
+
 ## 2026-10-14 Library review: curves, seeds, and the z-rule
 
 `ArbReport.ok` is None when the checker evaluated nothing, and `n_checked`

@@ -19,8 +19,11 @@ Between expiries, ``w`` is linear in ``T`` at fixed ``k``. That blend can
 cross, which is a calendar arbitrage the checker will see.
 
 ``VOGT_2014`` is Example 3.1 of Gatheral and Jacquier, the parameters Axel Vogt
-posted. The paper prints ``(a, b, m, rho, sigma)``. Read in that order, the
-SVI-JW parameters match their Example 5.1. ``g`` is negative on that slice.
+posted. The paper prints ``(a, b, m, rho, sigma)``. That is not the field
+order of :class:`RawSVI`, which is ``(a, b, rho, m, sigma)``. Splatting the
+tuple into the constructor swaps ``m`` and ``rho``. Use :meth:`RawSVI.vogt`.
+Read in the paper's order, the SVI-JW parameters match their Example 5.1.
+``g`` is negative on that slice.
 """
 
 from __future__ import annotations
@@ -42,7 +45,8 @@ from volsurface.surface.black import (
 )
 from volsurface.surface.linear import _bracket
 
-# (a, b, m, rho, sigma) from Gatheral and Jacquier (2014), equation (3.8), T = 1.
+# Paper order (a, b, m, rho, sigma), not RawSVI(a, b, rho, m, sigma).
+# Gatheral and Jacquier (2014), equation (3.8), T = 1. Build with RawSVI.vogt().
 VOGT_2014 = (-0.0410, 0.1331, 0.3586, 0.3060, 0.4153)
 
 
@@ -92,32 +96,31 @@ class SVISurface(SurfaceMixin):
         self.domain = domain
 
     def call(self, T, k) -> np.ndarray:
-        w, _, _, _, _ = self._w(T, k)
+        _, k, w, _, _, _, _ = self._parts(T, k)
         return call_from_total_variance(k[None, :], w)
 
     def total_variance(self, T, k) -> np.ndarray:
-        return self._w(T, k)[0]
+        return self._parts(T, k)[2]
 
     def dcall_dk(self, T, k, h: float = 1e-4) -> np.ndarray:
-        w, w_k, _, _, _ = self._w(T, k)
+        _, k, w, w_k, _, _, _ = self._parts(T, k)
         return dcall_dk_from_w(k[None, :], w, w_k)
 
     def d2call_dk2(self, T, k, h: float = 1e-4) -> np.ndarray:
-        w, w_k, w_kk, _, _ = self._w(T, k)
+        _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return d2call_dk2_from_w(k[None, :], w, w_k, w_kk)
 
     def dcall_dT(self, T, k, h: float = 1e-4) -> np.ndarray:
-        w, _, _, w_T, _ = self._w(T, k)
+        _, k, w, _, _, w_T, _ = self._parts(T, k)
         return dcall_dw(k[None, :], w) * w_T
 
     def density(self, T, k) -> np.ndarray:
-        w, w_k, w_kk, _, _ = self._w(T, k)
+        _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return log_density(k[None, :], w, w_k, w_kk)
 
     def local_var(self, T, k, h: float = 1e-4) -> np.ndarray:
         """``(dw/dT) / g(k)``. NaN where a single expiry gives no ``dw/dT``."""
-        T, k = as_axes(T, k)
-        w, w_k, w_kk, w_T, calendar = self._w(T, k)
+        _, k, w, w_k, w_kk, w_T, calendar = self._parts(T, k)
         g = durrleman_g(k[None, :], w, w_k, w_kk)
         with np.errstate(divide="ignore", invalid="ignore"):
             local = w_T / g
@@ -125,15 +128,31 @@ class SVISurface(SurfaceMixin):
 
     def g(self, T, k) -> np.ndarray:
         """Durrleman's ``g`` on the blended total variance."""
-        w, w_k, w_kk, _, _ = self._w(T, k)
+        _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return durrleman_g(k[None, :], w, w_k, w_kk)
 
     def extrapolated(self, T, k) -> np.ndarray:
-        """SVI is defined for every ``k``. Only ``T`` outside the pillars is extrapolated."""
+        """True outside the quoted expiries or outside the quoted strike window.
+
+        The formula is defined for every ``k``. A value past ``domain.k_min``
+        or ``domain.k_max`` is not an interpolation of the quotes that were fit.
+        """
         T, k = as_axes(T, k)
         times = np.array([t for t, _ in self.pillars])
-        outside = (T < times[0]) | (T > times[-1])
-        return np.broadcast_to(outside[:, None], (T.size, k.size)).copy()
+        outside_t = (T < times[0]) | (T > times[-1])
+        outside_k = (k < self.domain.k_min) | (k > self.domain.k_max)
+        return outside_t[:, None] | outside_k[None, :]
+
+    def _parts(self, T, k):
+        """Coerce axes, then the total-variance blend. Lists are allowed.
+
+        ``_w`` coerces internally and does not hand the coerced ``k`` back.
+        Indexing the caller's ``k`` with ``[None, :]`` fails when that object
+        is a Python list, which is how the in-spread check samples one quote.
+        """
+        T, k = as_axes(T, k)
+        w, w_k, w_kk, w_T, calendar = self._w(T, k)
+        return T, k, w, w_k, w_kk, w_T, calendar
 
     def _w(self, T, k):
         T, k = as_axes(T, k)
