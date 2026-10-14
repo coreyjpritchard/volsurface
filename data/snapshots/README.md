@@ -8,11 +8,16 @@ Source: CBOE public delayed quotes,
 
 The JSON field `timestamp` is `2026-10-14 10:01:12` and has no timezone. The
 fetch that produced this file matched that clock in UTC, so `quote_time` is
-that instant as UTC. On the same index object, `last_trade_time` is
-`2026-10-13T16:14:59` (no zone), `current_price` is 7805.4502, `prev_day_close`
-is 7805.4502, `close` is 7805.45, and `price_change` is -1.7898. At 10:01 UTC
-the US cash session is not open, so this is a pre-open delayed book. The
-option rows still carry a bid and an ask. The 13 MB JSON is not committed.
+that instant as UTC. That is 06:01 in New York, inside the CBOE global
+trading hours session and before the regular cash open. On the same index
+object, `last_trade_time` is `2026-10-13T16:14:59` (no zone), `current_price`
+is 7805.4502, `prev_day_close` is 7805.4502, `close` is 7805.45, and
+`price_change` is -1.7898. The index print is the previous close, not a
+cash-session trade. Parity forwards do not use it. The option rows still
+carry a bid and an ask. The 13 MB JSON is not committed. A later snapshot
+should be taken in the regular session. This parquet is the 14 October 2026
+fetch and is not replaced by a refetch.
+
 `scripts/build_cboe_spx_snapshot.py` rebuilds the parquet from a saved copy
 or from the URL.
 
@@ -64,8 +69,11 @@ Measured pillars (not a smoothed curve):
 | 2026-10-16 | 0.006619 | 7826.7561 | 0.998571 |
 | 2027-09-30 | 0.962783 | 8133.2863 | 0.953810 |
 
-The two front discount factors sit above 1. The last one gives
-`-log(df) / T = 0.0491`. The loader does not replace those values.
+The two front discount factors sit above 1. `-log(df) / T` is `-0.313` on
+the front expiry (about 10 hours) and `-0.460` on the next (about 1.4
+days). The last expiry gives `-log(df) / T = 0.0491`. The loader does not
+cap `df` at 1 and does not replace the parity pair with a fitted short
+rate. Doing either would change every implied vol downstream of this file.
 
 Re-running the script against a later download overwrites this path when the
 New York date of the timestamp is still 14 October 2026, and writes a new
