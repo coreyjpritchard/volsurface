@@ -22,8 +22,11 @@ is tried. ``L`` then doubles, and ``N`` is chosen again, until two
 successive prices agree to ``1e-7`` or the next width would pass 160 or
 65536 terms. The price kept is the narrower of the two that agreed. If
 they never agree, the widest width whose last doubling of ``N`` moved the
-price by at most ``2.5e-4`` is kept: past that, the term cap, not the
-tail, is the error. A large positive ``c4`` is kept inside the formula.
+price by at most ``2.5e-4`` is kept, a ``RuntimeWarning`` is emitted, and
+the returned array has ``converged`` false. Past that point the term cap,
+not the tail, is the error. Long-dated, very-high-kurtosis slices can hit
+that cap; use Lewis there. A large positive ``c4`` is kept inside the
+formula.
 ``N`` is at least 256 and doubles until successive prices agree or ``N``
 reaches 65536. Passing ``n_terms`` skips both adaptations and uses the
 given count at the given ``L``.
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import math
 import time
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -78,6 +82,29 @@ _STEP_FACTORS = (0.001, 0.002, 0.005)
 _STEP_FACTORS_FINE = (0.0005, 0.001, 0.002)
 # When c4 is unusable, L doubles until prices agree or this cap is hit.
 _COS_L_MAX = 160.0
+
+
+class CosPrice(np.ndarray):
+    """Cash cosine price.
+
+    ``converged`` is true when two successive widths agreed, when ``n_terms``
+    was passed, or when ``T <= 0``. It is false when the loop stops because
+    the next width would pass ``L = 160`` or 65536 terms.
+    """
+
+    def __new__(cls, values, *, converged: bool):
+        obj = np.array(values, dtype=float, copy=True).view(cls)
+        obj.converged = bool(converged)
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        self.converged = bool(getattr(obj, "converged", True))
+
+
+def _as_cos_price(values, shape, *, converged: bool) -> CosPrice:
+    return CosPrice(np.asarray(values, dtype=float).reshape(shape), converged=converged)
 
 
 def _spec() -> list[ParamSpec]:
@@ -148,6 +175,9 @@ class Heston:
         ``n_terms`` is ``N`` and ``truncation`` is ``L`` in section 14 of
         ``docs/DESIGN.md``. ``n_terms=None`` chooses ``N`` from the interval
         and raises ``L`` until successive prices agree. ``L`` defaults to 10.
+        The result is a :class:`CosPrice`. ``converged`` is false, and a
+        ``RuntimeWarning`` is emitted, when the loop stops at the term cap
+        or the ``L`` cap without two widths agreeing.
         """
         v0 = self._variance(state)
         return _cos_cash(
@@ -451,7 +481,7 @@ def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int | None, truncation: 
     K_flat = np.atleast_1d(K_in).astype(float)
     if T <= 0.0:
         value = _intrinsic(F, K_flat, df, kind)
-        return value.reshape(K_in.shape)
+        return _as_cos_price(value, K_in.shape, converged=True)
     state = {"v": np.array(v0)}
     c1, c2, c4 = model.cumulants(float(T), state=state)
     scale = _variance_scale(c1, c2)
@@ -460,10 +490,11 @@ def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int | None, truncation: 
         chosen, _step = _adapt_n(
             model, F, K_flat, T, df, kind, state, left, right, scale, n_terms=n_terms
         )
-        return chosen.reshape(K_in.shape)
+        return _as_cos_price(chosen, K_in.shape, converged=True)
     # Double L until the price stops moving. Keep the narrower of two widths
     # that agree. If the next width is unresolved, keep the widest one whose
-    # last doubling of N still moved the price by at most _COS_N_STEP.
+    # last doubling of N still moved the price by at most _COS_N_STEP, and
+    # say so: the term cap, not the tail, is the remaining error.
     level = float(truncation)
     previous = None
     kept = None
@@ -473,12 +504,18 @@ def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int | None, truncation: 
             model, F, K_flat, T, df, kind, state, left, right, scale, n_terms=None
         )
         if previous is not None and float(np.max(np.abs(chosen - previous))) <= _COS_AGREE:
-            return np.asarray(previous, dtype=float).reshape(K_in.shape)
+            return _as_cos_price(previous, K_in.shape, converged=True)
         if kept is None or last_step <= _COS_N_STEP:
             kept = chosen
         next_level = level * 2.0
         if next_level > _COS_L_MAX or _width_unresolved(c1, c2, c4, next_level, scale):
-            return np.asarray(kept, dtype=float).reshape(K_in.shape)
+            warnings.warn(
+                "COS hit the term cap or the L cap before two widths agreed. "
+                "Use Lewis for this long-dated, high-kurtosis slice.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            return _as_cos_price(kept, K_in.shape, converged=False)
         previous = chosen
         level = next_level
 

@@ -7,6 +7,7 @@ the interval unless a test passes ``n_terms``.
 """
 
 import datetime as dt
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -237,7 +238,10 @@ def test_cos_matches_lewis_on_random_draws_including_high_kurtosis():
     Puts, F = 100. The fixed sets are the kurtosis-1049 corner, a one-day
     slice with xi = 5, and a T = 1 draw with kurtosis about 24,000. The
     random sample covers one day through one year. Tolerance 1e-4 is the
-    cash gap. On this seed the largest random gap is 8.6e-6.
+    cash gap. On this seed the largest random gap is 8.6e-6. The `T = 1`
+    draw with kurtosis about 24,000, and two prices in the random sample,
+    stop at the term cap and warn. The cash gap on those prices is still
+    inside 1e-4.
     """
     corner = Heston(v0=6.582e-4, kappa=2.1, theta=0.00999, xi=3.56, rho=-0.54)
     one_day = Heston(v0=1e-4, kappa=2.0, theta=0.01, xi=5.0, rho=-0.8)
@@ -286,6 +290,36 @@ def test_cos_matches_lewis_on_random_draws_including_high_kurtosis():
             _check_put_gap(model, maturity, 1e-4)
     assert saw_short
     assert saw_heavy
+
+
+def test_cos_warns_when_a_three_year_slice_hits_the_term_cap():
+    """T = 3 and kurtosis about 42,000 stop before two widths agree.
+
+    The cash price is still returned. ``converged`` is false and one
+    ``RuntimeWarning`` names Lewis. The Fang and Oosterlee one-year call
+    agrees and stays silent.
+    """
+    model = Heston(
+        v0=1.0235984745304476e-4,
+        kappa=0.6281394821263727,
+        theta=1.5574898755897143e-4,
+        xi=1.8644099231696494,
+        rho=0.21377164497644374,
+    )
+    assert _kurtosis(model, 3.0) > 10_000.0
+    strike = 100.0 * np.exp(np.array([-0.5, -0.086, 0.0, 0.3]))
+    with pytest.warns(RuntimeWarning, match="Use Lewis") as caught:
+        cos = model.cos_price(100.0, strike, 3.0, kind="put")
+    assert len(caught) == 1
+    assert cos.converged is False
+    assert np.all(np.isfinite(cos))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        calm = Heston(**FO).cos_price(100.0, np.array([100.0]), 1.0)
+        expired = Heston(**FO).cos_price(100.0, np.array([100.0]), 0.0)
+    assert calm.converged is True
+    assert expired.converged is True
 
 
 def _kurtosis(model: Heston, maturity: float) -> float | None:

@@ -37,7 +37,9 @@ about 798 at `T = 1`.
 agree to `1e-7` or the next width would pass 160 or 65536 terms. The price
 kept is the narrower of the two that agreed. If they never agree, the
 widest width whose last doubling of `N` moved the price by at most
-`2.5e-4` is kept. Kurtosis near 1000 still leaves a tail outside `L = 10`,
+`2.5e-4` is kept, a `RuntimeWarning` is emitted, and `converged` is false.
+Long-dated, very-high-kurtosis slices can hit the term cap; use Lewis there.
+Kurtosis near 1000 still leaves a tail outside `L = 10`,
 so this widening runs when `c4` is usable. A fixed multiple of `sqrt(c2)`
 is not the width.
 

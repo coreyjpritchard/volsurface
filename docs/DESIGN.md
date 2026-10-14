@@ -696,7 +696,9 @@ tolerances, and `c4` is now finite at one day and at one week.
 to `1e-7`, or the next width would pass `L = 160` or 65536 terms. The
 price kept is the narrower of the two that agreed. If they never agree,
 the widest width whose last doubling of `N` moved the price by at most
-`2.5e-4` is kept. A fixed multiple of `sqrt(c2)` is not that test.
+`2.5e-4` is kept, a `RuntimeWarning` is emitted, and `converged` on the
+result is false. Long-dated, very-high-kurtosis slices can hit the term
+cap; use Lewis there. A fixed multiple of `sqrt(c2)` is not that test.
 Kurtosis near 1000 still leaves a tail outside `L = 10`, so the doubling
 runs when `c4` is usable as well. A large positive `c4` stays inside the
 formula. `N` is at least 256 and grows with `(b - a) / sqrt(c2)`. Puts

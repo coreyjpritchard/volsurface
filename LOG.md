@@ -32,7 +32,9 @@ leaves a tail outside `L = 10`. Puts at `F = 100` and `k` in
 `theta = 0.00999`, `xi = 3.56`, `rho = -0.54`, `T = 0.25` has kurtosis
 1049 and a put gap of `1.0e-8`. A one-day slice with `v0 = 1e-4` and
 `xi = 5` (kurtosis 1095) has a gap of `1.1e-5`. A `T = 1` draw with
-kurtosis about 24,000 has a gap of `7.3e-6`.
+kurtosis about 24,000 has a gap of `7.3e-6`. A `T = 3` slice with kurtosis
+about 42,000 hits the 65536-term cap before two widths agree: the cosine
+price warns, `converged` is false, and Lewis is the method to use there.
 
 Euler full truncation, 8,000 paths, 64 steps, 24 independent nodes (six
 strikes, four maturities). The z-rule bound at `n = 24` is max |z| below
