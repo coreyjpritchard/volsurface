@@ -7,6 +7,31 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 Library work below is not a session. Roadmap boxes stay unticked until Corey
 works through the material.
 
+## 2026-10-14 Library P1d review: finite-difference errors, torch extra
+
+A Monte Carlo finite difference now reports a standard error: the scatter of
+the per-batch differences when the seed is shared, and the root-sum-square of
+the price errors when it is not. A closed form still reports none. An omitted
+bump is `1e-4` times the level on a closed form and `0.01` times the level on
+a simulator. An explicit bump stays absolute.
+
+On 40 seeds of 2,000 paths, bump 1 on a forward of 100, common random numbers
+cut the variance by a factor of 412. The rough calculation for those settings
+is about 300. The test requires more than 50. Two computes with the same
+`SeedSequence` match, and the caller's spawn count stays 0.
+
+The figure's right panel is that bump on 4,000 paths. The shared-path delta
+stays near 0.009 from bump 0.05 to 8. The independent delta falls like `1/h`
+and the independent gamma like `1/h²`. The analytic bias stays below both on
+this grid. The middle panel's closed-form valley is unchanged: bump 3.2e-4,
+error 5.8e-12. The left panel pools six seeds; the nine strikes share paths.
+
+Pathwise, likelihood ratio, and autodiff refuse a model with the control
+variate on. Torch is the optional extra `autodiff` and is imported when that
+engine runs. The z-rule helper is what the greek tests call. On seeds 7 and
+8 the short digital's standard error is 4.49 times the long one; the test
+requires more than twice.
+
 ## 2026-10-14 Library P1c review: z-rule, calibration, out-of-the-money wings
 
 The z-rule bounds come from `volsurface/mc/zrule.py` and scale with the node

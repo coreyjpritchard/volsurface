@@ -1,6 +1,7 @@
 """Five greek engines. Tolerances are the ones in ``docs/DESIGN.md`` section 8.
 
-The z-rule uses independent seeds, one per strike. ``n`` is the strike count.
+Statistical checks go through :func:`volsurface.mc.zrule.check_z`, so the
+maximum, the mean, and the fraction inside 2 all move with the node count.
 A pathwise digital or a pathwise gamma is refused rather than returned as zero.
 """
 
@@ -11,22 +12,14 @@ from scipy.stats import norm
 from volsurface import bs
 from volsurface.core.types import Contract, Digital, Forward, Param, Spot, Vanilla
 from volsurface.greeks import Analytic, Autodiff, FiniteDifference, LikelihoodRatio, Pathwise
+from volsurface.mc.zrule import check_z
 from volsurface.models.bs import BlackScholes
 from volsurface.models.gbm import GBM
 
 
-def _z_close(z, n: int) -> None:
-    """max |z| < 4.5 and |mean z| < 0.5.
-
-    ``n`` is the number of independent seeds. The 0.90 to 0.99 band on the
-    fraction inside 2 is for a few hundred nodes, which is the price grid in
-    the Monte Carlo tests. On a few dozen greeks that band fails whenever
-    every node happens to land inside 2.
-    """
-    z = np.asarray(z, dtype=float)
-    assert z.shape == (n,)
-    assert np.max(np.abs(z)) < 4.5, float(np.max(np.abs(z)))
-    assert abs(float(z.mean())) < 0.5, float(z.mean())
+def _assert_z(z) -> None:
+    failure = check_z(np.asarray(z, dtype=float))
+    assert failure is None, failure
 
 
 def test_analytic_matches_finite_differences_including_digitals():
@@ -108,10 +101,13 @@ def test_finite_difference_order_is_two_above_the_roundoff_floor():
 
 
 def test_common_random_numbers_cut_the_finite_difference_variance():
-    """40 independent seeds, 2,000 paths, bump 1 on a forward of 100.
+    """40 seeds, 2,000 paths, bump 1 on a forward of 100, at the money, sigma 0.2.
 
-    The variance without a shared seed, divided by the variance with one, is
-    the factor. It has to exceed 5. The runs are not the same stream.
+    Independent bumps have variance about ``Var(payoff) / (2 h² n)``, near
+    0.04 here. Shared paths have variance near 1.3e-4, because the kink, not
+    the bump, sets the noise. The ratio is about 300. Requiring more than 50
+    still fails when the two bumps do not share normals, and it does not
+    demand the theoretical factor from one sample of 40.
     """
     contract = [Contract(Vanilla(100.0), 1.0)]
     model = GBM(sigma=0.2, n_paths=2_000, n_steps=1, scheme="exact")
@@ -123,11 +119,75 @@ def test_common_random_numbers_cut_the_finite_difference_variance():
     crn = np.array([once(seed, True) for seed in range(40)])
     indep = np.array([once(1_000 + seed, False) for seed in range(40)])
     factor = float(np.var(indep, ddof=1) / np.var(crn, ddof=1))
-    assert factor > 5.0, factor
+    assert factor > 50.0, factor
+
+
+def test_common_random_numbers_do_not_advance_the_caller_seed():
+    """Two computes with one ``SeedSequence`` both draw child 0.
+
+    ``spawn`` copies the sequence, so the caller's ``n_children_spawned`` stays
+    0 and the two values match, including a sigma bump that resimulates.
+    """
+    parent = np.random.SeedSequence(12345)
+    model = GBM(sigma=0.2, n_paths=300, n_steps=1, scheme="exact")
+    contract = [Contract(Vanilla(100.0), 1.0)]
+    forward = FiniteDifference(F=100.0, df=1.0, bump=1.0, crn=True)
+    first = forward.compute(model, contract, [Forward()], seed=parent).value
+    second = forward.compute(model, contract, [Forward()], seed=parent).value
+    np.testing.assert_array_equal(first, second)
+    # A bump of 1 would send sigma = 0.2 negative. 0.05 stays positive and still resimulates.
+    sigma = FiniteDifference(F=100.0, df=1.0, bump=0.05, crn=True)
+    first_s = sigma.compute(model, contract, [Param("sigma")], seed=parent).value
+    second_s = sigma.compute(model, contract, [Param("sigma")], seed=parent).value
+    np.testing.assert_array_equal(first_s, second_s)
+    assert parent.n_children_spawned == 0
+
+
+def test_finite_difference_standard_error_follows_the_simulator():
+    """A Monte Carlo bump reports a standard error. A closed form does not.
+
+    At bump 1 on a forward of 100 the independent-seed error is the larger
+    one: the shared-path difference cancels the payoff noise away from the strike.
+    """
+    contract = [Contract(Vanilla(100.0), 1.0)]
+    model = GBM(sigma=0.2, n_paths=2_000, n_steps=1, scheme="exact")
+    shared = FiniteDifference(F=100.0, df=1.0, bump=1.0, crn=True).compute(
+        model, contract, [Forward()], seed=4,
+    )
+    split = FiniteDifference(F=100.0, df=1.0, bump=1.0, crn=False).compute(
+        model, contract, [Forward()], seed=4,
+    )
+    assert shared.stderr is not None and shared.stderr.shape == (1, 1)
+    assert split.stderr is not None and split.stderr.shape == (1, 1)
+    assert np.isfinite(shared.stderr[0, 0]) and shared.stderr[0, 0] > 0.0
+    assert np.isfinite(split.stderr[0, 0]) and split.stderr[0, 0] > shared.stderr[0, 0]
+    closed = FiniteDifference(F=100.0, df=1.0, bump=1e-4).compute(
+        BlackScholes(sigma=0.2), contract, [Forward()],
+    )
+    assert closed.stderr is None
+
+
+def test_omitted_bump_scales_with_the_level():
+    """No explicit bump: ``1e-4`` times the level on Black, and a finite Monte Carlo delta.
+
+    The forward level is 100, so the closed-form step is 0.01. Sigma is 0.2,
+    so its step is 2e-5. Both stay on the analytic delta and vega.
+    """
+    contract = [Contract(Vanilla(100.0), 1.0)]
+    model = BlackScholes(sigma=0.2)
+    got = FiniteDifference(F=100.0).compute(model, contract, [Forward(), Param("sigma")])
+    truth = Analytic(F=100.0).compute(model, contract, [Forward(), Param("sigma")])
+    np.testing.assert_allclose(got.value, truth.value, rtol=1e-5, atol=1e-6)
+    assert got.stderr is None
+    mc = FiniteDifference(F=100.0).compute(
+        GBM(sigma=0.2, n_paths=400, scheme="exact"), contract, [Forward()], seed=1,
+    )
+    assert np.isfinite(mc.value[0, 0])
+    assert mc.stderr is not None and np.isfinite(mc.stderr[0, 0]) and mc.stderr[0, 0] > 0.0
 
 
 def test_pathwise_matches_black_and_refuses_a_digital_and_a_gamma():
-    """40 strikes, independent seeds, 8,000 paths. n = 40. max |z| < 4.5, |mean z| < 0.5."""
+    """40 strikes, independent seeds, 8,000 paths. The z-rule uses n = 40."""
     F, df, sigma, T = 100.0, 0.98, 0.22, 0.75
     k = np.linspace(-0.25, 0.25, 40)
     model_bs = BlackScholes(sigma=sigma)
@@ -141,8 +201,8 @@ def test_pathwise_matches_black_and_refuses_a_digital_and_a_gamma():
         got = Pathwise(F=F, df=df).compute(mc, contract, [Forward(), Param("sigma")], seed=200 + i)
         z_delta[i] = (got.value[0, 0] - truth[0]) / got.stderr[0, 0]
         z_vega[i] = (got.value[0, 1] - truth[1]) / got.stderr[0, 1]
-    _z_close(z_delta, 40)
-    _z_close(z_vega, 40)
+    _assert_z(z_delta)
+    _assert_z(z_vega)
     engine = Pathwise(F=F, df=df)
     digital = Contract(Digital(F, "call"), T)
     vanilla = Contract(Vanilla(F), T)
@@ -155,10 +215,13 @@ def test_pathwise_matches_black_and_refuses_a_digital_and_a_gamma():
 
 
 def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
-    """Delta, vega and gamma on 20 strikes. A short digital's delta error exceeds the long one.
+    """Delta, vega and gamma on 20 strikes. Short digital error exceeds twice the long one.
 
-    n = 20, 20,000 paths, independent seeds. Volga is estimated too, on one
-    strike: its standard error is reported and the z-score stays inside 4.5.
+    n = 20, 20,000 paths, independent seeds, checked with the z-rule. Volga is
+    one strike and 100,000 paths, so its bound is the n = 1 maximum. The
+    digital score divides by ``sigma² T``. At the money the theoretical ratio
+    of the standard errors is several times two; the test asks for two so one
+    unlucky pair of seeds does not fail it.
     """
     F, df, sigma = 80.0, 1.0, 0.3
     T = 1.0
@@ -183,13 +246,13 @@ def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
         z["vega"][i] = (got_1.value[0, 1] - truth_1[1]) / got_1.stderr[0, 1]
         z["gamma"][i] = (got_g.value[0, 0] - truth_g) / got_g.stderr[0, 0]
     for row in z.values():
-        _z_close(row, 20)
+        _assert_z(row)
 
     # A digital payoff does not shrink with expiry, and the score divides by
     # sigma^2 T, so the short-dated standard error is the larger one.
     short = _digital_delta_se(F, sigma, df, T=0.05, seed=7)
     long = _digital_delta_se(F, sigma, df, T=1.0, seed=8)
-    assert short > long, (short, long)
+    assert short > 2.0 * long, (short, long)
 
     contract = [Contract(Vanilla(F), 1.0)]
     truth_v = analytic.compute(bs_model, contract, [Param("sigma")], order=2).value[0, 0]
@@ -198,7 +261,7 @@ def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
         order=2, n_paths=100_000, seed=9,
     )
     z_volga = (got_v.value[0, 0] - truth_v) / got_v.stderr[0, 0]
-    assert abs(float(z_volga)) < 4.5, float(z_volga)
+    _assert_z([z_volga])
 
 
 def _digital_delta_se(F, sigma, df, T, seed) -> float:
@@ -211,7 +274,7 @@ def _digital_delta_se(F, sigma, df, T, seed) -> float:
 
 
 def test_likelihood_ratio_prices_a_digital_that_pathwise_cannot():
-    """One cash-or-nothing call. n = 1 node, 200,000 paths, |z| < 4.5 against df n(d2)/(F s)."""
+    """One cash-or-nothing call. n = 1, 200,000 paths, z-rule against df n(d2) / (F s)."""
     F, K, T, sigma, df = 100.0, 105.0, 0.5, 0.2, 0.99
     analytic = Analytic(F=F, df=df).compute(
         BlackScholes(sigma=sigma), [Contract(Digital(K, "call"), T)], [Forward()],
@@ -221,11 +284,12 @@ def test_likelihood_ratio_prices_a_digital_that_pathwise_cannot():
         n_paths=200_000, seed=11,
     )
     z = (got.value[0, 0] - analytic.value[0, 0]) / got.stderr[0, 0]
-    assert abs(float(z)) < 4.5, float(z)
+    _assert_z([z])
 
 
 def test_autodiff_matches_pathwise_to_1e_10_in_float64():
     """Same seed, one step and four steps. The values, not just the expectations, agree."""
+    pytest.importorskip("torch")
     F, df, sigma = 50.0, 0.96, 0.18
     contracts = [Contract(Vanilla(K), 0.4) for K in (45.0, 50.0, 55.0)]
     factors = [Forward(), Param("sigma")]
@@ -241,7 +305,7 @@ def test_autodiff_matches_pathwise_to_1e_10_in_float64():
 
 
 def test_put_pathwise_delta_is_the_negative_indicator():
-    """A put, one strike, 30,000 paths. |z| < 4.5 against the Black put delta."""
+    """A put, one strike, 30,000 paths. The z-rule at n = 1 against the Black put delta."""
     F, K, T, sigma, df = 100.0, 100.0, 1.0, 0.2, 1.0
     truth = float(bs.delta(F, K, T, sigma, df, "put"))
     got = Pathwise(F=F, df=df).compute(
@@ -249,4 +313,19 @@ def test_put_pathwise_delta_is_the_negative_indicator():
         n_paths=30_000, seed=13,
     )
     z = (got.value[0, 0] - truth) / got.stderr[0, 0]
-    assert abs(float(z)) < 4.5, float(z)
+    _assert_z([z])
+
+
+def test_simulation_greeks_refuse_a_control_variate():
+    """Pathwise, likelihood ratio, and autodiff do not differentiate a controlled price."""
+    model = GBM(sigma=0.2, n_paths=100, scheme="exact", control_variate=True)
+    contract = Contract(Vanilla(100.0), 1.0)
+    for engine in (Pathwise(100.0), LikelihoodRatio(100.0)):
+        assert not engine.supports(model, contract, 1)
+        with pytest.raises(ValueError, match="control variate"):
+            engine.compute(model, [contract], [Forward()], n_paths=100, seed=1)
+    pytest.importorskip("torch")
+    engine = Autodiff(100.0)
+    assert not engine.supports(model, contract, 1)
+    with pytest.raises(ValueError, match="control variate"):
+        engine.compute(model, [contract], [Forward()], n_paths=100, seed=1)

@@ -489,12 +489,31 @@ delta equals forward delta. Cash-or-nothing call price is `df * N(d2)`.
 The finite-difference engine reprices with a central bump. It supports
 any model whose `price` covers the contract, orders 1 and 2. `crn=True`
 reuses the seed (common random numbers). `crn=False` uses an independent
-seed on the bumped price. The order test: for bump sizes above the
-round-off floor, halving the bump cuts the error in a first derivative by
-about 4, and the slope of log error against log bump is `2` within `0.2`.
-The common-random-number test states the variance-reduction factor it
-requires. The U-curve (error against bump size, truncation falling and
-round-off rising) is a figure, not a pass/fail threshold.
+seed on the bumped price. When `bump` is omitted the step is `1e-4` times
+the level on a closed form and `0.01` times the level on a simulator. The
+level is `F` for `Spot` and `Forward`, and the parameter's current value
+otherwise. An explicit `bump` is an absolute step, which is what the order
+test passes.
+
+A simulator reports a standard error. With common random numbers it is the
+sample standard deviation of the per-batch payoff differences, antithetic
+pairs averaged first and a control variate applied to each bumped payoff
+when the model has one, divided by `sqrt(n_batches)`. A forward bump
+simulates once. A parameter bump resimulates each stencil node on that
+seed. Without common random numbers the standard error is the
+root-sum-square of the bumped prices' standard errors: order 1 divides by
+`2h`, and order 2 divides `sqrt(se_up^2 + 4 se_mid^2 + se_down^2)` by
+`h^2`. A closed form reports `stderr=None`.
+
+The order test: for bump sizes above the round-off floor, halving the bump
+cuts the error in a first derivative by about 4, and the slope of log error
+against log bump is `2` within `0.2`. The common-random-number test states
+the variance-reduction factor it requires and the theoretical factor for
+those settings. The figure shows the closed-form U-curve and, at a fixed
+path count, Monte Carlo root-mean-square error against the bump for delta
+and gamma, with common random numbers on and off. The analytic truncation
+`|h^2 f''' / 6|` is drawn on the delta, and `|h^2 f'''' / 12|` on the
+gamma. Neither curve is a pass/fail threshold.
 
 The pathwise engine differentiates the discounted payoff with the normal
 increments held fixed. For a vanilla call on geometric Brownian motion the
@@ -503,7 +522,9 @@ differentiating `Z` with respect to `sigma`. The estimator is unbiased for
 Lipschitz payoffs. It is zero almost surely for a digital and for gamma,
 because those derivatives hit a kink or a corner. `supports` returns false
 for digitals and for order 2. Returning a number that is silently zero
-would be a wrong greek.
+would be a wrong greek. It also returns false, and `compute` raises, when
+`control_variate` is true: the engine differentiates the paths, not the
+controlled price.
 
 The likelihood-ratio engine writes the derivative onto the lognormal
 density of the terminal forward and multiplies the undifferentiated payoff
@@ -517,9 +538,12 @@ to exceed twice the long-dated one at equal path count. The theoretical
 ratio for an at-the-money digital delta is several times that.
 
 The autodiff engine differentiates the same simulation the pathwise engine
-differentiates, in torch, dtype float64. It therefore matches the pathwise
-estimator to `1e-10` and does not repair gamma or digitals. `supports`
-agrees with the pathwise engine.
+differentiates, in torch, dtype float64. Torch is the optional extra
+`autodiff`. Importing the greeks package does not import torch; the engine
+imports it when `compute` runs. The estimator matches the pathwise value to
+`1e-10` and does not repair gamma or digitals. `supports` agrees with the
+pathwise engine, including the control-variate refusal. The likelihood-ratio
+engine refuses that flag for the same reason.
 
 `compute` accepts a sequence of contracts and a sequence of risk factors.
 `value[i, j]` is contract `i` against factor `j`.

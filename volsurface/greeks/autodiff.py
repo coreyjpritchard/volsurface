@@ -9,7 +9,10 @@ done by the library instead of by hand, the two averages agree to about
 
 A kink is still a kink. The subgradient of ``max`` is zero at the strike and
 does not produce a gamma or a digital. ``supports`` agrees with the pathwise
-engine: exact GBM, vanilla, order 1.
+engine: exact GBM, vanilla, order 1, and no control variate.
+
+Torch is not imported with the package. ``compute`` imports it, and the
+install extra is ``autodiff``.
 """
 
 from __future__ import annotations
@@ -17,10 +20,9 @@ from __future__ import annotations
 import time
 
 import numpy as np
-import torch
 
 from volsurface.core.types import Contract, Forward, GreeksResult, Param, Spot, State, Vanilla
-from volsurface.greeks.pathwise import _reduce, _samples
+from volsurface.greeks.pathwise import _reduce, _refuse_control, _samples
 from volsurface.mc.rng import generator, spawn
 from volsurface.models.gbm import GBM
 
@@ -37,6 +39,7 @@ class Autodiff:
         return (
             isinstance(model, GBM)
             and model.scheme == "exact"
+            and not bool(getattr(model, "control_variate", False))
             and order == 1
             and isinstance(contract, Contract)
             and isinstance(contract.payoff, Vanilla)
@@ -49,11 +52,13 @@ class Autodiff:
         started = time.perf_counter()
         if state:
             raise ValueError("GBM has an empty state")
+        _refuse_control(model, "autodiff")
         contracts = list(contracts)
         factors = list(wrt)
         for contract in contracts:
             if not self.supports(model, contract, order):
                 raise ValueError("autodiff supports an exact GBM vanilla at order 1 only")
+        torch = _torch()
         n_paths = int(model.n_paths if n_paths is None else n_paths)
         seed = model.seed if seed is None else seed
         value = np.empty((len(contracts), len(factors)), dtype=float)
@@ -89,8 +94,20 @@ class Autodiff:
         )
 
 
-def _terminal(sigma: torch.Tensor, n_paths: int, times: np.ndarray, seed, antithetic: bool):
+def _torch():
+    """Import torch at call time. The package import does not pull it in."""
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(
+            "autodiff requires torch; install with pip install 'volsurface[autodiff]'"
+        ) from exc
+    return torch
+
+
+def _terminal(sigma, n_paths: int, times: np.ndarray, seed, antithetic: bool):
     """Exact log update, normals from ``spawn(seed, 1)``, matching :class:`GBM`."""
+    torch = _torch()
     rng = generator(spawn(seed, 1)[0])
     rows = n_paths * (2 if antithetic else 1)
     log_z = torch.zeros(rows, dtype=torch.float64)
@@ -105,6 +122,7 @@ def _terminal(sigma: torch.Tensor, n_paths: int, times: np.ndarray, seed, antith
 
 def _grad_column(z, forward, sigma, strikes, calls, df, factor) -> list[float]:
     """One torch gradient per strike. The graph is kept until the last strike."""
+    torch = _torch()
     out = []
     target = forward if isinstance(factor, (Spot, Forward)) else sigma
     if isinstance(factor, Param) and factor.name != "sigma":

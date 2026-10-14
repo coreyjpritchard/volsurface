@@ -25,7 +25,8 @@ failure of the estimator.
 
 The same weights multiply a digital's indicator. Pathwise differentiation
 cannot see that indicator. Euler paths are not lognormal, so this engine
-refuses them.
+refuses them. A control variate is also refused: the score belongs to the
+paths, and the controlled price is a different estimator.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from volsurface.core.types import (
     State,
     Vanilla,
 )
-from volsurface.greeks.pathwise import _reduce
+from volsurface.greeks.pathwise import _reduce, _refuse_control
 from volsurface.models.gbm import GBM
 
 
@@ -56,10 +57,14 @@ class LikelihoodRatio:
         self.df = float(df)
 
     def supports(self, model, contract, order: int) -> bool:
-        """Orders 1 and 2, exact GBM, vanilla or cash-or-nothing digital."""
+        """Orders 1 and 2, exact GBM, vanilla or cash-or-nothing digital.
+
+        A control variate is refused, as on the pathwise engine.
+        """
         return (
             isinstance(model, GBM)
             and model.scheme == "exact"
+            and not bool(getattr(model, "control_variate", False))
             and order in (1, 2)
             and isinstance(contract, Contract)
             and isinstance(contract.payoff, (Vanilla, Digital))
@@ -72,6 +77,7 @@ class LikelihoodRatio:
         started = time.perf_counter()
         contracts = list(contracts)
         factors = list(wrt)
+        _refuse_control(model, "likelihood ratio")
         for contract in contracts:
             if not self.supports(model, contract, order):
                 raise ValueError("likelihood ratio supports exact GBM vanillas and digitals")

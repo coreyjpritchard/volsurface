@@ -23,7 +23,9 @@ digital and for order 2, and ``compute`` refuses them. Returning a silent
 zero would be a wrong greek.
 
 Euler paths are a different function of the normals. This engine does not
-differentiate them.
+differentiate them. A control variate changes the price after the paths are
+drawn. This engine differentiates the paths, so a model with the control on
+is refused rather than given a greek whose standard error is not the price's.
 """
 
 from __future__ import annotations
@@ -44,10 +46,15 @@ class Pathwise:
         self.df = float(df)
 
     def supports(self, model, contract, order: int) -> bool:
-        """Order 1, exact GBM, vanilla. Not a digital, not a gamma, not Euler."""
+        """Order 1, exact GBM, vanilla. Not a digital, not a gamma, not Euler.
+
+        A control variate is refused. The greek would not be the derivative
+        of the controlled price.
+        """
         return (
             isinstance(model, GBM)
             and model.scheme == "exact"
+            and not _controlled(model)
             and order == 1
             and isinstance(contract, Contract)
             and isinstance(contract.payoff, Vanilla)
@@ -60,6 +67,7 @@ class Pathwise:
         started = time.perf_counter()
         contracts = list(contracts)
         factors = list(wrt)
+        _refuse_control(model, "pathwise")
         for contract in contracts:
             if not self.supports(model, contract, order):
                 raise ValueError(
@@ -89,6 +97,19 @@ class Pathwise:
         return GreeksResult(
             value=value, stderr=stderr, n_evals=evals,
             wall_time=time.perf_counter() - started, method="pathwise",
+        )
+
+
+def _controlled(model) -> bool:
+    """True when the model prices with a control variate this engine does not use."""
+    return bool(getattr(model, "control_variate", False))
+
+
+def _refuse_control(model, engine: str) -> None:
+    if _controlled(model):
+        raise ValueError(
+            f"{engine} refuses a model with the control variate on: "
+            "it differentiates the paths, not the controlled price"
         )
 
 
