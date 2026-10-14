@@ -2,56 +2,95 @@
 
 The chain is continuous-time Markov and independent of the Brownian
 drivers. This phase switches `nu` only. `xi_level` and `both` raise.
-The variance is
 
-`v_t = xi0(t) exp(nu_{r_t} sqrt(2H) Y_t - nu_{r_t}^2 t^{2H} / 2)`.
+A switch acts on increments only. The new `nu` multiplies the Volterra
+increment on the step where it is in force. It does not rescale variance
+already accumulated, so `v` has no jump at a switch. On a grid the step
+`(t_{i-1}, t_i]` uses the regime at `t_{i-1}`. At `H = 1/2` that step is
 
-`Y` has variance `t^{2H} / (2H)`, so the conditional expectation of `v_t`
-given the chain is `xi0(t)`. At `H = 0.5` the driver `Y` is Brownian and
-is drawn here. Any other `H` asks `create("rbergomi")` for `driver_y`.
-A missing plugin raises. The hybrid scheme is not in this repository, and
-a stand-in driver is not labelled rBergomi.
+`v_i = v_{i-1} exp(nu_{i-1} dW_i - nu_{i-1}^2 dt_i / 2)`,
+
+with `v_0 = xi0`. Constant `nu` reduces to the usual compensator
+`nu^2 t^{2H} / 2`, and that diagonal matches the closed form.
+
+`H = 1/2` is drawn here. Any other `H` calls `volterra_increments` on
+`create("rbergomi")`. The method must return Wiener increments `dW` of
+shape `(n_paths, n_steps)`, drawn from the volatility child with no
+further spawn, the same increments `hybrid_scheme_rng` draws. This
+module then applies the kernel weight
+`int_{step} (u - s)^{H - 1/2} ds / dt` with that step's `nu` inside the
+sum. Returning only the summed factor `Y` is not enough. The hybrid
+scheme is not in this repository. A missing method raises, and a
+stand-in is not labelled rBergomi. `H = 1/2` does not call the plugin.
 
 The spot step freezes `v` on the left of the interval and multiplies `Z`
-by `exp(sqrt(v) dW - v dt / 2)`, with `dW = rho dY + sqrt(1 - rho^2) dW_perp`.
-Each step has conditional mean 1 given the past. Whether that survives a
-switch in `nu` is the z-rule on the terminal mean, not a theorem in this
-note.
+by `exp(sqrt(v) dW_spot - v dt / 2)`, with
+`dW_spot = rho dW + sqrt(1 - rho^2) dW_perp`. Each step has conditional
+mean 1 given the past. Whether that survives a switch in `nu` is the
+z-rule on the terminal mean, not a theorem in this note.
 
-`P(t) = expm(Q t)` is the transition with rows summing to 1.
-`P(t)[i, j]` is the probability of `j` given `i`. A row law updates on
-the right, `p0 @ P(t)`. The chi-square test compares the simulated
-occupation at one time with that law.
+`P(t) = expm(Q t)` is the transition with rows summing to 1. A row law
+updates on the right, `p0 @ P(t)`. The chi-square test compares the
+simulated occupation at one time with that law.
 
-The forward curve stored on the path, at `H = 0.5`, is
+Every price uses the trader's information. `state["xi"]` is the mixture
+of the regime-conditional forward curves, weighted by `regime_prob`. It
+is not conditioned on the true label `r_t`. At `H = 1/2` each
+conditional expectation equals `v_t` when `xi0` is flat, so the mixture
+is that common curve. The variance-swap pricer integrates it. `surface_at`
+prices each regime's Black call and mixes the prices with the same
+weights. At `H` other than `1/2` the tenor slope is the constant-`nu`
+rough ratio for each regime, anchored at `v_t`, then mixed. Behind the
+clock the entry is NaN. On the clock it is `v_t`.
 
-`xi_t(u) = xi0(u) sum_r P(r_u = r | r_t) exp(nu_r Y_t - nu_r^2 t / 2)`.
+The filter observation is the log realised variance of the simulated
+spot, `log((d log Z)^2 / dt)`. Time 0 has no return, and the probability
+there is `p0`. The emission is Gaussian with mean
+`log(xi0) - gamma - log(2)` in every regime and variance
+`pi^2 / 2 + nu_j^2` in regime `j`. A later return does not enter an
+earlier probability. Prices from this information do not determine the
+latent regime: quantile bins of the call and of the variance swap each
+contain both regimes, and the modal prediction in a bin is not exact.
 
-That equals `E[v_u | Y_t, r_t]`. At any other `H` the curve is the rough
-Bergomi forward variance at the vol of vol of the current regime,
+The constant-`nu` forward curve, used as the rough ratio inside that
+mixture, remains
 
 `xi_t(u) = xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`,
 
 `I_t(u) = int_0^t (u - s)^{H - 1/2} dW_s`.
 
-The weight on a step is the integral of the kernel over that step, divided
-by the step length. On the clock the entry is `v_t`. At `H = 1/2` the
-kernel is 1, so `I_t(u) = W_t` and the exponent does not depend on `u`.
-The plugin owns the Wiener path. A nonzero `Y` without increments raises.
-The variance-swap pricer integrates the stored curve
-with a left Riemann sum. The same sum of the left-point variance is the
-discrete realised variance, so the two agree in expectation.
-
-The filter observation is Gaussian with a mean that depends on the
-regime. The Hamilton probability at `t` uses the observation up to `t`.
-Reliability bins that probability and checks the hit count against the
-0.1 and 99.9 percent binomial quantiles.
+At `H = 1/2` the kernel is 1, so `I_t(u) = W_t` and the exponent does
+not depend on `u`. On a 5-path, 8-step draw the curve matches `roughvol`
+to `1e-10`.
 
 Seeds are `SeedSequence(entropy=E, spawn_key=(split,))` with split 0, 1,
 2 for train, validation, and test. Each run spawns four children: regime,
-vol, spot, surrogate. The surrogate child is spawned and not drawn.
+vol, spot, surrogate. The surrogate child is spawned and not drawn. The
+regime child draws the chain and does not draw the filter observation.
 
 `ClosedFormPricer` uses the model's formula before expiry and holds the
 payoff after expiry. `SurrogatePricer` raises when its validation error,
 in basis points, is above the bar it was constructed with. The pilot that
 will call these pricers is a CPU run.
+
+Chain, 4,000 paths, seed entropy 1, test split, time 1. Generator rates
+1.5 and 0.8, initial law `(0.7, 0.3)`. Counts 1,474 and 2,526. The law
+`p0 @ expm(Q t)` expects 1,532.5 and 2,467.5. Chi-square statistic
+`3.625`, p-value `0.0569`. The bar in the test is a p-value above `0.001`.
+
+Terminal time 1, eight runs, 2,000 paths each, `nu` in `{0.4, 1.1}`,
+`rho = -0.4`, `xi0 = 0.04`, `H = 0.5`. The z-score of `E[Z] - 1` has
+maximum absolute value `1.256` and mean `-0.152`. The z-score of
+`E[v] - xi0` has maximum absolute value `2.414` and mean `-0.498`. Both
+sets pass the z-rule.
+
+The variance swap at inception against realised left-point variance,
+eight runs, 1,500 paths. The z-score of the gap has maximum absolute
+value `1.602` and mean `-0.194`. It passes the z-rule.
+
+Six hundred paths, 21 times, clock index 10, seed entropy 12, test split.
+Eight quantile bins of the at-the-money call, and the same bins of the
+variance swap, each contain both regimes. Predicting the modal regime in
+a bin is right on `0.660` of the paths, for both prices. Every filter
+probability at that clock lies in `(0.05, 0.95)`. The figure is
+`docs/figures/p3f_paths.png`.

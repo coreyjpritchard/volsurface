@@ -130,9 +130,7 @@ def _filter_row() -> dict:
 
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
-    model = RegimeSwitchingBergomi(
-        _spec(), xi0=0.04, rho=-0.4, H=0.5, obs_means=np.array([0.0, 1.0]), obs_sigma=0.35
-    )
+    model = _model()
     times = np.linspace(0.0, 1.0, 53)
     paths = model.simulate_market(4, times, seed=run_seed(9, 0))
     rows = []

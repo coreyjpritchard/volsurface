@@ -993,21 +993,60 @@ bar it was given.
 `RegimeSpec.switch` is `"nu"`, `"xi_level"`, or `"both"`. The market
 implemented in this phase switches `nu` only. The other two values raise.
 The chain is a continuous-time Markov chain, independent of the Brownian
-drivers. The variance is
+drivers.
+
+A switch of `nu` acts on increments only. After a switch, the new `nu`
+multiplies new Volterra increments. It does not rescale the integral
+already accumulated, so `v` has no jump at a switch. With `nu_s` the vol
+of vol in force at time `s`,
 
 ```
-v_t = xi0(t) exp(nu_{r_t} sqrt(2H) Y_t - nu_{r_t}^2 t^{2H} / 2).
+I_t(u) = int_0^t nu_s (u - s)^{H - 1/2} dW_s,
+v_t = xi0(t) exp(sqrt(2H) I_t(t) - H int_0^t nu_s^2 (t - s)^{2H - 1} ds).
 ```
 
-`Y` is independent of the chain and has variance `t^{2H} / (2H)`, so
-`E[v_t | chain] = xi0(t)`. Whether `Z` stays a martingale when `nu`
-switches is a hypothesis. The test is the z-rule. It is not a theorem in
-this file. The simulator used here takes `H = 0.5`, so `Y` is Brownian.
-The rough driver, when the plugin of section 20 is installed, is that
-plugin's `Y`. It is not reimplemented here.
+On a discrete grid the increment over `(t_{i-1}, t_i]` uses the `nu` of
+the regime at `t_{i-1}`. The regime recorded at `t_i` applies to later
+increments. At `H = 1/2` the kernel is 1, and the step is
+`v_i = v_{i-1} exp(nu_{i-1} dW_i - nu_{i-1}^2 dt_i / 2)`, with
+`v_0 = xi0`. Constant `nu` reduces to the compensator `nu^2 t^{2H} / 2`.
+There is no separate plan file in this repository. This paragraph is the
+specification of that increment rule.
 
-The Hamilton filter turns a simulated regime-switching series into
-`regime_prob`. Reliability is checked against binomial bands.
+`H = 1/2` is drawn in this module, as Brownian increments. Any other `H`
+calls `volterra_increments` on the rBergomi plugin of section 20. The
+method returns the Wiener increments `dW` of shape `(n_paths, n_steps)`
+on the grid, drawn as the plugin's volatility child with no further
+spawn, the same increments `hybrid_scheme_rng` would draw. This module
+multiplies each increment by the `nu` in force on that step and by the
+kernel weight `int_{step} (u - s)^{H - 1/2} ds / dt`. A method that
+returns only the summed factor `Y` cannot do that, because `nu` has to
+sit inside the integral. The hybrid scheme stays in the plugin. If the
+method is missing, this module raises. It does not build a substitute
+rough driver, and it does not silently replace the requested `H` with
+`1/2`.
+
+Every price, including the variance swap and `surface_at`, is computed
+under the trader's information. The forward variance is the mixture of
+the regime-conditional curves, weighted by the filtered probabilities
+`regime_prob`. It is not conditioned on the true label `r_t`. At
+`H = 1/2` each regime-conditional expectation of future variance equals
+`v_t xi0(u) / xi0(t)`, so the mixture equals that common curve.
+`state["xi"]` stores the mixture. `VarianceSwapPricer` integrates it.
+`surface_at` prices each regime's Black call on that regime's curve and
+mixes the prices with `regime_prob`. Whether `Z` stays a martingale when
+`nu` switches is a hypothesis. The test is the z-rule. It is not a
+theorem in this file.
+
+The Hamilton filter reads log realised variance of the simulated spot,
+`log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic side
+signal. There is no observation at `t = 0`, and the filter probability
+there is `p0`. The emission is Gaussian. The mean is
+`log(xi0) - gamma - log(2)` in every regime, the mean of
+`log(xi0 * chi^2_1)`. The variance in regime `j` is `pi^2 / 2 + nu_j^2`.
+A price computed from this information does not determine `r_t`.
+Reliability of the filter on a hand-built Gaussian series is checked
+against binomial bands.
 
 Seeds use `numpy.random.SeedSequence(entropy=E, spawn_key=(split,))`.
 `split` is 0 for train, 1 for validation, and 2 for test. Children of a
@@ -1016,10 +1055,10 @@ the spot-orthogonal driver, 3 surrogate noise. That order is part of the
 model docstring. Two splits have disjoint spawn keys, so they do not share
 a stream.
 
-`volsurface/dynamic/dysanos.py` is a small replication of the DYSANOS v3
-baseline, not a new model. Paper statements in that module, its note, and
-its log entry are marked UNVERIFIED: the design was written from the plan's
-citations, not from a full reading of arXiv:2608.12587. The decoder maps a
+`volsurface/dynamic/dysanos.py` is a toy, not a replication of the DYSANOS
+v3 baseline. Paper statements in that module, its note, and its log entry
+are marked UNVERIFIED: the design was written from the plan's citations,
+not from a full reading of arXiv:2608.12587. The decoder maps a
 latent to nonnegative discrete local volatilities and increasing variances,
 then to a SANOS surface. The default grid is seven expiries (2, 5, 10, 20,
 40, 126, and 252 business days) and 20 to 50 strikes. The 18 by 200 grid is

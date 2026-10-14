@@ -1,6 +1,7 @@
 """Market paths, pricers, and the nu-only regime chain. DESIGN sections 21 and 22."""
 
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -11,7 +12,14 @@ from volsurface.core.protocols import capabilities
 from volsurface.core.types import Contract, Digital, MarketPaths, RegimeSpec, Vanilla
 from volsurface.markets.filter import hamilton_filter
 from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, VarianceSwapPricer
-from volsurface.markets.regime import RegimeSwitchingBergomi, bergomi_forward_variance
+from volsurface.markets.regime import (
+    RegimeSwitchingBergomi,
+    _kernel_weights,
+    bergomi_forward_variance,
+    filter_log_realised_variance,
+    increment_variance,
+    trader_forward_variance,
+)
 from volsurface.markets.seeds import DRAW_ORDER, run_seed, stream_seeds
 from volsurface.mc.rng import generator
 from volsurface.mc.zrule import check_z
@@ -56,10 +64,10 @@ def test_plugin_driver_is_called_and_not_labelled_rbergomi(monkeypatch):
     seen = {}
 
     class _StandIn:
-        def driver_y(self, n_paths, times, seed, H):
+        def volterra_increments(self, n_paths, times, *, seed, H):
             seen["H"] = H
             seen["n"] = n_paths
-            return np.zeros((n_paths, len(times)))
+            return np.zeros((n_paths, len(times) - 1))
 
     monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
     model = _model(H=0.1)
@@ -304,28 +312,30 @@ def test_half_hurst_forward_variance_depends_on_the_clock_only():
 
 
 def test_zero_driver_stores_the_rough_compensator(monkeypatch):
-    """Y = 0, so the Wiener increment is 0. Future tenors are not copies of v_t."""
+    """dW = 0. Variance is the compensator of the nu path, and the curve mixes the filter."""
 
     class _StandIn:
-        def driver_y(self, n_paths, times, seed, H):
-            return np.zeros((n_paths, len(times)))
+        def volterra_increments(self, n_paths, times, *, seed, H):
+            return np.zeros((n_paths, len(times) - 1))
 
     monkeypatch.setattr("volsurface.markets.regime.create", lambda name, **kwargs: _StandIn())
     H = 0.1
     model = _model(H=H)
     times = np.linspace(0.0, 0.2, 4)
     paths = model.simulate_market(6, times, seed=3)
-    row = 0
-    clock = 1
-    tenor = times.size - 1
-    nu = float(_spec().params[int(paths.regime[row, clock])]["nu"])
-    t = float(times[clock])
-    u = float(times[tenor])
-    expected = model.xi0 * math.exp(-0.5 * nu**2 * (u ** (2 * H) - (u - t) ** (2 * H)))
-    assert paths.state["xi"][row, clock, tenor] == pytest.approx(expected, rel=1e-12)
-    assert paths.state["xi"][row, clock, clock] == pytest.approx(paths.state["v"][row, clock])
-    assert paths.state["xi"][row, clock, tenor] != pytest.approx(paths.state["v"][row, clock])
-    assert np.isnan(paths.state["xi"][row, clock, 0])
+    nus = np.array([0.4, 1.1])
+    nu_step = nus[paths.regime[:, :-1]]
+    weights = _kernel_weights(H, times, times)
+    zeros = np.zeros((6, times.size - 1))
+    expected_v = increment_variance(H, nu_step, model.xi0, times, zeros, weights)
+    assert paths.state["v"] == pytest.approx(expected_v, rel=1e-12)
+    expected_xi = trader_forward_variance(
+        H, nus, paths.state["v"], paths.regime_prob, model.xi0, times, zeros
+    )
+    np.testing.assert_allclose(paths.state["xi"], expected_xi, rtol=1e-12, equal_nan=True)
+    diagonal = np.arange(times.size)
+    assert paths.state["xi"][:, diagonal, diagonal] == pytest.approx(paths.state["v"], rel=1e-12)
+    assert np.isnan(paths.state["xi"][:, 1, 0]).all()
 
 
 def test_forward_variance_matches_roughvol_on_a_known_increment():
@@ -342,3 +352,154 @@ def test_forward_variance_matches_roughvol_on_a_known_increment():
     variance = np.diagonal(ours, axis1=1, axis2=2)
     theirs = _forward_curve(H, nu, xi0, times, increments, variance, times)
     assert np.allclose(ours, theirs, equal_nan=True, rtol=1e-10, atol=1e-12)
+
+
+def test_a_switch_does_not_rescale_variance_already_accumulated():
+    """Two paths share dW. Variance agrees until the step whose nu differs."""
+    times = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    dW = np.array([[0.1, -0.2, 0.05, 0.03], [0.1, -0.2, 0.05, 0.03]])
+    nu = np.array([[0.4, 0.4, 0.4, 1.1], [0.4, 0.4, 1.1, 1.1]])
+    weights = _kernel_weights(0.5, times, times)
+    variance = increment_variance(0.5, nu, 0.04, times, dW, weights)
+    assert variance[0, :3] == pytest.approx(variance[1, :3])
+    assert variance[0, 3] != pytest.approx(variance[1, 3])
+    dt = 0.25
+    step = variance[1, 2] * math.exp(1.1 * dW[1, 2] - 0.5 * 1.1**2 * dt)
+    assert variance[1, 3] == pytest.approx(step)
+
+
+def test_constant_nu_matches_the_bergomi_diagonal():
+    """One nu on every step is the closed form, including the compensator."""
+    hurst = 0.25
+    nu = 0.8
+    times = np.linspace(0.0, 1.0, 5)
+    dW = np.array([[0.1, -0.2, 0.05, 0.02]])
+    weights = _kernel_weights(hurst, times, times)
+    nu_step = np.full((1, 4), nu)
+    variance = increment_variance(hurst, nu_step, 0.05, times, dW, weights)
+    curve = bergomi_forward_variance(hurst, nu, 0.05, times, dW)
+    assert variance[0] == pytest.approx(np.diag(curve[0]), rel=1e-12)
+
+
+def test_simulated_variance_uses_the_nu_in_force_on_the_step():
+    """The update uses the regime at the left of the step, not the new label."""
+    model = _model()
+    times = np.linspace(0.0, 1.0, 11)
+    paths = model.simulate_market(200, times, seed=run_seed(3, 0))
+    nus = np.array([0.4, 1.1])
+    nu_step = nus[paths.regime[:, :-1]]
+    weights = _kernel_weights(0.5, times, times)
+    expected = increment_variance(0.5, nu_step, model.xi0, times, paths.state["dW"], weights)
+    assert paths.state["v"] == pytest.approx(expected, rel=1e-10)
+    assert np.any(paths.regime[:, 1:] != paths.regime[:, :-1])
+    nu_right = nus[paths.regime[:, 1:]]
+    wrong = increment_variance(0.5, nu_right, model.xi0, times, paths.state["dW"], weights)
+    assert not np.allclose(paths.state["v"], wrong)
+
+
+def test_trader_curve_follows_the_filter_not_the_label():
+    """At H other than 1/2 the tenor slope is a mixture of the filter weights."""
+    hurst = 0.25
+    nus = np.array([0.4, 1.1])
+    times = np.linspace(0.0, 1.0, 5)
+    dW = np.array([[0.2, -0.1, 0.05, 0.0]])
+    variance = np.array([[0.04, 0.05, 0.03, 0.06, 0.04]])
+    low = np.zeros((1, 5, 2))
+    low[:, :, 0] = 1.0
+    high = np.zeros((1, 5, 2))
+    high[:, :, 1] = 1.0
+    curve_low = trader_forward_variance(hurst, nus, variance, low, 0.04, times, dW)
+    curve_high = trader_forward_variance(hurst, nus, variance, high, 0.04, times, dW)
+    assert curve_low[0, 2, 2] == pytest.approx(variance[0, 2])
+    assert curve_high[0, 2, 2] == pytest.approx(variance[0, 2])
+    assert curve_low[0, 2, 4] != pytest.approx(curve_high[0, 2, 4])
+    mid = 0.5 * (low + high)
+    curve_mid = trader_forward_variance(hurst, nus, variance, mid, 0.04, times, dW)
+    assert curve_mid[0, 2, 4] == pytest.approx(0.5 * (curve_low[0, 2, 4] + curve_high[0, 2, 4]))
+
+
+def test_prices_do_not_depend_on_the_true_regime():
+    """Flipping the latent labels leaves the variance swap and the surface unchanged."""
+    model = _model()
+    times = np.linspace(0.0, 1.0, 11)
+    paths = model.simulate_market(32, times, seed=run_seed(8, 0))
+    flipped = replace(paths, regime=(1 - paths.regime).astype(np.int8))
+    assert np.array_equal(model.surface_at(paths, 4).call, model.surface_at(flipped, 4).call)
+    pricer = VarianceSwapPricer()
+    contract = Contract(Vanilla(model.forward), T=1.0)
+    left = pricer.price_along(paths, [contract])
+    right = pricer.price_along(flipped, [contract])
+    assert np.allclose(left, right)
+
+
+def test_filter_reads_log_realised_variance_from_the_spot():
+    """The observation is a function of Z. Time 0 is the prior, with no return yet."""
+    model = _model()
+    times = np.linspace(0.0, 0.5, 6)
+    paths = model.simulate_market(20, times, seed=run_seed(6, 1))
+    dt = np.diff(times)
+    log_ret = np.log(paths.Z[:, 1:]) - np.log(paths.Z[:, :-1])
+    expected = np.log(np.maximum(log_ret**2 / dt, 1e-300))
+    assert paths.state["y"][:, 1:] == pytest.approx(expected)
+    assert np.isnan(paths.state["y"][:, 0]).all()
+    assert np.allclose(paths.regime_prob[:, 0, :], _spec().p0)
+
+
+def test_rv_filter_does_not_use_a_later_return():
+    """Changing the last log-RV moves only the last probability."""
+    y = np.array([[np.nan, 0.0, 1.0, -2.0]])
+    step = np.array([[0.9, 0.1], [0.2, 0.8]])
+    means = np.array([0.0, 0.0])
+    variances = np.array([1.0, 4.0])
+    prior = np.array([0.5, 0.5])
+    first = filter_log_realised_variance(y, [step, step, step], means, variances, prior)
+    changed = y.copy()
+    changed[0, -1] = 10.0
+    second = filter_log_realised_variance(changed, [step, step, step], means, variances, prior)
+    assert np.allclose(first[0, :-1], second[0, :-1])
+    assert not np.allclose(first[0, -1], second[0, -1])
+
+
+def _bayes_accuracy(price: np.ndarray, regime: np.ndarray) -> tuple[float, bool]:
+    """Modal regime inside eight quantile bins, and whether any bin holds both."""
+    edges = np.quantile(price, np.linspace(0.0, 1.0, 9))
+    edges[0] -= 1e-12
+    edges[-1] += 1e-12
+    correct = 0
+    total = 0
+    both = False
+    labels = regime.astype(int)
+    for band in range(8):
+        if band < 7:
+            mask = (price >= edges[band]) & (price < edges[band + 1])
+        else:
+            mask = (price >= edges[band]) & (price <= edges[band + 1])
+        chosen = labels[mask]
+        if chosen.size == 0:
+            continue
+        if np.unique(chosen).size > 1:
+            both = True
+        mode = int(np.bincount(chosen, minlength=2).argmax())
+        correct += int(np.sum(chosen == mode))
+        total += int(chosen.size)
+    return correct / total, both
+
+
+def test_regime_cannot_be_read_exactly_from_prices():
+    """Quantile bins of the call and of the variance swap each contain both regimes.
+
+    Six hundred paths, clock index 10. Predicting the modal regime in a bin
+    is strictly below accuracy 1, so the price is not the latent label.
+    """
+    model = _model()
+    times = np.linspace(0.0, 1.0, 21)
+    paths = model.simulate_market(600, times, seed=run_seed(12, 2))
+    batch = model.surface_at(paths, 10)
+    atm = int(np.argmin(np.abs(batch.k)))
+    call_accuracy, call_both = _bayes_accuracy(batch.call[:, 0, atm], paths.regime[:, 10])
+    contract = Contract(Vanilla(model.forward), T=1.0)
+    swap = VarianceSwapPricer().price_along(paths, [contract])[:, 10, 0]
+    swap_accuracy, swap_both = _bayes_accuracy(swap, paths.regime[:, 10])
+    assert call_both and swap_both
+    assert call_accuracy < 1.0
+    assert swap_accuracy < 1.0
