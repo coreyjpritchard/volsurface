@@ -13,9 +13,9 @@ between the intrinsic value ``(1 - K/F(T))+`` and 1. Log-moneyness
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -91,9 +91,7 @@ class Quote:
         if self.exercise not in ("european", "american"):
             raise ValueError(f"exercise must be 'european' or 'american', got {self.exercise!r}")
         if self.settlement not in ("cash", "physical"):
-            raise ValueError(
-                f"settlement must be 'cash' or 'physical', got {self.settlement!r}"
-            )
+            raise ValueError(f"settlement must be 'cash' or 'physical', got {self.settlement!r}")
 
 
 @dataclass(frozen=True)
@@ -157,6 +155,10 @@ class FitResult:
     ``slice_report`` is one row per fitted expiry when the fitter fills it,
     and None otherwise. The raw SVI fitter's columns are ``T``, ``min_g``,
     ``lee_ok``, ``calendar_ok``, and ``in_spread``.
+
+    ``detail`` holds fitter-specific measured quantities (the SANOS objective,
+    ``dx``, ``eta``, ``omega``, and the projection correction). It is empty
+    for the Phase 1 fitters.
     """
 
     surface: Any
@@ -165,6 +167,7 @@ class FitResult:
     wall_time: float
     solver_status: str
     slice_report: pd.DataFrame | None = None
+    detail: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -276,3 +279,55 @@ class GreeksResult:
     n_evals: int
     wall_time: float
     method: str
+
+
+@dataclass(frozen=True)
+class MarketPaths(Paths):
+    """Paths plus the curves and the regime labels a hedger reads.
+
+    ``F0(T)`` is today's forward curve and ``df(T)`` is today's discount
+    curve. Along a path, the spot at grid time ``t`` is ``F0(t) * Z``, and
+    the forward from ``t`` to a later expiry ``T`` is ``Z * F0(T)``.
+
+    ``regime`` has shape ``(m, n + 1)`` and dtype int8. It is the true label.
+    It is an oracle. It is not a default feature. ``regime_prob`` has shape
+    ``(m, n + 1, R)`` and holds the causal Hamilton-filter probabilities.
+    ``meta`` records the model name, the parameters, the seed entropy, the
+    spawn key, and the draw order.
+    """
+
+    F0: Callable
+    df: Callable
+    regime: np.ndarray | None = None
+    regime_prob: np.ndarray | None = None
+    meta: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RegimeSpec:
+    """A continuous-time Markov chain over model parameters.
+
+    ``generator`` has shape ``(R, R)``. Off-diagonal entries are rates and
+    each row sums to 0. ``params`` has one dict per regime. ``p0`` is the
+    law at ``t = 0``, shape ``(R,)``. ``switch`` names which coordinates
+    differ across ``params``. This phase implements ``"nu"`` only.
+    ``"xi_level"`` and ``"both"`` are named so a later arm can use them.
+    """
+
+    generator: np.ndarray
+    params: list[dict]
+    p0: np.ndarray
+    switch: Literal["nu", "xi_level", "both"]
+
+
+@dataclass(frozen=True)
+class SurfaceBatch:
+    """Normalised calls on one date, for every path in a batch.
+
+    ``T`` has shape ``(n_exp,)``, ``k`` has shape ``(n_k,)``, and ``call``
+    has shape ``(m, n_exp, n_k)``.
+    """
+
+    T: np.ndarray
+    k: np.ndarray
+    call: np.ndarray

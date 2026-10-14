@@ -5,11 +5,9 @@ Code changes cite the section they implement. A change to an interface in this
 file is a `design/<topic>` pull request of its own, reviewed before the code
 that depends on it.
 
-This document covers Phase 1: the types, the pricing protocols, surfaces,
-the static-arbitrage checker, geometric Brownian motion by Monte Carlo, and
-greeks. Later phases (SANOS, Heston cosine pricing, local volatility, SABR,
-the deep-hedging adapter) are named where the interface has to leave them
-room, and are not specified far enough to code from.
+This document covers Phase 1 in sections 1 to 13, the Heston, local-volatility
+and SABR additions in sections 14 to 16, and Phase 3 in sections 17 to 22.
+The deep-hedging adapter is not part of this repository.
 
 The normalised-call coordinate below follows the plan's reading of the SANOS
 arXiv HTML (2601.11209). Equation numbers from the PDF are not in this file.
@@ -793,3 +791,265 @@ Through `T = 0.056`, `nu` sits on its upper bound of 4.
 `check_surface` on Hagan prices at `T = 10`, `nu = 1.5`, `beta = 1` reports
 a butterfly. The implied vol on that window stays positive. The negative
 number is the density.
+
+## 17. Sparse linear program
+
+`check_quotes` in section 6.2 builds every row as a dense vector and stacks
+those rows. On the committed SPX book that allocation is what the 15.6 GB
+kill measured. The constraint coefficients are unchanged. The storage is
+what changes.
+
+`volsurface/fit/_lp.py` is the shared core. It accepts the constraint matrix
+as a SciPy sparse matrix, or builds one from row, column, and value
+triplets, and calls `scipy.optimize.linprog` with `method="highs"`. HiGHS
+accepts a sparse matrix. A `dense=True` flag materialises the same
+coefficients for the equivalence test. Production code does not set it.
+
+`check_quotes` calls that core. The name `linprog` stays in
+`volsurface.arbitrage.check`, so a test can still replace the solver. A
+solver that returns no point still sets `ok` to None and copies the message.
+
+The equivalence test compares sparse and dense on the same coefficients.
+The first 24 expiries are 4,398 quotes, objective 0, `ok` true, and an
+empty violation set. The two shortest expiries are 278 quotes, with the
+same outcome. Seeded bid, ask, and calendar violations stay on the node and
+at the magnitude the existing tests name.
+
+The scale test runs all 40 expiries, requires a HiGHS status, and requires
+peak resident memory below 2 GB. The figure plots peak memory and wall time
+against the number of expiries, dense against sparse. Dense stops at the
+expiry count whose matrix would pass the memory budget of that run. The
+logged numbers are the ones the script measured.
+
+## 18. SANOS
+
+SANOS (arXiv:2601.11209) builds the normalised call as a mixture of Black
+calls. At a model expiry `T_j`, with weights `q_j` on model strikes `K^i`
+and an ATM total variance `V_j`,
+
+```
+C_j(K) = sum_i q_j^i Call(K^i, K, eta * V_j).
+```
+
+`Call(s, k, v)` is the Black call with forward `s`, strike `k`, total
+variance `v`, and unit discount, equation (1) of the paper. `eta` lies in
+`[0, 1)`. `eta = 0` is the linear call of section 5.1, because
+`Call(s, k, 0) = (s - k)+`. The production statement is equation (11), and
+the `eta` factor is the one in section 4.2. Theorem 3.1 says that at fixed
+weights the smooth call is at least the linear call. A refitted smooth
+surface is a different object: linear interpolation through the quotes is
+the most expensive interpolation, so the refitted smooth surface sits below
+it between quotes.
+
+The fit is one linear program, "(MDL)" in section 4.2. The unknowns are
+`q_j >= 0` with `1' q_j = 1` and `K' q_j = 1`. The calendar rows are
+`U_j q_j >= R_j q_{j-1}` at the model strikes. `omega = 0` makes `U` and
+`R` the undiscounted payoffs `(K^i - K^l)+`, which is the choice the paper
+says guarantees no calendar arbitrage. `omega = 1` uses Black calls with
+variance `eta * V` in those rows. That variant is reported and labelled
+not guaranteed. It is not the default.
+
+The objective is Remark 4.1 item 3. With mid `c`, bid `B`, and ask `A`,
+
+```
+sum w (eps |C - c| + max(C - A, 0) + max(B - C, 0)),
+```
+
+`eps = 1e-8`, and `w = 1 / (A - B)`. Only out-of-the-money quotes enter. A
+call and a put at the same normalised strike become one row, and the row
+keeps the tighter bid and the tighter ask.
+
+`V_j` is the at-the-money bid total variance. A cumulative maximum makes
+the sequence increasing, and each expiry that was raised is logged.
+Boundary strikes follow Remark 2.7, footnote 9: `K_min` is one tenth of
+the smallest wing strike the footnote constructs, and `K_max` is 1.5 times
+the largest. An interior strike is inserted wherever a gap exceeds `dx`.
+`dx` is an argument of the fitter and is logged.
+
+After HiGHS returns, each `q_j` is clipped at 0 and tilted so that the mass
+is 1 and the mean is 1. The L1 size of that correction is stored on
+`FitResult.detail`. The objective and the quote prices are what a
+determinism test compares. The weights `q` are not.
+
+Between expiries the call is the blend in equation (4). The weight `alpha`
+comes from a PCHIP of at-the-money total variance, Remark 2.13, through
+`scipy.interpolate.PchipInterpolator`. At `eta = 0` the same blend with a
+linear `alpha` is the linear-in-time surface. `SanosSurface` implements
+`call`, `dcall_dk`, `d2call_dk2`, `density`, and `dcall_dT` from the
+mixture. `dcall_dT` uses `alpha'(T)`. Values outside the boundary strikes
+or outside the first and last model expiry are marked extrapolated.
+
+The market bar on the committed SPX snapshot, with `omega = 0`, is zero
+static-arbitrage violations on a dense grid, and an in-spread fraction
+strictly above 0.558. That 0.558 is the raw SVI in-spread already in
+`LOG.md` for this file. The paper's 91.4 percent is a different book and
+is context only.
+
+## 19. Discrete local volatility
+
+On one strike grid `K^1 < ... < K^N`, a nonnegative vector `Sigma` builds a
+transition matrix `Q` by Theorem 3.5 of the ar5iv HTML (the plan's PDF v4
+numbers this as Theorem 3.4, equations (19) and (20)). The inverse is
+tridiagonal. Remark 3.6 of that HTML (the plan's Remark 3.5) writes it as
+
+```
+Q^{-1} = E + Omega Sigma^2 dT,
+```
+
+where the product with `Sigma^2` is column by column. For interior column
+`i` the three entries are, with `dT = T_j - T_{j-1}`,
+
+```
+w^{i-} = Sigma_i^2 dT (K^i)^2 / ((K^{i+1} - K^{i-1}) (K^i - K^{i-1})),
+w^{i+} = Sigma_i^2 dT (K^i)^2 / ((K^{i+1} - K^{i-1}) (K^{i+1} - K^i)).
+```
+
+Row `i - 1` of that column is `-w^{i-}`, the diagonal is `1 + w^{i-} + w^{i+}`,
+and row `i + 1` is `-w^{i+}`. The first and last columns are unit columns
+(`Sigma` there is 0). `Q` is column-stochastic and a martingale:
+`1' Q = 1'` and `K' Q = K'`. The same functions exist in NumPy and in
+torch float64.
+
+The implied discrete local volatility is equation (16) of that HTML (the
+plan's Theorem 3.7). With `0 / 0` read as 0,
+
+```
+Theta = (C_j - C_{j-1}) / dT,
+Gamma = (dC^i - dC^{i-1}) / (0.5 (K^{i+1} - K^{i-1})),
+Sigma = sqrt(2 Theta / (K^2 Gamma)).
+```
+
+`dC` is the slope in equation (2), with `dC` equal to `-1` on the left of
+the first strike and `0` on the right of the last. The round trip is
+calls to `Sigma` to `Q` to calls.
+
+The HTML points at Buehler and Ryskin (2015) for strikes that differ by
+expiry. The operator implemented here composes two maps. The source
+density is sent to the target grid by the mean-preserving split onto the
+two bracketing strikes, and the homogeneous operator then runs on the
+target grid. Columns stay probabilities and the mean is the source strike.
+
+## 20. Rough volatility plug-in
+
+Rough Bergomi lives in the public `rough-volatility` package `roughvol`.
+That package does not import volsurface. It returns its own frozen paths
+object with `times`, `Z`, and `state`, and it registers
+
+```
+[project.entry-points."volsurface.models"]
+rbergomi = "roughvol.rbergomi:RoughBergomi"
+```
+
+`create("rbergomi")` resolves that entry point. The conformance test
+imports `roughvol` and skips when the import fails. A mock registered in a
+unit test is not that plugin, and a figure does not label the mock as
+rBergomi.
+
+`volsurface/fit/rbergomi.py` calibrates `(H, nu, rho)` through
+`create("rbergomi")`, with common random numbers. The three settings are
+`H` free, `H` fixed at 0.167, and `H` fixed at 0.149. The forward variance
+`xi0` is read from a SANOS surface by the log contract,
+`VS(T) = -2 E[log Z_T]`, integrated against the surface density. Calendar
+order makes `VS` increasing in `T`. Rough Heston is not implemented.
+
+The vol-of-vol parameter is named `nu`. `eta` remains the SANOS smoothing
+weight. The plugin's `param_spec` enforces `rho <= 0`. Conditional Monte
+Carlo is the estimator the plugin uses for a call. This repository does
+not reimplement the hybrid scheme.
+
+## 21. Market paths and pricers
+
+`MarketPaths`, `RegimeSpec`, and `SurfaceBatch` are section 3 types.
+`Pricer` and `SupportsMarketSimulate` are section 4 protocols.
+`capabilities` adds `"market_simulate"` when the second protocol matches.
+
+`price_along` returns cash prices of shape `(m, n + 1, c)`. At grid time
+`t` before expiry `T`, the forward into the model is `Z_t * F0(T)` and the
+discount from `t` to `T` is `df(T) / df(t)`. The model's own `price` is
+called with the time left `T - t`. At and after expiry the entry is the
+payoff at `T`, held constant. It is not grown at the interest rate.
+
+`ClosedFormPricer` does that for a model whose `price` is a formula
+(Black-Scholes, Heston, local volatility). `VarianceSwapPricer` reads
+`state["xi"]` on a tenor grid and integrates it from `t` to `T`. The
+result is a total variance, which is the unit the realised-variance check
+uses. `SurrogatePricer` prices from a table or a network. It stores its
+validation error in basis points and raises when that error is above the
+bar it was given.
+
+`regime` on `MarketPaths` is never copied into a default feature set.
+`regime_prob` is the causal feature.
+
+## 22. Regimes, seeds, and minimal DYSANOS
+
+`RegimeSpec.switch` is `"nu"`, `"xi_level"`, or `"both"`. The market
+implemented in this phase switches `nu` only. The other two values raise.
+The chain is a continuous-time Markov chain, independent of the Brownian
+drivers. The variance is
+
+```
+v_t = xi0(t) exp(nu_{r_t} sqrt(2H) Y_t - nu_{r_t}^2 t^{2H} / 2).
+```
+
+`Y` is independent of the chain and has variance `t^{2H} / (2H)`, so
+`E[v_t | chain] = xi0(t)`. Whether `Z` stays a martingale when `nu`
+switches is a hypothesis. The test is the z-rule. It is not a theorem in
+this file. The simulator used here takes `H = 0.5`, so `Y` is Brownian.
+The rough driver, when the plugin of section 20 is installed, is that
+plugin's `Y`. It is not reimplemented here.
+
+The Hamilton filter turns a simulated regime-switching series into
+`regime_prob`. Reliability is checked against binomial bands.
+
+Seeds use `numpy.random.SeedSequence(entropy=E, spawn_key=(split,))`.
+`split` is 0 for train, 1 for validation, and 2 for test. Children of a
+run are spawned in this order: 0 the regime chain, 1 the vol drivers, 2
+the spot-orthogonal driver, 3 surrogate noise. That order is part of the
+model docstring. Two splits have disjoint spawn keys, so they do not share
+a stream.
+
+`volsurface/dynamic/dysanos.py` is a small replication of the DYSANOS v3
+baseline, not a new model. Paper statements in that module, its note, and
+its log entry are marked UNVERIFIED: the design was written from the plan's
+citations, not from a full reading of arXiv:2608.12587. The decoder maps a
+latent to nonnegative discrete local volatilities and increasing variances,
+then to a SANOS surface. The default grid is seven expiries (2, 5, 10, 20,
+40, 126, and 252 business days) and 20 to 50 strikes. The 18 by 200 grid is
+a flag and is not the default. Compression is affine, `u = b + B h`, with
+`d = 20` by default. The transition is the AR(1)
+
+```
+h_{t+D} = m + A_D (h_t - m) + G_D' z,    A_D = exp(-kappa D),
+kappa = L L' + S + kappa_min I,    kappa_min = 2e-4.
+```
+
+`S` is antisymmetric, so the eigenvalues of `A_D` have modulus below 1 by
+construction. The fit is two-stage: per-date surfaces, then PCA, then
+Gaussian maximum likelihood. That is a stated deviation from the paper's
+joint training. The spot is drawn from the front-expiry marginal, which
+adds no physical drift. A scalar OU multiplier on the innovations is
+optional. The only history available is synthetic, generated by Heston or
+by the regime market above. There is no daily SPX file in this repository.
+
+The regime experiment itself, including the hedger, lives in
+`deep-hedging`. `experiments/regime/PREREG.md` records hypotheses H1, H2,
+and H3 as drafts. The file says it is to be frozen before the pilot ends.
+The pilot is a CPU run. No GPU is assumed.
+
+Phase 3 pull requests, each based on the previous branch:
+
+| logical name | branch slug | depends on | owns |
+|---|---|---|---|
+| P3-0 | `design/phase3` | `main` | sections 17 to 22, the stubs in `core/types.py` and `core/protocols.py` |
+| P3a | `p3a-sparse-lp` | P3-0 | `fit/_lp.py`, the sparse `check_quotes` |
+| P3b | `p3b-sanos-s1s2` | P3a | `surface/sanos.py`, `fit/sanos.py` at `eta = 0` |
+| P3c | `p3c-sanos-s3s4` | P3b | the same two files at `eta > 0`, the shoot-out |
+| P3d | `p3d-sanos-dlv` | P3c | `surface/sanos_dlv.py` |
+| P3e | `p3e-rough-plugin` | P3d | `fit/rbergomi.py`, the conformance test |
+| P3f | `p3f-market-paths` | P3e | `markets/` |
+| P3g | `p3g-dysanos-min` | P3f | `dynamic/dysanos.py`, the draft preregistration |
+
+Branch names in git for the cloud run that opens this stack carry a
+`cursor/` prefix and an `-faa7` suffix, because that run's branch policy
+requires them. The logical name in the table is the name to rebase and to
+cite. Rough Heston is not in the table.
