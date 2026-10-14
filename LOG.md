@@ -2,7 +2,7 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. The dynamic surface is a toy, and `experiments/regime/PREREG.md` is a completed draft. **Next:** the preregistration is still to freeze before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads log realised variance from the paths. Any other `H` calls `volterra_components` and keeps the near field. The SANOS leave-strikes-out bar is held-out in-spread at least raw SVI, with zero violations, ratified 14 Oct 2026. **Next:** the preregistration is still to freeze before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 
@@ -29,6 +29,24 @@ One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies,
 Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
 
 **Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Review: increments, the trader's filter, held-out strikes
+
+A switch of `nu` multiplies the new Volterra increment only. On the `H = 0.5` grid the step is `v_i = v_{i-1} exp(nu_{i-1} dW_i - nu_{i-1}^2 dt_i / 2)`. Two paths with the same `dW` keep the same variance until the step whose `nu` differs. Constant `nu` matches the closed-form diagonal.
+
+`state["xi"]` is the mixture of regime-conditional forward curves under `regime_prob`. At `H = 1/2` that mixture is `v_t`. The variance swap integrates it. `surface_at` mixes Black prices with the same weights. Flipping the latent labels leaves both prices unchanged. There is no plan file in this repository; DESIGN section 22 is the specification.
+
+The filter observation is `log((d log Z)^2 / dt)`. Time 0 is the prior. The emission mean is `log(xi0) - gamma - log(2)` in every regime, and the variance in regime `j` is `pi^2 / 2 + nu_j^2`. Six hundred paths, clock index 10: eight quantile bins of the at-the-money call and of the variance swap each contain both regimes. The modal prediction is right on 0.660 of the paths. Every filter probability at that clock lies in `(0.05, 0.95)`.
+
+Chain, 4,000 paths, time 1. Counts 1,474 and 2,526 against 1,532.5 and 2,467.5. Chi-square `3.625`, p-value `0.0569`. Eight runs of 2,000 paths: maximum absolute z-score of `E[Z] - 1` is `1.256` (mean `-0.152`); of `E[v] - xi0` is `2.414` (mean `-0.498`). Variance swap against left-point realised variance, eight runs of 1,500 paths: maximum absolute z-score `1.602`, mean `-0.194`. All three pass the z-rule.
+
+`H` other than `1/2` asks the rBergomi plugin for `volterra_increments(n_paths, times, *, seed, H) -> dW`, shape `(n_paths, n_steps)`, drawn from the volatility child with no further spawn. This module applies the kernel weights and puts `nu` inside the sum. `driver_y` returning only `Y` is not enough. Until that method exists, `H = 1/2` is the fallback and does not call the plugin. A missing method raises. The hybrid scheme is not implemented here.
+
+Held-out strikes on the SPX snapshot, seed 0, about 20 percent per expiry (mean fraction 0.2002, 1,796 of 8,973 quotes). SANOS `eta = 0.25`, `omega = 0`, fit on the other 7,177, places 0.990535 of the held-out model calls inside the held-out bid and ask. Raw SVI on the same split places 0.541203. Violations on the dense grid: 0. Both fits and the check took 86.7 s.
+
+`experiments/regime/PREREG.md` H3 now prices I2 under the filter mixture. H4 records that the filter reads log realised variance and that prices do not identify the regime. The file is still a draft.
+
+**Hypothesis:** the modal regime read from a price bin stays near 0.660 on this 600-path draw, well below 1. The next specification is the same bins when `dW` comes from `volterra_increments` at an `H` below one half. The quantity to report is that accuracy, next to 0.660.
 
 ## 2026-10-14 Review: quote memory, xi0, the rough curve, the toy
 

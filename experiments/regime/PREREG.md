@@ -54,6 +54,11 @@ bar is a lower 95 percent bound on that difference above 0.
 
 ## H3. Hedgeability
 
+I2 is the variance swap priced under the trader's information set. The
+price is the mixture of the regime-conditional variance swaps, weighted
+by the filtered regime probabilities. It is not the variance swap
+conditioned on the true regime. `surface_at` uses the same mixture.
+
 For L1, adding I2 reduces `Gap(L -> H)`. The variance swap hedges the
 level of variance. For L2, the reduction from I2 is smaller than the
 reduction from I3, if the surrogate validation error is under its bar.
@@ -85,8 +90,13 @@ Those values are settings. They are not measurements.
 
 ## Not the gate
 
-H4, the fraction of variance the filter explains, is exploratory. H5, a
-link between the filter and the toy dynamic surface, is exploratory.
-Neither is a hypothesis this draft freezes. Statements about DYSANOS that
-were the motivation for H5 remain UNVERIFIED, and the dynamic surface in
-this repository is a toy rather than a v3 baseline.
+H4 is exploratory. The Hamilton filter is run on log realised variance of
+the simulated paths, `log((d log Z)^2 / dt)`. It is not run on a synthetic
+observation drawn from the latent regime. The fraction of variance that
+filter explains is the exploratory summary. Prices, including the I2
+variance swap and `surface_at`, do not determine the latent regime: a
+price bin contains more than one regime. H5, a link between the filter
+and the toy dynamic surface, is exploratory. Neither is a hypothesis this
+draft freezes. Statements about DYSANOS that were the motivation for H5
+remain UNVERIFIED, and the dynamic surface in this repository is a toy
+rather than a v3 baseline.
