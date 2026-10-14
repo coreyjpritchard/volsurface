@@ -2,7 +2,15 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. Any other `H` calls `volterra_components` and keeps the near field. **Next:** minimal DYSANOS on a synthetic history, with the draft pre-registration.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The draft still leaves the hedge rebalancing step, the training path count, the bootstrap resample count and interval type, and the P&L units of `lambda = 1` open. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+
+## 2026-10-14 Review: open pins on the draft pre-registration
+
+H2 premiums are time-0 Monte Carlo means at 65,536 copies. Each premium is one number, held fixed in the bootstrap, with its standard error reported beside it. The H3 surface stays at 1,024 copies.
+
+Four B9 pins stay open beside the duration multiples, the ratio grid, and H5: the hedge rebalancing step, the training path count, the bootstrap resample count and interval type, and the units of P&L in which `lambda = 1` is set.
+
+**Hypothesis:** the same draft, once those four pins have values, keeps the H2 premium at 65,536 copies. The quantity to report is that copy count, next to 65536.
 
 ## 2026-10-14 Review: the forward curve, and the differenced window
 
@@ -40,6 +48,14 @@ The call-bin accuracy on this draw stays 0.6600. That number is not the spot fil
 
 **Hypothesis:** at the pilot vol-of-vol pair 1.5 and 3 the spot filter's lift stays inside [-0.10, 0.10] and the log-variance filter's lift stays above 0.15. The quantities to report are those two lifts, next to -0.0600 and 0.2683.
 
+## 2026-10-14 Review: the gate's chain, correlation, level, and cost
+
+The draft pins the generator `[[-1.5, 1.5], [0.8, -0.8]]`. Mean holding times are 2/3 of a year and 1.25 years. The initial law is `(0.7, 0.3)`, which is not the stationary law, about `(0.348, 0.652)`. `rho = -0.4`. `xi0` is flat at `0.04`. The spot hedge costs `1e-4` of notional per unit traded. The variance swap and the calls are at the model mid, with no extra spread. Duration multiples of 5 and of 0.5 replace that matrix and stay outside the family of three. The file is still a draft and is not frozen.
+
+Regenerating `docs/figures/p3g_pca.png` reproduced the previous file byte for byte. The minimal DYSANOS share is `0.9989`. The regime share is `1.0000`.
+
+**Hypothesis:** the same figure, priced from `surface_at` instead of the integrated forward variance, keeps a regime share above `0.99` at `H = 1/2`. The quantity to report is that share, next to `1.0000`.
+
 ## 2026-10-14 Review: the forward curve inside the surface
 
 At `H` other than `1/2`, `surface_at` multiplies the regime-conditional forward curve `xi_t(u)` by a fresh hybrid factor and mixes the calls with `regime_prob`. The past Volterra integral is in that curve. A Black path with the same shocks, at the left forward variance, is the control. `n_mc` defaults to 1024. `stderr` is the residual standard deviation over `sqrt(n_mc)`.
@@ -56,6 +72,12 @@ Corey ratified the held-out SANOS bar on 14 Oct 2026: SANOS held-out in-spread a
 
 **Hypothesis:** the z-score of this log contract against the variance swap at `H = 0.1` stays inside 4 when the step count rises from 16 to 64. The quantity to report is the maximum absolute z-score, next to the 1.50 measured here.
 
+## 2026-10-14 Review: minimal DYSANOS
+
+The dynamic surface is named minimal DYSANOS. The full v3 baseline is future work: a fitted decoder, a spot copula, the paper's kappa units and expiry grid, and joint training of the decoder and the transition. Paper statements stay UNVERIFIED. `experiments/regime/PREREG.md` remains a draft and is not frozen.
+
+Regenerating `docs/figures/p3g_pca.png` on the current `H = 1/2` forward curve leaves the minimal DYSANOS share at `0.9989`. The regime path, priced by the Black call on integrated forward variance, has share `1.0000`, because that vol is `sqrt(v_t)` at every expiry.
+
 ## 2026-10-14 Review: the Monte Carlo smile
 
 `surface_at` simulates the call under each regime's constant `nu`, from `v_t`, and mixes the payoffs with `regime_prob`. The seed is the path entropy and `spawn_key + (i_t, 4, regime)`. `n_mc` defaults to 256. At `H = 1/2` the variance step is `v <- v exp(nu dW - nu^2 dt / 2)`, and the plugin is not called. At any other `H` the hybrid kernel restarts on a uniform grid from the clock, anchored at `v_t`.
@@ -65,6 +87,68 @@ One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies,
 Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
 
 **Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Review: the near field, the filter band, the draft pins
+
+`H` other than `1/2` calls `volterra_components` on rough-volatility `37eb89ba`. The return is `(dW, I_1, ..., I_kappa)`, shape `(n_paths, n_steps, kappa + 1)`, `kappa = 1` on the plugin default. Each step's vector is multiplied by the `nu` in force on that step. `I_k` lands at lag `k`. The tail uses `power_kernel_weights`, whose first `kappa` entries are 0. The compensator stays the exact one, `nu^2 t^{2H} / 2` when `nu` is constant. `dW` alone is not used. The Cholesky stays in the plugin.
+
+`H = 0.1`, regimes `nu` in `{0.4, 1.1}`, eight runs, 2,000 paths, terminal time 1, 11 times, seed entropies 70 to 77, test split. The z-score of `E[Z] - 1` has maximum absolute value `2.493` and mean `-0.137`. The z-score of `E[v] - xi0` has maximum absolute value `2.305` and mean `-0.388`. Both pass the z-rule. At 8 runs the bound on the maximum absolute z-score is `3.836` and the bound on the mean is `1.237`.
+
+The one-step log-RV emission has one mean in both regimes, `log(xi0) - gamma - log(2)`. `pi^2 / 2` is about `4.93`, and `nu^2` is `0.16` and `1.21`, so the filter cannot see the regime. A 5-step window and a product of the return with the change in log realised variance, on 2,000 paths, stayed within about `0.02` of the base rate. The observation is unchanged. Six hundred paths, clock index 10, seed entropy 12, test split: base rate `0.5383`, price-bin modal accuracy `0.6600` (lift `0.1217`, band `0.05` to `0.35`), filter hit rate `0.4783` (lift `-0.0600`, band `-0.10` to `0.10`).
+
+Corey has ratified the held-out bar in DESIGN section 18: SANOS held-out in-spread at least raw SVI, with zero static-arbitrage violations.
+
+`experiments/regime/PREREG.md` now pins `H = 0.1`, `nu_L = 1.5`, primary ratio `2` so `nu_H = 3`, entropic `lambda = 1`, 5 network seeds and 20,000 test paths, and a Bonferroni lower bound at level `1 - 0.05/3` on the three gate contrasts. H2 is the difference of premium-normalised gaps, premium being the time-0 model price. The file says it is a draft and is not frozen.
+
+**Hypothesis:** the log-RV filter's lift over the base rate stays inside `[-0.10, 0.10]` when the paths use the preregistered `nu` of `1.5` and `3` at `H = 0.1`. The quantity to report is that lift, next to the `-0.0600` measured here at `nu` of `0.4` and `1.1`.
+
+## 2026-10-14 Review: increments, the trader's filter, held-out strikes
+
+A switch of `nu` multiplies the new Volterra increment only. On the `H = 0.5` grid the step is `v_i = v_{i-1} exp(nu_{i-1} dW_i - nu_{i-1}^2 dt_i / 2)`. Two paths with the same `dW` keep the same variance until the step whose `nu` differs. Constant `nu` matches the closed-form diagonal.
+
+`state["xi"]` is the mixture of regime-conditional forward curves under `regime_prob`. At `H = 1/2` that mixture is `v_t`. The variance swap integrates it. `surface_at` mixes Black prices with the same weights. Flipping the latent labels leaves both prices unchanged. There is no plan file in this repository; DESIGN section 22 is the specification.
+
+The filter observation is `log((d log Z)^2 / dt)`. Time 0 is the prior. The emission mean is `log(xi0) - gamma - log(2)` in every regime, and the variance in regime `j` is `pi^2 / 2 + nu_j^2`. Six hundred paths, clock index 10: eight quantile bins of the at-the-money call and of the variance swap each contain both regimes. The modal prediction is right on 0.660 of the paths. Every filter probability at that clock lies in `(0.05, 0.95)`.
+
+Chain, 4,000 paths, time 1. Counts 1,474 and 2,526 against 1,532.5 and 2,467.5. Chi-square `3.625`, p-value `0.0569`. Eight runs of 2,000 paths: maximum absolute z-score of `E[Z] - 1` is `1.256` (mean `-0.152`); of `E[v] - xi0` is `2.414` (mean `-0.498`). Variance swap against left-point realised variance, eight runs of 1,500 paths: maximum absolute z-score `1.602`, mean `-0.194`. All three pass the z-rule.
+
+`H` other than `1/2` asks the rBergomi plugin for `volterra_increments(n_paths, times, *, seed, H) -> dW`, shape `(n_paths, n_steps)`, drawn from the volatility child with no further spawn. This module applies the kernel weights and puts `nu` inside the sum. `driver_y` returning only `Y` is not enough. Until that method exists, `H = 1/2` is the fallback and does not call the plugin. A missing method raises. The hybrid scheme is not implemented here.
+
+Held-out strikes on the SPX snapshot, seed 0, about 20 percent per expiry (mean fraction 0.2002, 1,796 of 8,973 quotes). SANOS `eta = 0.25`, `omega = 0`, fit on the other 7,177, places 0.990535 of the held-out model calls inside the held-out bid and ask. Raw SVI on the same split places 0.541203. Violations on the dense grid: 0. Both fits and the check took 86.7 s.
+
+`experiments/regime/PREREG.md` H3 now prices I2 under the filter mixture. H4 records that the filter reads log realised variance and that prices do not identify the regime. The file is still a draft.
+
+**Hypothesis:** the modal regime read from a price bin stays near 0.660 on this 600-path draw, well below 1. The next specification is the same bins when `dW` comes from `volterra_increments` at an `H` below one half. The quantity to report is that accuracy, next to 0.660.
+
+## 2026-10-14 Review: quote memory, xi0, the rough curve, minimal DYSANOS
+
+The fast dense comparison is the first 8 SPX expiries, 1,685 quotes. A fresh dense solve peaked at 1.179 GB in 1.35 s. The 24-expiry dense solve, which peaked at 6.178 GB, is marked slow.
+
+`calibrate` passes `d VS / d T` into rBergomi. On the SPX SANOS surface at `eta = 0.25` that slope is `0.01637` at the first expiry, `0.04085` in the middle, and `0.06236` at the last. Three fits, plugin defaults 4,000 paths and 64 steps, seed 0, all stopped on `ftol`. Free `H`: `H = 0.2057`, `nu = 2.326`, `rho = -0.6593`, objective `3.039e-2`, 27.4 s. `H = 0.167`: `nu = 1.460`, `rho = -0.8231`, objective `6.746e-2`, 29.7 s. `H = 0.149`: `nu = 1.247`, `rho = -0.8863`, objective `1.319e-1`, 24.7 s. At `T = 0.00114` the free skew is `-2.9643` against the market `-2.9648`. `rough-volatility` `3888dfc` is a dev extra.
+
+For `H` other than 1/2 the forward variance is `xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`, with `I_t(u)` the kernel integral of `dW`. At `H = 1/2` the kernel is 1, so the exponent depends on `W_t` and not on the tenor. On a 5-path, 8-step draw the curve matches `roughvol` to `1e-10`. The `H = 0.5` regime mixture is unchanged.
+
+`volsurface/dynamic/dysanos.py` is minimal DYSANOS. The full v3 baseline is future work. A one-day scalar step with `L L' = 0.5` is `A = 0.998017048017`. Last-expiry moments, 20,000 draws, seed 11: mean z-score `-1.51`, second-moment z-score `-1.51`, both inside 4 standard errors. The call at the last pillar matches the atom mixture to `1e-10`, and two latents differ by `0.0122`. `experiments/regime/PREREG.md` now records liabilities, instruments, policies, metrics, the sample size, and the controls. It is still a draft.
+
+## 2026-10-14 Library P3g: minimal DYSANOS
+
+UNVERIFIED against arXiv:2608.12587. The paper text was not read in full. This entry records minimal DYSANOS. The full v3 baseline is future work. There is no daily SPX file. The history is synthetic.
+
+Five random `(L, S)`. The largest modulus of an eigenvalue of `A_D` is `0.99995719`, from a one-day step. Every draw is strictly below 1, at a one-day step and at `D = 1`. The real parts of the eigenvalues of `kappa` stay at or above `2e-4`.
+
+Recovery, `D = 1`, 6,000 dates, seed 2, 200 residual-bootstrap draws. The true diagonal of `A` is `0.8353` and `0.8877`, inside `[0.8159, 0.8392]` and `[0.8747, 0.8990]`. The innovation variances `0.0229` and `0.0144` are inside `[0.0225, 0.0241]` and `[0.0139, 0.0150]`. The bands are the 2.5 and 97.5 percentiles. Least squares on the factors is the Gaussian MLE of this linear transition, and it is the stated two-stage deviation from joint training.
+
+One decoded surface, `eta = 0.3460`, seven expiries, 21 strikes. `check_surface` at `1e-9` reports 0 violations. The plan's Sigma exponent is UNVERIFIED: the operator squares Sigma, and this code bounds Sigma in `[0.01, 3]`.
+
+Front-expiry draws, 2,000, seed 3. The probability-integral transform has Kolmogorov-Smirnov statistic `0.0230` and p-value `0.2376`, above the `0.001` bar. The paper's copula formulae are UNVERIFIED. The draw is the mixture the surface prices, and it adds no drift.
+
+Held to the last expiry, three strikes, 4,000 draws, seed 4. Mean P&L `5.76e-3`, `4.60e-3`, `3.63e-3` at log-moneyness `-0.1`, `0`, `0.1`. Standard errors `2.76e-3`, `2.28e-3`, `1.72e-3`. The means sit about two standard errors above zero on shared draws. None is below `-3.5` standard errors.
+
+Implied-vol changes, 40 dates. The generated surface's first component takes `0.9989` of the variance. A regime path, priced by the Black call on integrated forward variance, takes `1.0000` on the current forward curve: at `H = 1/2` the vol is `sqrt(v_t)` at every expiry. That surface has no strike slope. The figure is `docs/figures/p3g_pca.png`. The paper's figure is UNVERIFIED.
+
+`experiments/regime/PREREG.md` records H1, H2 and H3 as a draft, to freeze before the pilot ends. The pilot is a CPU run. No GPU. The regime variable is `nu` only. H4 and H5 are not gate hypotheses.
+
+**Hypothesis:** the day-to-day implied-vol change of this four-control decoder is nearly rank one on a 40-date sample (share `0.9989`). The next specification is the same PCA with more than four affine controls and a longer synthetic history. The share to beat is `0.9989`.
 
 ## 2026-10-14 Library P3f: market paths and regimes
 
