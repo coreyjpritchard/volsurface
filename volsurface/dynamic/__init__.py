@@ -1,4 +1,4 @@
-"""Dynamic surfaces. The DYSANOS replication is UNVERIFIED against the paper text."""
+"""Dynamic surfaces. The toy in ``dysanos`` is not a DYSANOS v3 replication."""
 
 from volsurface.dynamic.dysanos import (
     DEFAULT_D,

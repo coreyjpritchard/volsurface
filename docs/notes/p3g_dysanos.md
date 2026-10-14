@@ -1,51 +1,48 @@
-# Minimal DYSANOS
+# A minimal toy dynamic surface
 
-UNVERIFIED. This note follows the plan's citations of arXiv:2608.12587. The
-paper was not read in full. The module is a small replication of the
-baseline, not a new model, and it does not reproduce the paper's numbers.
+This module is a toy. It is not a DYSANOS v3 baseline. arXiv:2608.12587
+was not read in full, so the file does not fit a decoder, does not build
+the paper's copula, and does not use the paper's kappa units or expiry
+grid. It does not reproduce the paper's numbers.
+
+`kappa` is per year. The step `D` is in years. A one-day step is `1/252`.
+Decoder expiries are business days divided by 252. The default grid is
+2, 5, 10, 20, 40, 126 and 252 business days, with 21 strikes. `wide=True`
+is an 18 by 200 stand-in and is not the paper's grid.
 
 The transition is `A_D = exp(-kappa D)` with
 `kappa = L L' + S + kappa_min I`, `kappa_min = 2e-4`, and `S`
-antisymmetric. The real part of each eigenvalue of `kappa` is at least
-`kappa_min`, so each eigenvalue of `A_D` has modulus `exp(-Re(lambda) D)`,
-which is strictly below 1. On five random draws the largest modulus is
-`0.99995719`, from a step of one business day. A refit does not leave this
-parameterisation, so the bound holds for every transition the code stores.
+antisymmetric. For the scalar `L L' = 0.5`, a one-day step is
+`A = 0.998017048017`, which is `exp(-(0.5 + kappa_min) / 252)`. The
+two-day matrix is that number squared, to `1e-12`. On the two-factor
+example, `A_1 = A_{0.5} A_{0.5}` to `1e-12`.
 
 The Gaussian maximum likelihood of the linear transition is least squares.
 On 6,000 dates with `D = 1`, seed 2, and 200 residual-bootstrap draws, the
 true diagonal entries `0.8353` and `0.8877` lie in `[0.8159, 0.8392]` and
 `[0.8747, 0.8990]`. The innovation variances `0.0229` and `0.0144` lie in
 `[0.0225, 0.0241]` and `[0.0139, 0.0150]`. The bands are the 2.5 and 97.5
-percentiles. Fitting the factors by least squares, after a separate
-surface stage, is a stated deviation from joint training. Joint training
-is UNVERIFIED.
+percentiles.
 
-The decoder builds a SANOS surface. Strikes are a uniform log-moneyness
-grid. The plan's strike formula is UNVERIFIED. The plan writes a Sigma
-bound `(0.01^2, 3^2)` and flags the exponent. The operator squares Sigma,
-so this code bounds Sigma in `[0.01, 3]`. That exponent is UNVERIFIED.
-`eta` is in `[0.01, 0.50]`. One decoded surface, `eta = 0.3460`, has no
-`check_surface` violation at `1e-9`.
+The decoder builds a SANOS surface. The plan's Sigma exponent is
+UNVERIFIED: the operator squares Sigma, and this code bounds Sigma in
+`[0.01, 3]`. One decoded surface, `eta = 0.3460`, has no `check_surface`
+violation at `1e-9`.
 
-The spot is a draw from the front-expiry mixture. No drift is added. The
-paper's copula formulae are UNVERIFIED. On 2,000 draws the
-probability-integral transform has Kolmogorov-Smirnov statistic `0.0230`
-and p-value `0.2376`.
+The last pillar call equals `weights @ black_call` to `1e-10`. The zero
+latent and the unit latent differ by `0.0122` in the at-the-money call at
+that expiry.
 
-A three-strike book held to the last expiry, 4,000 draws, has mean P&L
-`5.76e-3`, `4.60e-3` and `3.63e-3` at log-moneyness `-0.1`, `0` and `0.1`.
-The standard errors are `2.76e-3`, `2.28e-3` and `1.72e-3`. Each mean is
-about two standard errors above zero on shared draws. None is negative.
-The test bar is `-3.5` standard errors.
+Draws from the last expiry, 20,000 paths, seed 11, kernel variance
+`0.013185`. The sample mean is `0.9977` against `q' K = 1`, a z-score of
+`-1.51` (standard error `1.52e-3`). The second moment is `1.0415` against
+`q' (K^2 exp(eta V)) = 1.0464`, a z-score of `-1.51` (standard error
+`3.24e-3`). Both sit inside 4 standard errors. The law that drops the
+`-v/2` term in the sampler sits 5.9 and 5.8 standard errors away from
+these draws.
 
-The figure compares day-to-day implied-vol changes. The generated history
-is 40 dates of this decoder. The synthetic history is one regime path,
-priced by the Black call on integrated forward variance, which has no
-strike slope. The first component takes `0.9989` of the generated changes
-and `0.9520` of the regime changes. The paper's figure is UNVERIFIED, so
-this panel is not a comparison with it.
-
-The optional scale on the innovations is off by default. `G` does not
-depend on the latent. The constant-vol-of-vol reading of the paper is
-UNVERIFIED. There is no daily SPX file. The only history here is synthetic.
+The figure compares day-to-day implied-vol changes of this toy with one
+regime path priced by the Black call on integrated forward variance. The
+first component takes `0.9989` of the toy changes and `0.9520` of the
+regime changes. There is no daily SPX file. The only history here is
+synthetic.

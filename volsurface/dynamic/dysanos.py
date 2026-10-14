@@ -1,9 +1,13 @@
-"""A small DYSANOS generator. DESIGN section 22.
+"""A minimal toy dynamic surface. DESIGN section 22.
 
-UNVERIFIED. The design follows the plan's citations of arXiv:2608.12587.
-The paper text was not read in full for this module. Nothing here is a new
-model, and nothing here is a claim that the paper's numerical results were
-reproduced.
+This is not a replication of the DYSANOS v3 baseline in arXiv:2608.12587.
+The paper was not read in full. A fitted decoder, a spot copula, and the
+paper's kappa units and expiry grid are not in this file. Nothing here is
+a new model, and nothing here reproduces the paper's numbers.
+
+``kappa`` is per year. The step passed to ``transition_matrix`` is in
+years, so a one-day step is ``1/252``. Decoder expiries are business days
+divided by 252.
 
 The decoder maps a latent to a nonnegative discrete local volatility and to
 increasing total variances, then to a SANOS surface. The default grid is
@@ -181,7 +185,7 @@ def bootstrap_bands(
 
 
 class Dysanos:
-    """Decoder and grids. Dynamics live in the functions above. See the module note."""
+    """Toy decoder and grids. Not a DYSANOS v3 fit. See the module note."""
 
     def __init__(
         self,

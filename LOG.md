@@ -2,7 +2,7 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. A minimal DYSANOS dynamic surface runs on synthetic history, and `experiments/regime/PREREG.md` holds H1, H2 and H3 as a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance. Any other `H` calls `volterra_components` and keeps the near field. The dynamic surface is a toy, and `experiments/regime/PREREG.md` is a completed draft. **Next:** the preregistration is still to freeze before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 
@@ -29,6 +29,16 @@ One path, `v = 0.04`, `rho = -0.4`, `H = 1/2`, 32 steps, expiry 1, 8,192 copies,
 Six hundred paths, clock index 10, seed entropy 12, test split, 256 copies. The at-the-money call's modal accuracy is 0.6417, a lift of 0.1033 over the base rate 0.5383. The variance swap on those paths is 0.6600, a lift of 0.1217. Both lifts sit in the band from 0.05 to 0.35.
 
 **Hypothesis:** the `H = 1/2` span at `nu = 1.5` stays above the span at `nu = 0.01` when the step count rises from 32 to 128. The quantity to report is that span, next to 0.0401.
+
+## 2026-10-14 Review: quote memory, xi0, the rough curve, the toy
+
+The fast dense comparison is the first 8 SPX expiries, 1,685 quotes. A fresh dense solve peaked at 1.179 GB in 1.35 s. The 24-expiry dense solve, which peaked at 6.178 GB, is marked slow.
+
+`calibrate` passes `d VS / d T` into rBergomi. On the SPX SANOS surface at `eta = 0.25` that slope is `0.01637` at the first expiry, `0.04085` in the middle, and `0.06236` at the last. Three fits, plugin defaults 4,000 paths and 64 steps, seed 0, all stopped on `ftol`. Free `H`: `H = 0.2057`, `nu = 2.326`, `rho = -0.6593`, objective `3.039e-2`, 27.4 s. `H = 0.167`: `nu = 1.460`, `rho = -0.8231`, objective `6.746e-2`, 29.7 s. `H = 0.149`: `nu = 1.247`, `rho = -0.8863`, objective `1.319e-1`, 24.7 s. At `T = 0.00114` the free skew is `-2.9643` against the market `-2.9648`. `rough-volatility` `3888dfc` is a dev extra.
+
+For `H` other than 1/2 the forward variance is `xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`, with `I_t(u)` the kernel integral of `dW`. At `H = 1/2` the kernel is 1, so the exponent depends on `W_t` and not on the tenor. On a 5-path, 8-step draw the curve matches `roughvol` to `1e-10`. The `H = 0.5` regime mixture is unchanged.
+
+`volsurface/dynamic/dysanos.py` is a toy, not a v3 replication. A one-day scalar step with `L L' = 0.5` is `A = 0.998017048017`. Last-expiry moments, 20,000 draws, seed 11: mean z-score `-1.51`, second-moment z-score `-1.51`, both inside 4 standard errors. The call at the last pillar matches the atom mixture to `1e-10`, and two latents differ by `0.0122`. `experiments/regime/PREREG.md` now records liabilities, instruments, policies, metrics, the sample size, and the controls. It is still a draft.
 
 ## 2026-10-14 Library P3g: minimal DYSANOS
 
