@@ -35,7 +35,7 @@ linear in calendar time, which is a constant `dw/dT` on that interval
 and a different constant on the next. Local variance therefore jumps at
 each expiry even when the smile is smooth in `k`. The jump is the
 calendar interpolant. It is visible on the SVI and spline surfaces of
-the SPY snapshot, at fixed `k`, as a step from one expiry to the next.
+the SPX snapshot, at fixed `k`, as a step from one expiry to the next.
 
 The Monte Carlo reads that grid by bilinear interpolation and steps
 `log Z` with the sampled variance. Adding paths shrinks the standard

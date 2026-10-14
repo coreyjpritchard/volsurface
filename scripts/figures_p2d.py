@@ -1,11 +1,11 @@
-"""Figures for Dupire local variance on the SPY snapshot and on Heston.
+"""Figures for Dupire local variance on the SPX snapshot and on Heston.
 
 Run from the repository root:
 
     python scripts/figures_p2d.py
 
 Writes PNG and CSV under docs/figures/, and data/presets/localvol.json.
-The snapshot is last trades. Local variance outside the quoted domain is
+The snapshot is SPXW mids. Local variance outside the quoted domain is
 kept in the wing panel and marked extrapolated. The default dupire call
 blanks that wing.
 """
@@ -42,14 +42,10 @@ def _flat(level):
 
 
 def snapshot_panels(data) -> dict:
-    """Linear, spline and SVI local variance of the committed SPY chain.
+    """Linear, spline and SVI local variance of the committed SPX chain.
 
-    The expiry is the one nearest 23 calendar days. On that slice the spline
-    of implied vol leaves the quotes near k = 0.08 and the local variance
-    in the call wing runs to hundreds of thousands. The slice nearest 90
-    days does not: its spline stays below 1 on the same strike window, so
-    it hides the wing the figure is there to show. The vertical axis is
-    symmetric-log so that wing and the at-the-money level share a panel.
+    The expiry is the one nearest 23 calendar days. The vertical axis is
+    symmetric-log so a spike and the at-the-money level share a panel.
     """
     quotes = data.quotes.dropna(subset=["iv", "price", "k"])
     market = Curves(data.F, data.df)
@@ -105,7 +101,7 @@ def snapshot_panels(data) -> dict:
     axes[0].set_ylabel("local variance")
     axes[0].legend(frameon=False, fontsize=7)
     fig.suptitle(
-        f"SPY at T = {target:.3f}. Grey lines are this expiry's quoted k. "
+        f"SPX at T = {target:.3f}. Grey lines are this expiry's quoted k. "
         "Dashed is each surface's extrapolated mask."
     )
     fig.tight_layout()
@@ -297,7 +293,7 @@ def heston_panel() -> dict:
 
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
-    chain = chains.load_snapshot(chains.latest_snapshot("SPY"))
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     summary = snapshot_panels(data)
     heston = heston_panel()

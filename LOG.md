@@ -36,21 +36,22 @@ errors are `28.7`, `23.6` and `20.2` bp. The budget is 40 bp plus one
 standard error. Adding paths would shrink the standard error and leave the
 bias.
 
-SPY last trades, expiry nearest 23 calendar days (`T = 0.0630`), quoted `k`
-from `-0.474` to `0.081`. On `k` from `-0.55` to `0.30` the spline of
-implied vol has maximum |local variance| `0.330` inside the quotes and
-`2.558e5` outside them. Exploding cells inside the quotes: 0. Negative
-denominators inside the quotes: 21. The wing is the cubic extrapolant.
-Linear interpolation of the call, differenced, reaches `2.201e9` on the
-same window, with 17 exploding cells and 25 negative denominators. Raw SVI
-on that window has maximum |local variance| `2.360` inside the fit domain
-and `1.128` outside, with 0 negative denominators and 0 exploding cells.
+SPXW mids, expiry nearest 23 calendar days (`T = 0.06427`, 6 November
+2026), quoted `k` from `-0.673` to `0.104`. On `k` from `-0.55` to `0.30`
+the spline of implied vol has maximum |local variance| `44.16` inside the
+quotes and `3.18` outside them. Exploding cells inside the quotes: 3
+(cap 5). Negative denominators inside the quotes: 20. On this window the
+large spline values sit inside the quotes. Linear interpolation of the
+call, differenced, reaches `6.193e6`, with 40 exploding cells and 43
+negative denominators. Raw SVI on that window has maximum |local variance|
+`1.059` inside the fit domain and `0.328` outside, with 0 negative
+denominators and 0 exploding cells.
 
 At `k = 0`, total variance is linear in time between expiries, so local
-variance is one level on each open interval. SVI levels run from `0.00379`
-to `0.0336`. The largest jump from one interval to the next is `0.0135`.
-The spline's interval levels run from `-0.0216` to `0.0424`. The largest
-jump is `0.0475`. A negative level is a denominator and a time slope of
+variance is one level on each open interval. SVI levels run from `0.003785`
+to `0.03225`. The largest jump from one interval to the next is `0.01796`.
+The spline's interval levels run from `-0.03046` to `0.2491`. The largest
+jump is `0.2367`. A negative level is a denominator and a time slope of
 opposite sign, not a clipped variance.
 
 Heston (`v0 = theta = 0.04`, `kappa = 1.5`, `xi = 0.3`, `rho = -0.5`) at
