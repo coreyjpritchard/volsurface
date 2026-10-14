@@ -727,3 +727,27 @@ unconstrained coordinates of `param_spec`, with bounds taken from that
 spec. Several starts are tried. The Feller ratio `2 kappa theta / xi^2`
 is reported and not constrained. The returned surface is a `ModelSurface`
 around the fitted model, so `check_surface` can read it.
+
+## 15. Dupire local variance and log-Euler
+
+Local variance is `(dw/dT) / g(k)`, with `g` the denominator in section 5.
+In expanded form
+
+```
+g = 1 - (k/w) w_k + (1/4) (-1/4 - 1/w + k^2/w^2) (w_k)^2 + (1/2) w_kk.
+```
+
+`dupire` uses analytic `variance_slopes` when the surface has them (raw
+SVI, the implied-vol spline, flat Black-Scholes) and the mixin steps
+otherwise. Cells outside `extrapolated` are NaN. A denominator `g <= 0`
+is `bad_denominator` and is counted. A finite |local variance| above 5
+is `exploding` and is counted. Neither is clipped.
+
+`LocalVol` simulates `Z` by log-Euler. Local variance is bilinear in
+`(t, k)` with `k = log Z`. One normal per step, forward shock only. A
+sample that is not strictly positive adds no shock on that step. For a
+flat variance the step is the exact lognormal transition, so the Euler
+bias is zero. On a variance that depends on `k` the bias remains as the
+path count grows. The Heston test allows 40 bp of implied vol for that
+bias and for the finite-difference local variance, plus one standard
+error of the implied vol.

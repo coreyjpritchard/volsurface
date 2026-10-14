@@ -27,6 +27,7 @@ autodiff = ["torch>=2.2"]
 black_scholes = "volsurface.models.bs:BlackScholes"
 gbm = "volsurface.models.gbm:GBM"
 heston = "volsurface.models.heston:Heston"
+localvol = "volsurface.models.localvol:LocalVol"
 
 [tool.setuptools.packages.find]
 where = ["."]

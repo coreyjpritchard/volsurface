@@ -118,6 +118,11 @@ class SVISurface(SurfaceMixin):
         _, k, w, w_k, w_kk, _, _ = self._parts(T, k)
         return log_density(k[None, :], w, w_k, w_kk)
 
+    def variance_slopes(self, T, k):
+        """Analytic ``(w, dw/dk, d²w/dk², dw/dT)``. Dupire uses these, not a difference."""
+        _, _, w, w_k, w_kk, w_T, _ = self._parts(T, k)
+        return w, w_k, w_kk, w_T
+
     def local_var(self, T, k) -> np.ndarray:
         """``(dw/dT) / g(k)``. NaN where a single expiry gives no ``dw/dT``."""
         _, k, w, w_k, w_kk, w_T, calendar = self._parts(T, k)

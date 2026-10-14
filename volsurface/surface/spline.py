@@ -85,6 +85,11 @@ class SplineSurface(SurfaceMixin):
         w, w_k, w_kk, _, _ = self._w_derivs(T, k)
         return log_density(k[None, :], w, w_k, w_kk)
 
+    def variance_slopes(self, T, k):
+        """Analytic ``(w, dw/dk, d²w/dk², dw/dT)`` from the spline of implied vol."""
+        w, w_k, w_kk, w_T, _ = self._w_derivs(T, k)
+        return w, w_k, w_kk, w_T
+
     def local_var(self, T, k, h: float = 1e-4) -> np.ndarray:
         """``(dw/dT) / g``. NaN with one expiry, where ``dw/dT`` is not observed."""
         from volsurface.surface.black import durrleman_g

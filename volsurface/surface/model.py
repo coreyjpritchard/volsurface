@@ -54,6 +54,16 @@ class ModelSurface(SurfaceMixin):
         # dw/dT = sigma^2 at fixed k. dC/dT = dC/dw * sigma^2.
         return dcall_dw(k_axis[None, :], w) * float(self.model.sigma) ** 2
 
+    def variance_slopes(self, T, k):
+        """Closed form for flat Black-Scholes. Other models have no analytic total variance."""
+        if not isinstance(self.model, BlackScholes):
+            raise TypeError("variance_slopes is analytic only for Black-Scholes")
+        T, k = as_axes(T, k)
+        sigma2 = float(self.model.sigma) ** 2
+        w = sigma2 * T[:, None] * np.ones((1, k.size))
+        zeros = np.zeros_like(w)
+        return w, zeros, zeros, np.full_like(w, sigma2)
+
     def call(self, T, k) -> np.ndarray:
         T, k = as_axes(T, k)
         out = np.empty((T.size, k.size))
