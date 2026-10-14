@@ -1,9 +1,9 @@
-# A minimal toy dynamic surface
+# Minimal DYSANOS
 
-This module is a toy. It is not a DYSANOS v3 baseline. arXiv:2608.12587
-was not read in full, so the file does not fit a decoder, does not build
-the paper's copula, and does not use the paper's kappa units or expiry
-grid. It does not reproduce the paper's numbers.
+This module is minimal DYSANOS. The full v3 baseline is future work: a
+fitted decoder, a spot copula, the paper's kappa units and expiry grid,
+and joint training. arXiv:2608.12587 was not read in full, so those
+paper choices stay UNVERIFIED where this note says so.
 
 `kappa` is per year. The step `D` is in years. A one-day step is `1/252`.
 Decoder expiries are business days divided by 252. The default grid is
@@ -41,8 +41,9 @@ Draws from the last expiry, 20,000 paths, seed 11, kernel variance
 `-v/2` term in the sampler sits 5.9 and 5.8 standard errors away from
 these draws.
 
-The figure compares day-to-day implied-vol changes of this toy with one
-regime path priced by the Black call on integrated forward variance. The
-first component takes `0.9989` of the toy changes and `0.9520` of the
-regime changes. There is no daily SPX file. The only history here is
-synthetic.
+The figure compares day-to-day implied-vol changes of minimal DYSANOS
+with one regime path priced by the Black call on integrated forward
+variance. The first component takes `0.9989` of the minimal DYSANOS
+changes and `1.0000` of the regime changes. At `H = 1/2` the forward
+variance is flat, so that regime vol is `sqrt(v_t)` at every expiry.
+There is no daily SPX file. The only history here is synthetic.

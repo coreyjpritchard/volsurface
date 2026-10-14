@@ -2,7 +2,7 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance, and its hit rate sits near the unconditional base rate. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field, so `E[v]` matches `xi0` at `H = 0.1` inside the z-rule. Corey ratified the SANOS held-out bar on 14 Oct 2026. The preregistration pins `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the filtered regime probabilities. `surface_at` is a Monte Carlo on the regime-conditional forward curve `xi_t(u)`, with a Black control and a reported standard error. The filter reads one-step log realised variance, and its hit rate sits near the unconditional base rate. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field, so `E[v]` matches `xi0` at `H = 0.1` inside the z-rule. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
 ## 2026-10-14 Review: the forward curve inside the surface
 
@@ -19,6 +19,12 @@ Six hundred paths, clock index 10, 1,024 copies. The at-the-money call's modal a
 Corey ratified the held-out SANOS bar on 14 Oct 2026: SANOS held-out in-spread at least raw SVI held-out in-spread, with zero static-arbitrage violations.
 
 **Hypothesis:** the z-score of this log contract against the variance swap at `H = 0.1` stays inside 4 when the step count rises from 16 to 64. The quantity to report is the maximum absolute z-score, next to the 1.50 measured here.
+
+## 2026-10-14 Review: minimal DYSANOS
+
+The dynamic surface is named minimal DYSANOS. The full v3 baseline is future work: a fitted decoder, a spot copula, the paper's kappa units and expiry grid, and joint training of the decoder and the transition. Paper statements stay UNVERIFIED. `experiments/regime/PREREG.md` remains a draft and is not frozen.
+
+Regenerating `docs/figures/p3g_pca.png` on the current `H = 1/2` forward curve leaves the minimal DYSANOS share at `0.9989`. The regime path, priced by the Black call on integrated forward variance, has share `1.0000`, because that vol is `sqrt(v_t)` at every expiry.
 
 ## 2026-10-14 Review: the Monte Carlo smile
 
@@ -62,7 +68,7 @@ Held-out strikes on the SPX snapshot, seed 0, about 20 percent per expiry (mean 
 
 **Hypothesis:** the modal regime read from a price bin stays near 0.660 on this 600-path draw, well below 1. The next specification is the same bins when `dW` comes from `volterra_increments` at an `H` below one half. The quantity to report is that accuracy, next to 0.660.
 
-## 2026-10-14 Review: quote memory, xi0, the rough curve, the toy
+## 2026-10-14 Review: quote memory, xi0, the rough curve, minimal DYSANOS
 
 The fast dense comparison is the first 8 SPX expiries, 1,685 quotes. A fresh dense solve peaked at 1.179 GB in 1.35 s. The 24-expiry dense solve, which peaked at 6.178 GB, is marked slow.
 
@@ -70,11 +76,11 @@ The fast dense comparison is the first 8 SPX expiries, 1,685 quotes. A fresh den
 
 For `H` other than 1/2 the forward variance is `xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`, with `I_t(u)` the kernel integral of `dW`. At `H = 1/2` the kernel is 1, so the exponent depends on `W_t` and not on the tenor. On a 5-path, 8-step draw the curve matches `roughvol` to `1e-10`. The `H = 0.5` regime mixture is unchanged.
 
-`volsurface/dynamic/dysanos.py` is a toy, not a v3 replication. A one-day scalar step with `L L' = 0.5` is `A = 0.998017048017`. Last-expiry moments, 20,000 draws, seed 11: mean z-score `-1.51`, second-moment z-score `-1.51`, both inside 4 standard errors. The call at the last pillar matches the atom mixture to `1e-10`, and two latents differ by `0.0122`. `experiments/regime/PREREG.md` now records liabilities, instruments, policies, metrics, the sample size, and the controls. It is still a draft.
+`volsurface/dynamic/dysanos.py` is minimal DYSANOS. The full v3 baseline is future work. A one-day scalar step with `L L' = 0.5` is `A = 0.998017048017`. Last-expiry moments, 20,000 draws, seed 11: mean z-score `-1.51`, second-moment z-score `-1.51`, both inside 4 standard errors. The call at the last pillar matches the atom mixture to `1e-10`, and two latents differ by `0.0122`. `experiments/regime/PREREG.md` now records liabilities, instruments, policies, metrics, the sample size, and the controls. It is still a draft.
 
 ## 2026-10-14 Library P3g: minimal DYSANOS
 
-UNVERIFIED against arXiv:2608.12587. The paper text was not read in full. The module is a small replication of the baseline. It is not a new model, and it does not reproduce the paper's numbers. There is no daily SPX file. The history is synthetic.
+UNVERIFIED against arXiv:2608.12587. The paper text was not read in full. This entry records minimal DYSANOS. The full v3 baseline is future work. There is no daily SPX file. The history is synthetic.
 
 Five random `(L, S)`. The largest modulus of an eigenvalue of `A_D` is `0.99995719`, from a one-day step. Every draw is strictly below 1, at a one-day step and at `D = 1`. The real parts of the eigenvalues of `kappa` stay at or above `2e-4`.
 
@@ -86,7 +92,7 @@ Front-expiry draws, 2,000, seed 3. The probability-integral transform has Kolmog
 
 Held to the last expiry, three strikes, 4,000 draws, seed 4. Mean P&L `5.76e-3`, `4.60e-3`, `3.63e-3` at log-moneyness `-0.1`, `0`, `0.1`. Standard errors `2.76e-3`, `2.28e-3`, `1.72e-3`. The means sit about two standard errors above zero on shared draws. None is below `-3.5` standard errors.
 
-Implied-vol changes, 40 dates. The generated surface's first component takes `0.9989` of the variance. A regime path, priced by the Black call on integrated forward variance, takes `0.9520`. That second surface has no strike slope. The figure is `docs/figures/p3g_pca.png`. The paper's figure is UNVERIFIED, so this is not a match to it.
+Implied-vol changes, 40 dates. The generated surface's first component takes `0.9989` of the variance. A regime path, priced by the Black call on integrated forward variance, takes `1.0000` on the current forward curve: at `H = 1/2` the vol is `sqrt(v_t)` at every expiry. That surface has no strike slope. The figure is `docs/figures/p3g_pca.png`. The paper's figure is UNVERIFIED.
 
 `experiments/regime/PREREG.md` records H1, H2 and H3 as a draft, to freeze before the pilot ends. The pilot is a CPU run. No GPU. The regime variable is `nu` only. H4 and H5 are not gate hypotheses.
 

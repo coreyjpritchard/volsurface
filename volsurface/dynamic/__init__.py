@@ -1,4 +1,4 @@
-"""Dynamic surfaces. The toy in ``dysanos`` is not a DYSANOS v3 replication."""
+"""Dynamic surfaces. ``dysanos`` is minimal DYSANOS. The full v3 baseline is future work."""
 
 from volsurface.dynamic.dysanos import (
     DEFAULT_D,

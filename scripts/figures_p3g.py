@@ -1,10 +1,10 @@
-"""PCA of implied-vol changes from the toy decoder, against a synthetic path.
+"""PCA of implied-vol changes from minimal DYSANOS, against a synthetic path.
 
 Run from the repository root:
 
     python scripts/figures_p3g.py
 
-The decoder is not a DYSANOS v3 replication. The printed block is the
+The full v3 baseline is future work. The printed block is the
 measurement behind the log entry.
 """
 
@@ -155,7 +155,7 @@ def main() -> None:
         axes[0].plot(log_k, grid[j], lw=1.2, label=f"{int(round(maturities[j] * 252))}d")
     axes[0].set_xlabel("log-moneyness")
     axes[0].set_ylabel("first component")
-    axes[0].set_title(f"Toy decoder IV changes, share {share_d:.2f}.")
+    axes[0].set_title(f"Minimal DYSANOS IV changes, share {share_d:.2f}.")
     axes[0].legend(frameon=False, fontsize=8)
     axes[1].plot(maturities * 252, loading_r, "o-", lw=1.2, ms=4)
     axes[1].set_xlabel("expiry, business days")

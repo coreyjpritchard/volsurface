@@ -1,9 +1,8 @@
-"""A minimal toy dynamic surface. DESIGN section 22.
+"""Minimal DYSANOS. DESIGN section 22.
 
-This is not a replication of the DYSANOS v3 baseline in arXiv:2608.12587.
-The paper was not read in full. A fitted decoder, a spot copula, and the
-paper's kappa units and expiry grid are not in this file. Nothing here is
-a new model, and nothing here reproduces the paper's numbers.
+The full v3 baseline is future work: a fitted decoder, a spot copula,
+the paper's kappa units and expiry grid, and joint training. The paper
+was not read in full. Paper statements below are marked UNVERIFIED.
 
 ``kappa`` is per year. The step passed to ``transition_matrix`` is in
 years, so a one-day step is ``1/252``. Decoder expiries are business days
@@ -185,7 +184,7 @@ def bootstrap_bands(
 
 
 class Dysanos:
-    """Toy decoder and grids. Not a DYSANOS v3 fit. See the module note."""
+    """Minimal DYSANOS decoder and grids. See the module note."""
 
     def __init__(
         self,

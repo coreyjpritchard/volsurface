@@ -1102,10 +1102,12 @@ the spot-orthogonal driver, 3 surrogate noise. That order is part of the
 model docstring. Two splits have disjoint spawn keys, so they do not share
 a stream.
 
-`volsurface/dynamic/dysanos.py` is a toy, not a replication of the DYSANOS
-v3 baseline. Paper statements in that module, its note, and its log entry
-are marked UNVERIFIED: the design was written from the plan's citations,
-not from a full reading of arXiv:2608.12587. The decoder maps a
+`volsurface/dynamic/dysanos.py` is minimal DYSANOS. The full v3 baseline
+is future work: a fitted decoder, a spot copula, the paper's kappa units
+and expiry grid, and joint training of the decoder and the transition.
+Paper statements in that module, its note, and its log entry are marked
+UNVERIFIED: the design was written from the plan's citations, not from a
+full reading of arXiv:2608.12587. The decoder maps a
 latent to nonnegative discrete local volatilities and increasing variances,
 then to a SANOS surface. The default grid is seven expiries (2, 5, 10, 20,
 40, 126, and 252 business days) and 20 to 50 strikes. The 18 by 200 grid is

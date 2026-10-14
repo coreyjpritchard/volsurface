@@ -134,7 +134,7 @@ the regimes. The exploratory summary is the filter's hit rate minus the
 unconditional base rate, the larger marginal frequency of the latent
 regime. Prices, including the I2 variance swap and `surface_at`, do not
 determine the latent regime: a price bin contains more than one regime.
-H5, a link between the filter and the toy dynamic surface, is exploratory.
+H5, a link between the filter and minimal DYSANOS, is exploratory.
 Neither is a hypothesis this draft freezes. Statements about DYSANOS that
-were the motivation for H5 remain UNVERIFIED, and the dynamic surface in
-this repository is a toy rather than a v3 baseline.
+were the motivation for H5 remain UNVERIFIED. The dynamic surface in
+this repository is minimal DYSANOS. The full v3 baseline is future work.

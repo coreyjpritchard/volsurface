@@ -1,4 +1,4 @@
-"""Toy dynamic surface. Not a DYSANOS v3 replication. DESIGN section 22."""
+"""Minimal DYSANOS. The full v3 baseline is future work. DESIGN section 22."""
 
 import math
 
