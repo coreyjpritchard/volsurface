@@ -885,6 +885,14 @@ strictly above 0.558. That 0.558 is the raw SVI in-spread already in
 `LOG.md` for this file. The paper's 91.4 percent is a different book and
 is context only.
 
+A second bar holds strikes out of the same snapshot. In each expiry, about
+20 percent of the strikes are drawn without replacement by
+`numpy.random.default_rng` with a fixed seed, and those quotes are left
+out of the fit. The bar is that the share of held-out quotes whose model
+call lies inside that quote's bid and ask is at least the raw SVI share
+on the same held-out quotes, and that the fitted SANOS surface still has
+zero static-arbitrage violations on the dense grid.
+
 ## 19. Discrete local volatility
 
 On one strike grid `K^1 < ... < K^N`, a nonnegative vector `Sigma` builds a
