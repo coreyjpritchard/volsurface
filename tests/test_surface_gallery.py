@@ -162,6 +162,14 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
     assert heat["limit_vol_points"] > 0.0
     assert heat["panels"]["svi"]["n"] > 0
     assert heat["panels"]["svi"]["rmse_vol_points"] > 0.0
+    assert (
+        numbers["display"]["clips"]["black_scholes"]["n_finite"]
+        == numbers["display"]["clips"]["market"]["n_finite"]
+    )
+    assert (
+        numbers["display"]["clips"]["gbm_mc"]["n_finite"]
+        == numbers["display"]["clips"]["market"]["n_finite"]
+    )
 
     fig_dir = tmp_path / "figures"
     html_dir = tmp_path / "surfaces"
@@ -183,7 +191,7 @@ def test_gallery_script_runs_on_a_small_grid(tmp_path):
         assert 'name="viewport"' in text
         assert '"autorange":false' in text or '"autorange": false' in text
         assert "7 days" in text
-        assert "standardised moneyness" in text
+        assert "standardised moneyness" in text.lower()
         if key == "market":
             assert "raw quotes" in text
         if key != "dupire_localvol":

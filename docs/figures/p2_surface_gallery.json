@@ -214,7 +214,7 @@
       "gbm_mc": {
         "lo": 0.05,
         "hi": 0.9,
-        "n_finite": 248,
+        "n_finite": 847,
         "n_clipped": 0,
         "n_above": 0,
         "n_below": 0,

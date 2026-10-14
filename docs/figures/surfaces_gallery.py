@@ -20,9 +20,10 @@ Heston and SABR are fit on the smile, ``|k| <= 0.4`` and at most 11 strikes
 an expiry, the same cut as the calibration figures. Raw SVI uses every
 quoted strike. The flat Black-Scholes volatility is the median of the
 at-the-money implied vol across expiries. The Monte Carlo panel is exact
-geometric Brownian motion at that volatility, one seed. A node is left
-blank when the price does not clear two standard errors, which is a wing
-no path reached. The scatter that remains is the simulation noise.
+geometric Brownian motion at that volatility, one seed. The JSON tables
+leave a node blank when the price does not clear two standard errors.
+The figure draws those wings at the flat volatility, on the same quoted
+domain as the market. The scatter that remains is the simulation noise.
 
 Run from the repository root:
 
@@ -48,6 +49,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import ListedColormap, Normalize
+from matplotlib.patches import Patch
 
 from volsurface import bs, chains
 from volsurface.core.market import market_data_from_snapshot
@@ -498,7 +500,14 @@ def build_display(
     gbm = np.empty(k_rows.shape, dtype=float)
     for row, src in enumerate(positions):
         gbm[row] = _gbm_one(data, paths.Z[:, src + 1], float(d_maturities[row]), k_rows[row])
-    flat = np.full(k_rows.shape, sigma, dtype=float)
+    # Same footprint as the market. A wing no path reached is the flat volatility,
+    # which is the value the Monte Carlo is estimating. The JSON tables still
+    # leave those cells blank.
+    on_market = np.isfinite(market_raw)
+    flat = np.where(on_market, sigma, np.nan)
+    gbm_draw = np.where(on_market, sigma, np.nan)
+    resolved = on_market & np.isfinite(gbm)
+    gbm_draw[resolved] = gbm[resolved]
     svi = _rows_of(d_maturities, k_rows, _svi_row)
     heston_surface = _rows_of(d_maturities, k_rows, _heston_row)
     sabr_surface = _rows_of(d_maturities, k_rows, _sabr_row)
@@ -510,13 +519,13 @@ def build_display(
         Sheet(
             "black_scholes",
             f"Black-Scholes flat, sigma {sigma:.3f}, {date}",
-            _apply_quotes(flat, mask),
+            flat,
             "implied volatility",
         ),
         Sheet(
             "gbm_mc",
-            f"Monte Carlo GBM, {n_paths} paths, seed {seed}, {date}",
-            _apply_quotes(gbm, mask),
+            f"Monte Carlo GBM, {n_paths} paths, seed {seed}, wings at sigma, {date}",
+            gbm_draw,
             "implied volatility",
         ),
         Sheet("svi", f"raw SVI, {date}", _apply_quotes(svi, mask), "implied volatility"),
@@ -931,6 +940,7 @@ def _plot_layer(ax, k, maturities, z: np.ndarray, faces: np.ndarray) -> None:
         rstride=1,
         cstride=1,
         linewidth=0,
+        edgecolor=(0, 0, 0, 0),
         antialiased=False,
         shade=False,
     )
@@ -964,17 +974,6 @@ def _axis_for(display: dict, sheet: Sheet) -> tuple[float, float]:
     return display["iv_axis"]
 
 
-def _domain_caption(built: dict) -> str:
-    n_all = int(built["maturities"].size)
-    n_omit = n_all - int(built["display"]["maturities"].size)
-    return (
-        f"x is standardised moneyness k/√T, grid [{M_LO:.1f}, {M_HI:.1f}]. "
-        f"Expiries under {DISPLAY_MIN_DAYS} days are omitted from the figures "
-        f"({n_omit} of {n_all}) and kept in the JSON. "
-        "Each surface is drawn only inside that expiry's quotes."
-    )
-
-
 def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float, mark_size: float):
     lo, hi = _axis_for(display, sheet)
     m = display["m"]
@@ -988,9 +987,9 @@ def _draw_surface(ax, display: dict, sheet: Sheet, *, points, point_size: float,
             points[0],
             points[1],
             points[2],
-            c="black",
+            c="#8a8a8a",
             s=point_size,
-            alpha=0.4,
+            alpha=0.28,
             depthshade=False,
             linewidths=0,
         )
@@ -1012,7 +1011,6 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
     fig_dir.mkdir(parents=True, exist_ok=True)
     display = built["display"]
     points = (display["quote_m"], display["quote_t"], display["quote_iv"])
-    caption = _domain_caption(built)
 
     for sheet in display["sheets"]:
         fig = plt.figure(figsize=(7.6, 5.8))
@@ -1033,16 +1031,14 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
             pad=0.08,
             label=f"{sheet.quantity} on [{lo:.2f}, {hi:.2f}]",
         )
-        note = caption
+        note = "k/√T, inside each expiry's quotes. Expiries under 7 days omitted."
         if sheet.key == "market":
-            note += " Points are raw quotes. The surface smooth is display only."
-        fig.text(0.5, 0.012, note, ha="center", va="bottom", fontsize=7.5)
-        fig.subplots_adjust(left=0.02, right=0.92, bottom=0.10, top=0.92)
-        fig.savefig(fig_dir / f"p2_surface_{sheet.key}.png", dpi=140)
+            note = "k/√T, inside quotes. Points are raw quotes. Expiries under 7 days omitted."
+        fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8)
+        fig.subplots_adjust(left=0.02, right=0.92, bottom=0.08, top=0.92)
+        fig.savefig(fig_dir / f"p2_surface_{sheet.key}.png", dpi=140, bbox_inches="tight")
         plt.close(fig)
 
-    iv_lo, iv_hi = display["iv_axis"]
-    local_lo, local_hi = display["local_axis"]
     fig = plt.figure(figsize=(16.5, 9.4))
     for i, sheet in enumerate(display["sheets"]):
         ax = fig.add_subplot(2, 4, i + 1, projection="3d")
@@ -1050,18 +1046,16 @@ def write_pngs(built: dict, fig_dir: Path) -> None:
             ax,
             display,
             sheet,
-            points=points if sheet.key == "market" else None,
-            point_size=3.0,
+            points=None,
+            point_size=2.0,
             mark_size=8.0,
         )
     fig.suptitle(
-        f"SPX {built['date']}. {caption} "
-        f"Implied-vol colour scale [{iv_lo:.2f}, {iv_hi:.2f}]. "
-        f"Dupire local vol is on its own scale [{local_lo:.2f}, {local_hi:.2f}].",
-        fontsize=10,
+        f"SPX {built['date']}. k/√T, expiries under 7 days omitted, inside the quotes.",
+        fontsize=12,
     )
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.86, wspace=0.08, hspace=0.28)
-    fig.savefig(fig_dir / "p2_surface_gallery.png", dpi=130)
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.92, wspace=0.08, hspace=0.22)
+    fig.savefig(fig_dir / "p2_surface_gallery.png", dpi=130, bbox_inches="tight")
     plt.close(fig)
 
     _write_error_heatmap(built, fig_dir)
@@ -1137,22 +1131,22 @@ def _stated_limit(raw: float) -> float:
     return stated if stated > 0.0 else raw
 
 
-def _hatch_unquoted(ax, m: np.ndarray, maturities: np.ndarray, show: np.ndarray) -> None:
-    """White hatched cells where the error is not drawn. White itself means zero."""
+def _shade_unquoted(ax, m: np.ndarray, y: np.ndarray, show: np.ndarray) -> None:
+    """Pale grey where the error is not drawn. White on the colour scale means zero."""
+    if not np.any(~show):
+        return
     hidden = np.ma.array(np.ones(show.shape, dtype=float), mask=show)
-    cells = ax.pcolormesh(
+    ax.pcolormesh(
         m,
-        maturities,
+        y,
         hidden,
         shading="nearest",
-        cmap=ListedColormap(["white"]),
+        cmap=ListedColormap(["#f0f0f0"]),
         vmin=0.0,
         vmax=1.0,
+        linewidth=0,
         zorder=1,
     )
-    cells.set_hatch("////")
-    cells.set_edgecolor("0.45")
-    cells.set_linewidth(0.3)
 
 
 def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
@@ -1169,27 +1163,29 @@ def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
     levels = [level for level in (-2.0, -1.0, 1.0, 2.0) if abs(level) < limit]
     m = display["m"]
     maturities = display["maturities"]
-    fig, axes = plt.subplots(1, 3, figsize=(12.8, 5.4), sharey=True)
+    y = np.sqrt(maturities)
+    fig, axes = plt.subplots(1, 3, figsize=(12.8, 5.2), sharey=True)
     mesh = None
     for ax, key in zip(axes, ERROR_KEYS, strict=True):
         gap = gaps[key]
         show = np.isfinite(gap)
         ax.set_facecolor("white")
-        _hatch_unquoted(ax, m, maturities, show)
+        _shade_unquoted(ax, m, y, show)
         mesh = ax.pcolormesh(
             m,
-            maturities,
+            y,
             np.ma.array(gap, mask=~show),
             cmap="RdBu_r",
             vmin=-limit,
             vmax=limit,
             shading="nearest",
+            linewidth=0,
             zorder=2,
         )
         if levels and np.any(show):
             ax.contour(
                 m,
-                maturities,
+                y,
                 gap,
                 levels=levels,
                 colors="#222222",
@@ -1205,27 +1201,37 @@ def _write_error_heatmap(built: dict, fig_dir: Path) -> None:
         ax.set_xlim(float(display["m_view"][0]), float(display["m_view"][1]))
         ax.set_xlabel("standardised moneyness k/√T")
         ax.set_title(f"{titles[key]}\n{note}", fontsize=10)
-    axes[0].set_ylabel("maturity T (year fraction)")
+    _set_sqrt_maturity_ticks(axes[0], maturities)
     extend = "both" if stats["n_beyond_limit"] else "neither"
     fig.colorbar(mesh, ax=axes, fraction=0.046, pad=0.04, label="vol points", extend=extend)
-    drawn = sorted({abs(level) for level in levels})
-    if drawn:
-        contour_note = " Contours at " + " and ".join(f"±{level:.0f}" for level in drawn) + "."
-    else:
-        contour_note = ""
-    fig.suptitle(
-        f"Model minus unsmoothed SPX implied vol, {built['date']}. "
-        f"Colour saturates at ±{_limit_text(limit)} vol points, the {ERROR_PERCENTILE:.0f}th "
-        f"percentile of |error| inside the quotes "
-        f"({stats['n_beyond_limit']} cells beyond it). "
-        f"Hatched cells are outside that expiry's quotes.{contour_note} "
-        f"{_domain_caption(built)} "
-        "The RMSE on each panel is this grid, not the full-book table.",
+    fig.legend(
+        handles=[Patch(facecolor="#f0f0f0", edgecolor="#d0d0d0", label="outside quotes")],
+        loc="lower center",
+        bbox_to_anchor=(0.45, -0.02),
+        frameon=False,
         fontsize=9,
     )
-    fig.subplots_adjust(left=0.06, right=0.90, bottom=0.20, top=0.72, wspace=0.16)
-    fig.savefig(fig_dir / "p2_surface_iv_error.png", dpi=140)
+    fig.suptitle(
+        f"SPX {built['date']}. Saturates at ±{_limit_text(limit)} vol points. "
+        "Grey is outside the quotes.",
+        fontsize=12,
+    )
+    fig.subplots_adjust(left=0.07, right=0.90, bottom=0.16, top=0.84, wspace=0.16)
+    fig.savefig(fig_dir / "p2_surface_iv_error.png", dpi=140, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
+
+
+def _set_sqrt_maturity_ticks(ax, maturities: np.ndarray) -> None:
+    """Tick labels are calendar year fractions. Positions are ``sqrt(T)``."""
+    candidates = np.array([0.02, 0.05, 0.10, 0.25, 0.50, 1.00])
+    lo = float(maturities[0])
+    hi = float(maturities[-1])
+    ticks = candidates[(candidates >= lo - 1e-12) & (candidates <= hi + 1e-12)]
+    if ticks.size == 0:
+        ticks = np.array([lo, hi])
+    ax.set_yticks(np.sqrt(ticks))
+    ax.set_yticklabels([f"{t:.2f}" for t in ticks])
+    ax.set_ylabel("maturity T, spaced by √T")
 
 
 def _colourscale() -> list:
@@ -1293,7 +1299,7 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
                 y=display["quote_t"],
                 z=display["quote_iv"],
                 mode="markers",
-                marker={"size": 2, "color": "black", "opacity": 0.45},
+                marker={"size": 1.5, "color": "rgba(140,140,140,0.35)"},
                 name="raw quotes",
                 hovertemplate=(
                     "k/√T=%{x:.3f}<br>T=%{y:.4f}<br>quote %{z:.4f}<extra>raw quote</extra>"
@@ -1307,9 +1313,11 @@ def _plotly_surface(sheet: Sheet, built: dict) -> go.Figure:
     own = ""
     if sheet.quantity == "local volatility":
         own = " Own vertical scale, local volatility, not implied vol."
-    title = f"{sheet.title}.{own}{marked} {_domain_caption(built)}"
+    title = (
+        f"{sheet.title}.{own}{marked} Standardised moneyness k/√T. Expiries under 7 days omitted."
+    )
     if sheet.key == "market":
-        title += " Points are raw quotes. The surface smooth is display only."
+        title += " Points are raw quotes."
     m_lo, m_hi = display["m_view"]
     fig.update_layout(
         title={"text": title, "font": {"size": 12}},
