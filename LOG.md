@@ -4,6 +4,67 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** SPX snapshot of 14 October 2026 is the committed chain. Session 00 reads that chain. **Next:** Session 01, SVI on the SPX snapshot.
 
+## 2026-10-14 Library P2d: Dupire local variance and log-Euler
+
+Flat Black-Scholes, sigma `0.2`, gives local volatility `0.2` with a gap of
+`0` on the test grid. The tolerance asked for was `1e-4`. The expanded
+denominator matches Durrleman's `g`. Outside the quoted domain the variance
+is NaN.
+
+The Vogt slice (Gatheral and Jacquier, example 3.1) has 61 cells with
+`g <= 0` on `k` from `-0.2` to `1.4` (161 points). The minimum is
+`-0.03286` at `k = 0.88`. The negative run is `k` from `0.65` to `1.25`.
+Those cells stay negative. They are counted, not floored.
+
+Log-Euler of that flat variance is the exact lognormal step, so the Euler
+budget is 5 bp of implied vol. Twelve strikes, 6,000 paths, 4 steps, seeds
+`20` to `31`. The z-rule at `n = 12` allows max |z| below `3.93`. This grid
+has max |z| `1.99`, mean z `0.32`, and every node inside 2. The worst
+implied vol is `0.2120` against a standard error of `0.0061` (120 bp). It
+passes because the cap is the z-rule bound times that standard error, not
+one standard error. Across seeds `10000` onward, 200 further grids: pass
+rate `200/200`. Median max |z| `1.86`, 95th percentile `2.89`, largest
+`3.71`. Mean of the per-grid mean z is `0.0097` (sample sd `0.29`).
+
+Heston local variance by finite difference, then the same stepper. Parameters
+`v0 = theta = 0.04`, `kappa = 2`, `xi = 0.15`, `rho = -0.3`. Four standard
+deviations of `log Z` at `T = 1` is about `0.8`, and that grid has 3
+negative cells and 1 exploding cell. The test uses `k` from `-0.5` to
+`0.5` (21 points), the widest grid that stays positive, and `T` from
+`0.15` to `1.2` (8 points). Queries past the edge use the edge cell.
+Strikes 95, 100, 105 at `T = 1`, 200,000 paths, 48 steps, seed 4.
+Implied-vol gaps (Monte Carlo minus Heston) are `-4.9`, `-2.2` and
+`+0.1` bp. Standard errors are `8.5`, `7.1` and `6.2` bp. The budget is
+15 bp plus three standard errors. 4,898 paths touch the edge. None hits
+a non-positive cell. The same draw on `k` in `[-0.3, 0.3]` is unchanged
+when `Domain` goes from `±0.4` to `±0.8`: the variance grids match and
+the gaps are `-5.0`, `-2.2` and `+0.1` bp. An earlier 16,000-path run on
+the narrow grid, before clipping, had gaps `-29.9`, `-18.6` and `-13.1`
+bp against standard errors `28.7`, `23.6` and `20.2` bp.
+
+SPXW mids, expiry nearest 23 calendar days (`T = 0.06427`, 6 November
+2026), quoted `k` from `-0.673` to `0.104`. On `k` from `-0.55` to `0.30`
+the spline of implied vol has maximum |local variance| `44.16` inside the
+quotes and `3.18` outside them. Exploding cells inside the quotes: 3
+(cap 5). Negative denominators inside the quotes: 20. On this window the
+large spline values sit inside the quotes. Linear interpolation of the
+call, differenced, reaches `6.193e6`, with 40 exploding cells and 43
+negative denominators. Raw SVI on that window has maximum |local variance|
+`1.059` inside the fit domain and `0.328` outside, with 0 negative
+denominators and 0 exploding cells.
+
+At `k = 0`, total variance is linear in time between expiries, so local
+variance is one level on each open interval. SVI levels run from `0.003785`
+to `0.03225`. The largest jump from one interval to the next is `0.01796`.
+The spline's interval levels run from `-0.03046` to `0.2491`. The largest
+jump is `0.2367`. A negative level is a denominator and a time slope of
+opposite sign, not a clipped variance.
+
+Heston (`v0 = theta = 0.04`, `kappa = 1.5`, `xi = 0.3`, `rho = -0.5`) at
+`T = 1`: at-the-money implied vol `0.1907`, Dupire local variance at `k = 0`
+is `0.03423`. No negative or exploding cell on `k` from `-0.4` to `0.4`.
+The preset `data/presets/localvol.json` is 4,442 bytes.
+
 ## 2026-10-14 Library P2c: Heston cosine price, Euler, calibration
 
 The published Fang and Oosterlee at-the-money one-year call is
