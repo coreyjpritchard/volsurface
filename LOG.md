@@ -2,7 +2,17 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** The quote linear program is sparse. All 40 SPX expiries are feasible. **Next:** SANOS at `eta = 0`.
+**Current state:** Linear SANOS (`eta = 0`, `omega = 0`) fits the SPX book inside every two-sided spread. **Next:** SANOS at `eta > 0`, with the market bar.
+
+## 2026-10-14 Library P3b: SANOS at eta = 0
+
+The call at a pillar is `sum q (K - x)+`. On a known two-point-free marginal (atoms at 0.5, 1 and 1.5) that formula and `SanosSurface.call` agree to `1e-12`.
+
+Heston mids, `v0 = 0.04`, `kappa = 1.5`, `theta = 0.04`, `xi = 0.3`, `rho = -0.5`, three expiries, nine strikes, cash half-spread 0.15. The linear program objective is under `1e-6` and every two-sided quote is inside the spread. After projection each weight vector is nonnegative, the mass is 1 and the mean is 1, each to `1e-12`. On a grid of seven maturities that are not pillars and eleven log-moneyness nodes, `check_surface` reports no calendar violation. The objective and the pre-projection quote prices from `highs` and from `highs-ds` agree to `1e-9`.
+
+SPX snapshot, 40 expiries, 8,973 quotes, `dx = 0.05`, `omega = 0`. HiGHS status optimal. Objective `1.752e-06`. Wall time 23.35 s. Projection L1 `1.978e-06`. `in_spread = 1`. The largest absolute residual is 0.669 half-spreads. The median is `3.39e-08` half-spreads. No expiry had its ATM total variance raised. Wing strikes used in the program: `K_min = 0.03193`, `K_max = 2.088`. The figure is `docs/figures/p3b_sanos_eta0.png`.
+
+**Hypothesis:** the gap between this `in_spread` and the raw SVI value 0.558 on the same file is the linear model's freedom to kink at the quoted strikes. The next specification is `eta` in `{0.0625, 0.25}` with the same in-spread rule. The size of the drop, if there is one, is the quantity P3c measures.
 
 ## 2026-10-14 Library P3a: sparse quote linear program
 

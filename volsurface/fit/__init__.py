@@ -2,6 +2,7 @@
 
 from volsurface.fit.heston import HestonFitter
 from volsurface.fit.sabr import SABRFitter
+from volsurface.fit.sanos import SanosFitter
 from volsurface.fit.svi import SVIFitter, fit_raw_svi
 
-__all__ = ["HestonFitter", "SABRFitter", "SVIFitter", "fit_raw_svi"]
+__all__ = ["HestonFitter", "SABRFitter", "SVIFitter", "SanosFitter", "fit_raw_svi"]

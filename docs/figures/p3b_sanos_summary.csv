@@ -1,0 +1,12 @@
+objective,1.752082634383379e-06
+in_spread,1.0
+wall_time,23.346509551000054
+projection_l1,1.977946680510312e-06
+n_quotes,8973
+n_expiries,40
+k_min,0.03193123567994635
+k_max,2.0880317116838203
+dx,0.05
+v_raised,[]
+solver_status,Optimization terminated successfully. (HiGHS Status 7: Optimal) objective=1.752083e-06 omega=calendar guaranteed
+median_abs_residual_spreads,3.389267284423114e-08
