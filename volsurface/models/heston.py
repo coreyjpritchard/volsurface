@@ -13,16 +13,20 @@ forward, so the same truncated interval leaves a larger cosine error on the
 call. Parity adds ``df (F - K)`` and uses ``E[F_T] = F``, which the
 characteristic function already satisfies (``phi(-i) = 1``).
 
-The cosine interval is ``c1 ± L sqrt(c2 + sqrt(c4))`` with ``L = 10``.
-Those cumulants are :meth:`Heston.cumulants`. A fourth cumulant that is
-not finite, or is negative, is the degree-8 stencil in round-off (the law
-is nearly Gaussian, or the maturity is too short for a float64 fourth
-derivative). The interval then uses ``half = 2 L sqrt(c2)``, which is
-wider than the Gaussian interval. A large positive ``c4`` is kept: Heston
-kurtosis above 80 is inside ``param_spec``, and dropping it narrows the
-grid. ``N`` starts from the width of that interval, at least 256, and
-doubles until two successive prices agree to ``1e-7`` or ``N`` reaches
-65536. Passing ``n_terms`` skips that and uses the given count.
+The cosine interval is ``c1 ± L sqrt(c2 + sqrt(c4))`` with ``L = 10``
+when the fourth cumulant is usable. Those cumulants are
+:meth:`Heston.cumulants`. The stencil step is ``f / sqrt(c2)``, with
+``f`` in ``{0.001, 0.002, 0.005}``, halved while ``phi(-i t)`` is not
+finite. When that set does not agree, a finer set ``{0.0005, 0.001, 0.002}``
+is tried. ``L`` then doubles, and ``N`` is chosen again, until two
+successive prices agree to ``1e-7`` or the next width would pass 160 or
+65536 terms. The price kept is the narrower of the two that agreed. If
+they never agree, the widest width whose last doubling of ``N`` moved the
+price by at most ``2.5e-4`` is kept: past that, the term cap, not the
+tail, is the error. A large positive ``c4`` is kept inside the formula.
+``N`` is at least 256 and doubles until successive prices agree or ``N``
+reaches 65536. Passing ``n_terms`` skips both adaptations and uses the
+given count at the given ``L``.
 
 ``simulate`` is Euler full truncation (Lord, Koekkoek and van Dijk 2010) on
 the caller's time grid. Draw order, one child of the seed for the whole run:
@@ -61,9 +65,19 @@ COS_N = 256
 _COS_N_MAX = 65_536
 # Successive cosine prices must agree by this much before N stops growing.
 _COS_AGREE = 1e-7
+# A wider L is accepted only when the last doubling of N moved the price by
+# at most this much. Beyond it, the 65536-term cap dominates the tail.
+_COS_N_STEP = 2.5e-4
 # Neighbouring stencil steps. c4 is used only when both agree.
 _C2_AGREE = 1e-3
 _C4_AGREE = 1e-3
+# Step = factor / sqrt(c2). 0.01 and wider leave the local expansion once
+# kurtosis is large, while phi(-i t) is still finite. 0.0005 is round-off
+# on ordinary maturities, so it is used only when the wider three disagree.
+_STEP_FACTORS = (0.001, 0.002, 0.005)
+_STEP_FACTORS_FINE = (0.0005, 0.001, 0.002)
+# When c4 is unusable, L doubles until prices agree or this cap is hit.
+_COS_L_MAX = 160.0
 
 
 def _spec() -> list[ParamSpec]:
@@ -133,7 +147,7 @@ class Heston:
 
         ``n_terms`` is ``N`` and ``truncation`` is ``L`` in section 14 of
         ``docs/DESIGN.md``. ``n_terms=None`` chooses ``N`` from the interval
-        and raises it until successive prices agree. ``L`` defaults to 10.
+        and raises ``L`` until successive prices agree. ``L`` defaults to 10.
         """
         v0 = self._variance(state)
         return _cos_cash(
@@ -170,10 +184,11 @@ class Heston:
 
         ``c2`` and ``c4`` are derivatives of the cumulant generating function
         ``K(t) = log E[exp(t X_T)] = log phi(-i t)`` at ``t = 0``. The step
-        is a fraction of ``sqrt(2 |c1|)``, which tracks the scale of ``X_T``.
-        A degree-8 fit is kept only when two neighbouring steps agree, and
-        the step is halved while ``phi(-i t)`` is not finite. ``c4`` is
-        ``nan`` when those steps disagree: the cosine interval then widens
+        is ``f / sqrt(c2)``. A first pass uses ``sqrt(-2 c1)`` as that scale,
+        and a second pass uses the ``c2`` the first pass kept. A degree-8 fit
+        is kept only when two neighbouring steps agree, and the step is halved
+        while ``phi(-i t)`` is not finite. ``c4`` is ``nan`` when those steps
+        disagree. The cosine price then raises ``L`` until the price settles,
         instead of trusting round-off. The protocol test checks the kept
         values against a second stencil and a central difference.
         """
@@ -291,17 +306,22 @@ def euler_price(
 
 
 def cos_interval(model: Heston, T: float, truncation: float = COS_L, *, state=None):
-    """``(a, b, c4_used)`` for the cosine grid.
+    """``(a, b, c4_used)`` for one truncation ``L``.
 
     ``c4_used`` is 0 when the fourth cumulant was unusable. The half-width
-    is then ``2 L sqrt(c2)``, wider than the Gaussian interval ``L sqrt(c2)``.
+    is then the Gaussian ``L sqrt(c2)``. :meth:`Heston.cos_price` still
+    doubles ``L`` until successive prices agree, with or without ``c4``.
     A finite positive ``c4`` is not capped.
     """
     c1, c2, c4 = model.cumulants(float(T), state=state)
-    c2_use = c2 if np.isfinite(c2) and c2 > 0.0 else 0.0
+    return _interval_from_cumulants(c1, c2, c4, truncation)
+
+
+def _interval_from_cumulants(c1: float, c2: float, c4: float, truncation: float):
+    c2_use = _variance_scale(c1, c2)
     c4_use = float(c4)
     if not np.isfinite(c4_use) or c4_use < 0.0:
-        half = float(truncation) * math.sqrt(c2_use) * 2.0
+        half = float(truncation) * math.sqrt(c2_use)
         c4_use = 0.0
     else:
         half = float(truncation) * math.sqrt(c2_use + math.sqrt(c4_use))
@@ -310,24 +330,68 @@ def cos_interval(model: Heston, T: float, truncation: float = COS_L, *, state=No
     return float(c1) - half, float(c1) + half, c4_use
 
 
+def _variance_scale(c1: float, c2: float) -> float:
+    """Positive stand-in for ``c2`` when the stencil did not return one."""
+    if np.isfinite(c2) and c2 > 0.0:
+        return float(c2)
+    proxy = -2.0 * float(c1)
+    if proxy > 0.0:
+        return proxy
+    return 1e-8
+
+
 def _higher_cumulants(model: Heston, T: float, v0: float, c1: float) -> tuple[float, float]:
-    """``(c2, c4)`` from degree-8 fits whose step scales with ``X_T``.
+    """``(c2, c4)`` from degree-8 fits with step ``f / sqrt(c2)``.
 
     ``c4`` is ``nan`` when neighbouring steps do not agree. ``c2`` is still
     returned when those steps agree on the second derivative alone.
     """
-    scale = math.sqrt(max(2.0 * abs(c1), 1e-18))
+    scale = math.sqrt(max(-2.0 * float(c1), 1e-18))
+    c2, c4 = _stencil_passes(model, T, v0, scale, _STEP_FACTORS)
+    if np.isfinite(c2) and c2 > 0.0 and not (np.isfinite(c4) and c4 > 0.0):
+        fine_c2, fine_c4 = _stencil_at_scale(model, T, v0, math.sqrt(c2), _STEP_FACTORS_FINE)
+        if np.isfinite(fine_c4) and fine_c4 > 0.0:
+            c4 = fine_c4
+            if np.isfinite(fine_c2) and fine_c2 > 0.0:
+                c2 = fine_c2
+    return c2, c4
+
+
+def _stencil_passes(model, T, v0, scale, factors) -> tuple[float, float]:
+    c2, c4 = _stencil_at_scale(model, T, v0, scale, factors)
+    if np.isfinite(c2) and c2 > 0.0:
+        refined_c2, refined_c4 = _stencil_at_scale(model, T, v0, math.sqrt(c2), factors)
+        if np.isfinite(refined_c2) and refined_c2 > 0.0:
+            return refined_c2, refined_c4
+    return c2, c4
+
+
+def _stencil_at_scale(
+    model: Heston, T: float, v0: float, scale: float, factors
+) -> tuple[float, float]:
     rows: list[tuple[float, float]] = []
-    for factor in (0.02, 0.05, 0.1, 0.2, 0.4):
-        step = factor * scale
+    seen: list[float] = []
+    for factor in factors:
+        step = factor / scale
         fitted = None
         for _ in range(24):
             fitted = _cgf_poly(model, T, v0, step)
-            if fitted is not None:
+            if fitted is not None and fitted[0] > 0.0:
                 break
+            fitted = None
             step *= 0.5
-        if fitted is not None:
-            rows.append(fitted)
+        if fitted is None:
+            continue
+        # Halving can land on a step already used. That pair is not a check.
+        if any(abs(step - prev) <= 1e-12 * max(step, prev, 1.0) for prev in seen):
+            continue
+        seen.append(step)
+        rows.append(fitted)
+    return _agreeing_cumulants(rows)
+
+
+def _agreeing_cumulants(rows: list[tuple[float, float]]) -> tuple[float, float]:
+    """Keep the finest pair that agrees. A coarser pair must not replace it."""
     c2_kept = float("nan")
     c4_kept = float("nan")
     for left, right in zip(rows, rows[1:], strict=False):
@@ -337,13 +401,14 @@ def _higher_cumulants(model: Heston, T: float, v0: float, c1: float) -> tuple[fl
             continue
         if abs(c2_left - c2_right) > _C2_AGREE * max(c2_left, c2_right):
             continue
-        c2_kept = c2_right
-        if c4_left <= 0.0 or c4_right <= 0.0:
+        if not np.isfinite(c2_kept):
+            c2_kept = c2_left
+        if np.isfinite(c4_kept) or c4_left <= 0.0 or c4_right <= 0.0:
             continue
         if abs(c4_left - c4_right) <= _C4_AGREE * max(c4_left, c4_right):
-            c4_kept = c4_right
+            c4_kept = c4_left
     if not np.isfinite(c2_kept):
-        for c2_row, _c4_row in reversed(rows):
+        for c2_row, _c4_row in rows:
             if np.isfinite(c2_row) and c2_row > 0.0:
                 c2_kept = c2_row
                 break
@@ -388,23 +453,62 @@ def _cos_cash(model, F, K, T, df, kind, v0, *, n_terms: int | None, truncation: 
         value = _intrinsic(F, K_flat, df, kind)
         return value.reshape(K_in.shape)
     state = {"v": np.array(v0)}
-    left, right, _c4 = cos_interval(model, T, truncation, state=state)
-    _c1, c2, _c4_raw = model.cumulants(float(T), state=state)
+    c1, c2, c4 = model.cumulants(float(T), state=state)
+    scale = _variance_scale(c1, c2)
     if n_terms is not None:
-        chosen = _cos_at(model, F, K_flat, T, df, kind, state, left, right, int(n_terms))
+        left, right, _used = _interval_from_cumulants(c1, c2, c4, truncation)
+        chosen, _step = _adapt_n(
+            model, F, K_flat, T, df, kind, state, left, right, scale, n_terms=n_terms
+        )
         return chosen.reshape(K_in.shape)
-    count = _n_from_width(left, right, c2 if np.isfinite(c2) else 0.0)
+    # Double L until the price stops moving. Keep the narrower of two widths
+    # that agree. If the next width is unresolved, keep the widest one whose
+    # last doubling of N still moved the price by at most _COS_N_STEP.
+    level = float(truncation)
+    previous = None
+    kept = None
+    while True:
+        left, right, _used = _interval_from_cumulants(c1, c2, c4, level)
+        chosen, last_step = _adapt_n(
+            model, F, K_flat, T, df, kind, state, left, right, scale, n_terms=None
+        )
+        if previous is not None and float(np.max(np.abs(chosen - previous))) <= _COS_AGREE:
+            return np.asarray(previous, dtype=float).reshape(K_in.shape)
+        if kept is None or last_step <= _COS_N_STEP:
+            kept = chosen
+        next_level = level * 2.0
+        if next_level > _COS_L_MAX or _width_unresolved(c1, c2, c4, next_level, scale):
+            return np.asarray(kept, dtype=float).reshape(K_in.shape)
+        previous = chosen
+        level = next_level
+
+
+def _width_unresolved(c1: float, c2: float, c4: float, truncation: float, scale: float) -> bool:
+    left, right, _used = _interval_from_cumulants(c1, c2, c4, truncation)
+    return _n_from_width(left, right, scale) >= _COS_N_MAX
+
+
+def _adapt_n(model, F, K_flat, T, df, kind, state, left, right, scale, *, n_terms: int | None):
+    """Price, and how far the last doubling of ``N`` moved it."""
+    if n_terms is not None:
+        price = _cos_at(model, F, K_flat, T, df, kind, state, left, right, int(n_terms))
+        return price, 0.0
+    count = _n_from_width(left, right, scale)
     previous = None
     chosen = None
+    # Inf until a second N is priced. A single N on the cap is not converged.
+    last_step = math.inf
     while True:
         chosen = _cos_at(model, F, K_flat, T, df, kind, state, left, right, count)
-        if previous is not None and float(np.max(np.abs(chosen - previous))) <= _COS_AGREE:
-            break
+        if previous is not None:
+            last_step = float(np.max(np.abs(chosen - previous)))
+            if last_step <= _COS_AGREE:
+                break
         if count >= _COS_N_MAX:
             break
         previous = chosen
         count *= 2
-    return np.asarray(chosen, dtype=float).reshape(K_in.shape)
+    return chosen, last_step
 
 
 def _cos_at(model, F, K_flat, T, df, kind, state, left, right, n_terms: int):

@@ -72,12 +72,12 @@ def test_cos_matches_lewis_on_a_second_feller_violation():
 
 
 def test_cos_converges_to_black_scholes_as_xi_vanishes():
-    """v0 = theta and xi = 1e-4. The fourth-cumulant stencil does not agree.
+    """v0 = theta and xi = 1e-4. The fourth cumulant is round-off.
 
-    The interval then uses twice the Gaussian half-width. The remaining gap
-    against Black is the vol-of-vol, the same size for Lewis and for COS.
-    A smaller xi is the same widened interval. The price gap, not the
-    stencil, is what this test checks, and it is already inside 5e-4 here.
+    L is raised until the cosine price settles. The remaining gap against
+    Black is the vol-of-vol, the same size for Lewis and for COS. The price
+    gap, not the stencil, is what this test checks, and it is already inside
+    5e-4 here.
     """
     theta = 0.04
     model = Heston(v0=theta, kappa=1.5, theta=theta, xi=1e-4, rho=-0.5)
@@ -157,11 +157,14 @@ def test_euler_matches_lewis_by_the_z_rule():
 
 
 def test_euler_on_fang_oosterlee_parameters_after_the_measured_bias():
-    """Feller ratio 0.38. 8,000 paths, 64 steps, one strike per seed.
+    """Smoke test. Feller ratio 0.38. 8,000 paths, 64 steps, one strike per seed.
 
     The budget is the mean Euler price minus Lewis at 1,000,000 paths,
     64 steps, seeds 0, 1, 2 and 3, on strikes 90, 100 and 110. Those four
     runs had sample standard deviations 0.00672, 0.00684 and 0.00372.
+    An 8,000-path standard error is several times that budget, and the
+    z-rule at n = 24 allows a mean z of 0.71, so this test does not have
+    power to detect the budget. It fails if the scheme is grossly wrong.
     The z-rule is applied to (estimate - Lewis - budget). Nodes do not
     share paths.
     """
@@ -213,6 +216,91 @@ def test_cos_matches_lewis_at_high_kurtosis():
             cos = model.cos_price(100.0, strike, maturity, kind="put")
             gap = float(np.max(np.abs(lewis - cos)))
             assert gap < 1e-5, (model.xi, maturity, gap)
+
+
+def test_short_maturity_fourth_cumulant_stays_finite():
+    """The step is f / sqrt(c2), so a short maturity does not shrink it.
+
+    On the Fang and Oosterlee parameters, T = 1 day, T = 0.02 and one week
+    each return a positive fourth cumulant.
+    """
+    model = Heston(**FO)
+    for maturity in (1.0 / 365.0, 0.02, 7.0 / 365.0):
+        _c1, c2, c4 = model.cumulants(maturity)
+        assert c2 > 0.0
+        assert np.isfinite(c4) and c4 > 0.0, (maturity, c4)
+
+
+def test_cos_matches_lewis_on_random_draws_including_high_kurtosis():
+    """Seed 0 over a low-v0, high-xi box, plus three fixed heavy tails.
+
+    Puts, F = 100. The fixed sets are the kurtosis-1049 corner, a one-day
+    slice with xi = 5, and a T = 1 draw with kurtosis about 24,000. The
+    random sample covers one day through one year. Tolerance 1e-4 is the
+    cash gap. On this seed the largest random gap is 8.6e-6.
+    """
+    corner = Heston(v0=6.582e-4, kappa=2.1, theta=0.00999, xi=3.56, rho=-0.54)
+    one_day = Heston(v0=1e-4, kappa=2.0, theta=0.01, xi=5.0, rho=-0.8)
+    heavy = Heston(
+        v0=1.0235984745304476e-4,
+        kappa=0.8396638361927103,
+        theta=7.681046417007965e-4,
+        xi=3.5750252249003682,
+        rho=0.2599077374058081,
+    )
+    _check_put_gap(corner, 0.25, 1e-4)
+    _check_put_gap(one_day, 1.0 / 365.0, 1e-4)
+    _check_put_gap(heavy, 1.0, 1e-4)
+    assert _kurtosis(corner, 0.25) > 1000.0
+    assert _kurtosis(one_day, 1.0 / 365.0) > 1000.0
+    assert _kurtosis(heavy, 1.0) > 10_000.0
+
+    rng = np.random.default_rng(0)
+    n_draws = 12
+
+    def _log_uniform(low, high):
+        return np.exp(rng.uniform(np.log(low), np.log(high), n_draws))
+
+    v0 = _log_uniform(1e-4, 0.5)
+    kappa = _log_uniform(0.2, 8.0)
+    theta = _log_uniform(1e-4, 0.5)
+    xi = _log_uniform(0.05, 5.0)
+    rho = rng.uniform(-0.95, 0.95, n_draws)
+    maturities = (1.0 / 365.0, 7.0 / 365.0, 0.25, 1.0)
+    saw_short = False
+    saw_heavy = False
+    for i in range(n_draws):
+        model = Heston(
+            v0=float(v0[i]),
+            kappa=float(kappa[i]),
+            theta=float(theta[i]),
+            xi=float(xi[i]),
+            rho=float(rho[i]),
+        )
+        for maturity in maturities:
+            if maturity <= 7.0 / 365.0:
+                saw_short = True
+            kurtosis = _kurtosis(model, maturity)
+            if kurtosis is not None and kurtosis > 500.0:
+                saw_heavy = True
+            _check_put_gap(model, maturity, 1e-4)
+    assert saw_short
+    assert saw_heavy
+
+
+def _kurtosis(model: Heston, maturity: float) -> float | None:
+    _c1, c2, c4 = model.cumulants(maturity)
+    if not (np.isfinite(c4) and c2 > 0.0 and c4 > 0.0):
+        return None
+    return float(c4 / c2**2)
+
+
+def _check_put_gap(model: Heston, maturity: float, tolerance: float) -> None:
+    strike = 100.0 * np.exp(np.array([-0.5, -0.086, 0.0, 0.3]))
+    lewis = model.price(100.0, strike, maturity, kind="put")
+    cos = model.cos_price(100.0, strike, maturity, kind="put")
+    gap = float(np.max(np.abs(lewis - cos)))
+    assert gap < tolerance, (model.v0, model.xi, maturity, gap)
 
 
 def test_fitter_refuses_american_exercise():

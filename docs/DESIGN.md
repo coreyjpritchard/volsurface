@@ -679,24 +679,39 @@ accurate for the call. Parity uses `E[F_T] = F`, which the characteristic
 function satisfies, and does not add a second truncation.
 
 The interval is `[c1 - L sqrt(c2 + sqrt(c4)), c1 + L sqrt(c2 + sqrt(c4))]`
-with `L = 10`. `c1`, `c2`, `c4` are `cumulants`. The step of the degree-8
-stencil scales with `sqrt(2 |c1|)`, and `c4` is kept only when two
-neighbouring steps agree. A non-finite or negative `c4` is round-off, not
-a thin tail: the half-width is then `2 L sqrt(c2)`, wider than the
-Gaussian interval. A large positive `c4` is kept. Kurtosis above 80 occurs
-inside `param_spec`, and replacing it with 0 narrows the grid. `N` is at
-least 256 and grows with `(b - a) / sqrt(c2)`, then doubles until
-successive prices agree to `1e-7`, with a cap of 65536. Puts are
-integrated with the Fang and Oosterlee `chi` and `psi` weights. `k = 0`
-in the sum is halved.
+with `L = 10` when `c4` is usable. `c1` is the integrated expected
+variance. `c2` and `c4` come from a degree-8 fit of `log phi(-i t)`. The
+step is `f / sqrt(c2)` with `f` in `0.001`, `0.002` and `0.005`, halved
+while `phi(-i t)` is not finite. A first pass uses `sqrt(-2 c1)` as the
+scale and a second pass uses the `c2` that pass kept. `c4` is kept only
+when two neighbouring steps agree to `1e-3` relative, and the finest such
+pair is the one kept. Steps of `0.02 / sqrt(c2)` and wider return a
+negative `c4` on a draw with kurtosis near 1000, so they are not used.
+When those three factors do not agree, the fit is repeated at `0.0005`,
+`0.001` and `0.002`. On the Fang and Oosterlee parameters the kept values
+remain `c2 = 0.031571152013` and `c4 = 0.007486782` to the protocol
+tolerances, and `c4` is now finite at one day and at one week.
 
-Lewis quadrature is the reference inside ordinary parameters. At
-`xi = 5`, `kappa = 1`, `v0 = theta = 0.04`, `rho = -0.7` and `T = 1`
-the at-the-money put agrees with a 40-digit integral to `4e-10`. The
-put at `k = -1` is `0.166864108` against `0.166861460`, a gap of
-`2.65e-6`. That is the wing, not the at-the-money reference. The cosine
-test at these parameters still asks for `1e-5` against the library
-Lewis price.
+`L` then doubles and `N` is chosen again until two successive prices agree
+to `1e-7`, or the next width would pass `L = 160` or 65536 terms. The
+price kept is the narrower of the two that agreed. If they never agree,
+the widest width whose last doubling of `N` moved the price by at most
+`2.5e-4` is kept. A fixed multiple of `sqrt(c2)` is not that test.
+Kurtosis near 1000 still leaves a tail outside `L = 10`, so the doubling
+runs when `c4` is usable as well. A large positive `c4` stays inside the
+formula. `N` is at least 256 and grows with `(b - a) / sqrt(c2)`. Puts
+are integrated with the Fang and Oosterlee `chi` and `psi` weights.
+`k = 0` in the sum is halved.
+
+The cosine price is checked against the library Lewis price. On the
+Fang and Oosterlee at-the-money one-year call the two differ by `2.2e-8`.
+Puts at the kurtosis-1049 corner (`v0 = 6.582e-4`, `kappa = 2.1`,
+`theta = 0.00999`, `xi = 3.56`, `rho = -0.54`, `T = 0.25`) differ by
+`1.0e-8`. A one-day slice with `v0 = 1e-4` and `xi = 5` (kurtosis about
+1095) differs by `1.1e-5`. A `T = 1` draw with kurtosis about 24,000
+differs by `7.3e-6`. A seed-0 sample of 12 draws and four maturities, 48
+prices, has largest gap `8.6e-6`. `c4` is non-finite on 8 of those 48.
+The largest kurtosis in that sample is about 6700.
 
 `Heston.simulate` is Euler full truncation (Lord, Koekkoek and van Dijk
 2010). The variance used in the drift and the diffusion is `max(v, 0)`.

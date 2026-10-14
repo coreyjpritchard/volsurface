@@ -17,16 +17,22 @@ from one week to two years, the largest |Lewis minus COS| on the heatmap
 is `2.2e-8`. The Feller
 ratio there is `0.38`. A second violating set (ratio `0.32`) stays within
 `1e-6`. With `v0 = theta` and `xi = 1e-4` the fourth cumulant is round-off,
-the interval widens to twice the Gaussian half-width, and both prices sit
-within `5e-4` of Black.
+`L` is raised until the price settles, and both prices sit within `5e-4`
+of Black.
 
-A fourth cumulant above `80 c2^2` is kept. Puts at `F = 100` and `k` in
+The stencil step is `f / sqrt(c2)`, not a fraction of `sqrt(c2)`. On the
+Fang and Oosterlee set, `c4` is finite at one day and at one week (one-week
+kurtosis `0.572`). A fourth cumulant above `80 c2^2` is kept, and `L`
+still doubles until successive prices agree, because kurtosis near 1000
+leaves a tail outside `L = 10`. Puts at `F = 100` and `k` in
 `{-1, -0.4, 0, 0.3}`: largest |Lewis minus COS| is `2.5e-7` at `xi = 1.5`,
 `kappa = 0.5`, `rho = -0.9`, `T = 0.25`, and `9.0e-8` at `T = 1`. At
 `xi = 5`, `kappa = 1`, `rho = -0.7` it is `6.2e-6` at `T = 0.25` and
-`5.6e-6` at `T = 1`. On that set the library Lewis put at `k = -1`,
-`T = 1` is `0.166864108` against a 40-digit integral `0.166861460`
-(gap `2.65e-6`). The at-the-money put agrees to `4e-10`.
+`5.6e-6` at `T = 1`. The corner `v0 = 6.582e-4`, `kappa = 2.1`,
+`theta = 0.00999`, `xi = 3.56`, `rho = -0.54`, `T = 0.25` has kurtosis
+1049 and a put gap of `1.0e-8`. A one-day slice with `v0 = 1e-4` and
+`xi = 5` (kurtosis 1095) has a gap of `1.1e-5`. A `T = 1` draw with
+kurtosis about 24,000 has a gap of `7.3e-6`.
 
 Euler full truncation, 8,000 paths, 64 steps, 24 independent nodes (six
 strikes, four maturities). The z-rule bound at `n = 24` is max |z| below
@@ -39,7 +45,9 @@ errors of about `0.17`, `0.13`, `0.10`. On the Fang and Oosterlee
 parameters (Feller ratio `0.38`), 64 steps, the bias at strikes 90, 100
 and 110 averaged over four runs of 1,000,000 paths (seeds 0 to 3) is
 `+0.0159`, `+0.0241` and `+0.0205` (sample sd `0.0067`, `0.0068`,
-`0.0037`). The z-rule test subtracts that budget.
+`0.0037`). The z-rule test subtracts that budget. The budget is smaller
+than the 8,000-path standard error, and the bound on the mean z is 0.71,
+so the test does not have power to detect it. It is a smoke test.
 
 Synthetic recovery, four starts, vega-weighted prices: parameters return to
 better than `1e-8` and the largest price residual is `9.6e-12`. Wall time
