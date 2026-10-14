@@ -108,13 +108,13 @@ def test_registry_and_entry_point_build_black_scholes():
 def test_market_data_from_committed_snapshot():
     from volsurface import chains
 
-    chain = chains.load_snapshot(chains.latest_snapshot("SPY"))
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     assert data.day_count == "ACT/365"
-    assert set(data.quotes["exercise"]) == {"american"}
-    assert set(data.quotes["settlement"]) == {"physical"}
-    # Bid and ask are absent on this file: it was built from last trades.
-    assert data.quotes["bid"].isna().all()
+    assert set(data.quotes["exercise"]) == {"european"}
+    assert set(data.quotes["settlement"]) == {"cash"}
+    assert data.quotes["bid"].notna().all()
+    assert (data.quotes["bid"] > 0).all()
     row = data.quotes.iloc[len(data.quotes) // 2]
     assert data.F(row["T"]) == pytest.approx(row["F"], rel=1e-10)
     assert data.df(np.array([row["T"]]))[0] == pytest.approx(row["df"], rel=1e-10)

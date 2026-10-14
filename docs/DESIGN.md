@@ -379,13 +379,15 @@ dominate the shorter one's, again up to a slack. A positive slack is kind
 `"calendar"`.
 
 Quotes with a missing bid or ask are dropped from a `"bidask"` check. The
-note records how many were dropped. The committed SPY snapshot has no
-bid or ask (it was taken from last trades, and SPY options are American),
-so a bid-ask check on that file has nothing to constrain. **Hypothesis:**
-violations of a mid check on that file mix three effects: stale last
-trades, the American early-exercise premium, and any genuine butterfly
-or calendar arbitrage in the marks. The report is not evidence of a
-tradable arbitrage.
+note records how many were dropped. The committed SPX file is two-sided
+mids on SPXW (see section 10), so a bid-ask check has quotes to constrain.
+Checked alone, the two shortest expiries are feasible together: 278 quotes,
+objective 0, `ok` true. The first 24 expiries together, 4,398 quotes, are
+also feasible, in 9.0 seconds. The program on the first 32, and on all 40,
+was killed at a 15.6 GB memory limit before HiGHS returned. That is a limit
+of this run, not a measured arbitrage. **Hypothesis:** a slack on this book
+would be a failure of the quoted mids to sit on one martingale, or a stale
+pre-open quote. It would not be an American early-exercise premium.
 
 `ok` is True when every slack is within `tol.price` and at least one quote
 entered the program. `n_checked` is that quote count. When every quote was
@@ -588,9 +590,12 @@ Exercise and settlement are not in the parquet file. The loader fills
 requires the caller to pass them. **Hypothesis:** that mapping matches the
 contracts. It is an assumption of the loader, not a field we observed.
 
-The committed file `data/snapshots/SPY_2026-10-07.parquet` has last-trade
-prices and empty bid and ask. Surface demos in Phase 1 use it and say so.
-SANOS fits, later, need European quotes.
+The committed file is `data/snapshots/SPX_2026-10-14.parquet`. It is SPXW
+only, PM-settled, two-sided mids from CBOE's delayed quotes. Forwards and
+discount factors come from put-call parity at each expiry. The note
+`docs/notes/spx_not_spy.md` says why this replaced the SPY last-trade file.
+Surface demos use this file. SANOS fits, later, want European quotes, which
+is what this file is.
 
 ## 11. Tests that Phase 1 must keep
 

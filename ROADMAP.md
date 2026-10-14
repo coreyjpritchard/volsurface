@@ -4,9 +4,9 @@ One question per session. Levels: 0 play, 1 reproduce, 2 implement, 3 extend (se
 `CLAUDE.md`).
 
 - [x] **00 The smile is the model's fingerprint** (level 0). Heston surface with sliders,
-  Black-Scholes for contrast, SPY overlay. The market's short-dated skew follows a power
+  Black-Scholes for contrast, SPX overlay. The market's short-dated skew follows a power
   law that Heston cannot match at both ends.
-- [ ] **01 Fit SVI to the SPY surface** (level 1). Fit raw SVI per expiry (Gatheral 2004),
+- [ ] **01 Fit SVI to the SPX surface** (level 1). Fit raw SVI per expiry (Gatheral 2004),
   then check for butterfly arbitrage (negative density) and calendar arbitrage (total
   variance decreasing in $T$), as in Gatheral and Jacquier (2014), *Arbitrage-free SVI
   volatility surfaces*.
@@ -16,9 +16,9 @@ One question per session. Levels: 0 play, 1 reproduce, 2 implement, 3 extend (se
   `Model` interface; per-expiry fits and what the fitted parameters do across maturities.
 - [ ] **04 Rough Bergomi by Monte Carlo** (level 1 to 2). Hybrid scheme (Bennedsen, Lunde,
   Pakkanen 2017) behind the same interface. Reproduce the ATM skew term structure against
-  maturity from Bayer, Friz and Gatheral (2016) and compare it with the SPY power law.
+  maturity from Bayer, Friz and Gatheral (2016) and compare it with the SPX power law.
 - [ ] **05 Live IBKR chain and a daily snapshot cron** (level 0 to 1). Run the IBKR
-  backend against a gateway, snapshot SPY each day at the close, and watch the skew
+  backend against a gateway, snapshot SPX each day at the close, and watch the skew
   exponent move.
 - [ ] **06 Level 3 question** (level 3). Proposal: is the short-end skew exponent stable from
   day to day, and does it move with the level of volatility? Rough volatility with a fixed

@@ -221,24 +221,39 @@ def test_quote_lp_calendar_slack_equals_the_price_gap():
     assert at_one["magnitude"].sum() == pytest.approx(0.25, abs=1e-4)
 
 
+def test_quote_check_with_no_bids_evaluates_nothing():
+    """A book with no two-sided market is not a pass and not a failure."""
+    row = _quote_row(0.5, 1.0, np.nan, np.nan)
+    row["price"] = 0.1
+    report = check_quotes(_market([row]), side="bidask")
+    assert report.ok is None
+    assert report.n_checked == 0
+    assert report.violations.empty
+
+
 def test_committed_snapshot_runs_the_checker():
-    """The SPY file has last trades and no bid or ask. The check still runs."""
+    """The two shortest SPX expiries are two-sided and jointly feasible."""
     from volsurface import chains
     from volsurface.surface.linear import linear_surface
     from volsurface.surface.spline import spline_surface
 
-    chain = chains.load_snapshot(chains.latest_snapshot("SPY"))
+    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
-    quotes = check_quotes(data, side="bidask")
-    # Nothing was evaluated: ok is None, not a pass and not a failure.
-    assert quotes.ok is None
-    assert quotes.n_checked == 0
-    assert "Dropped" in quotes.note or "dropped" in quotes.note
-    assert quotes.violations.empty
-
-    # Two expiries are enough to exercise calendar and the real strike grid.
     expiries = list(data.quotes.groupby("expiry", sort=True).groups)[:2]
     subset = data.quotes[data.quotes["expiry"].isin(expiries)].copy()
+    book = MarketData(
+        asof=data.asof,
+        quotes=subset,
+        F=data.F,
+        df=data.df,
+        F_err=data.F_err,
+        day_count=data.day_count,
+    )
+    quotes = check_quotes(book, side="bidask")
+    assert quotes.ok is True
+    assert quotes.n_checked == 278
+    assert quotes.violations.empty
+    assert "Dropped 0" in quotes.note
     linear = linear_surface(subset, Curves(data.F, data.df))
     spline = spline_surface(subset, Curves(data.F, data.df))
     k = np.linspace(subset["k"].quantile(0.1), subset["k"].quantile(0.9), 11)

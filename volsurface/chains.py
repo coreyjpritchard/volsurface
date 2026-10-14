@@ -3,7 +3,7 @@
 Every backend returns the same tidy table, one row per option, with these columns:
 
 =================  ==========================================================================
-underlying         ticker, e.g. ``"SPY"``
+underlying         ticker, e.g. ``"SPX"``
 quote_time         UTC timestamp at which the prices are valid
 spot               underlying price at ``quote_time``
 expiry             expiry date (options expire at 16:00 New York time on this date)
@@ -17,7 +17,7 @@ price              the price used downstream: ``mid`` if available, else ``last`
 price_source       ``"mid"`` or ``"last"``
 volume             contracts traded in the session (NaN if absent)
 open_interest      open interest (NaN if absent)
-source             ``"yfinance"`` or ``"ibkr"``
+source             ``"yfinance"``, ``"ibkr"`` or ``"cboe"``
 rate               continuously compounded short rate at ``quote_time`` (NaN if unknown)
 =================  ==========================================================================
 
@@ -28,9 +28,10 @@ such a snapshot is noisier than one taken from live quotes.
 
 ``market_implied_vols`` infers the forward and discount factor per expiry from put-call
 parity, ``C - P = df * (F - K)``, by regressing ``C - P`` on ``K`` near the money, and then
-inverts out-of-the-money prices with :func:`volsurface.bs.implied_vol`. SPY options are
-American; near the money and away from dividend dates the early exercise premium is small,
-and using out-of-the-money options keeps it out of the implied vols.
+inverts out-of-the-money prices with :func:`volsurface.bs.implied_vol`. The committed
+chain is SPXW, which is European and cash-settled, so that regression is the forward
+and the discount factor. No dividend yield is estimated. An explicit ``rate`` still
+replaces the discount factor with ``exp(-r T)``; see :func:`market_implied_vols`.
 
 The IBKR backend is the only code in the package that talks to Interactive Brokers. It
 reads ``IB_HOST``, ``IB_PORT`` and ``IB_CLIENT_ID`` from the environment or from a ``.env``
@@ -130,11 +131,23 @@ def tidy(
 # %% Backend 1: yfinance
 
 
-def fetch_yfinance(symbol: str = "SPY", max_years: float = 1.0) -> pd.DataFrame:
-    """Fetch every expiry up to ``max_years`` from Yahoo Finance in the tidy schema."""
+def _yahoo_symbol(symbol: str) -> str:
+    """Yahoo's ticker. The index symbols are ``^SPX`` and ``^XSP``, not the root."""
+    if symbol.upper() in {"SPX", "XSP", "VIX"}:
+        return "^" + symbol.upper()
+    return symbol
+
+
+def fetch_yfinance(symbol: str = "SPX", max_years: float = 1.0) -> pd.DataFrame:
+    """Fetch every expiry up to ``max_years`` from Yahoo Finance in the tidy schema.
+
+    For ``SPX`` only contracts whose symbol starts with ``SPXW`` are kept, so the
+    AM-settled monthly root is not mixed with the PM-settled series. ``rate`` is
+    left NaN. Parity then supplies the forward and the discount factor.
+    """
     import yfinance as yf
 
-    ticker = yf.Ticker(symbol)
+    ticker = yf.Ticker(_yahoo_symbol(symbol))
     now = pd.Timestamp.now(tz="UTC")
     expiries = [
         d for d in (dt.date.fromisoformat(s) for s in ticker.options)
@@ -159,12 +172,17 @@ def fetch_yfinance(symbol: str = "SPY", max_years: float = 1.0) -> pd.DataFrame:
                         "last_trade": pd.to_datetime(table["lastTradeDate"], utc=True),
                         "volume": table["volume"],
                         "open_interest": table["openInterest"],
+                        "contract": table["contractSymbol"],
                     }
                 )
             )
     raw = pd.concat(frames, ignore_index=True)
+    if symbol.upper() == "SPX" and "contract" in raw:
+        # Yahoo lists the AM-settled SPX root and the PM-settled SPXW root on the
+        # same calendar day. Keep SPXW so one expiry is one settlement.
+        raw = raw[raw["contract"].astype(str).str.startswith("SPXW")]
 
-    quoted = float(((raw["bid"] > 0) & (raw["ask"] > 0)).mean())
+    quoted = float(((raw["bid"] > 0) & (raw["ask"] > 0)).mean()) if len(raw) else 0.0
     state = underlying_info.get("marketState")
     live = state == "REGULAR" if state else quoted > 0.5
     if live:
@@ -181,25 +199,11 @@ def fetch_yfinance(symbol: str = "SPY", max_years: float = 1.0) -> pd.DataFrame:
         session_start = quote_time.tz_convert(NEW_YORK).normalize().tz_convert("UTC")
         raw = raw[raw["last_trade"] >= session_start]
     return tidy(raw, underlying=symbol, quote_time=quote_time, spot=spot, source="yfinance",
-                rate=_tbill_rate(), allow_last=not live)
+                rate=float("nan"), allow_last=not live)
 
 
 def _last_close(ticker) -> float:
     return float(ticker.history(period="5d")["Close"].iloc[-1])
-
-
-def _tbill_rate() -> float:
-    """13-week US Treasury bill rate (Yahoo ``^IRX``), continuously compounded.
-
-    ``^IRX`` quotes the discount yield ``d`` in percent: price = 1 - d * 91 / 360.
-    """
-    import yfinance as yf
-
-    try:
-        d = float(yf.Ticker("^IRX").history(period="5d")["Close"].iloc[-1]) / 100.0
-    except Exception:  # network or schema failure: fall back to the parity estimate
-        return float("nan")
-    return float(-np.log(1.0 - d * 91.0 / 360.0) / (91.0 / 365.0))
 
 
 # %% Backend 2: Interactive Brokers (ib_async)
@@ -248,12 +252,16 @@ def _chunks(items: list, size: int) -> Iterable[list]:
 
 
 def fetch_ibkr(
-    symbol: str = "SPY",
+    symbol: str,
     max_years: float = 1.0,
     moneyness: tuple[float, float] = (0.5, 1.3),
     batch: int = 90,
 ) -> pd.DataFrame:
-    """Fetch the option chain from a running TWS or IB Gateway in the tidy schema.
+    """Fetch a stock option chain from a running TWS or IB Gateway in the tidy schema.
+
+    The qualifier is a stock on SMART. SPX and XSP are indexes, so this function
+    does not fetch them. The committed SPX chain is the CBOE delayed file built
+    by ``scripts/build_cboe_spx_snapshot.py``.
 
     Steps: qualify the stock, read its price, list expiries and strikes with
     ``reqSecDefOptParams``, qualify every option contract (strikes do not exist for every
@@ -261,6 +269,11 @@ def fetch_ibkr(
     the 100 simultaneous market data lines limit. ``IB_MARKET_DATA_TYPE`` selects live (1),
     frozen (2), delayed (3) or delayed frozen (4) data; the default is 1.
     """
+    if symbol.upper() in {"SPX", "XSP", "VIX"}:
+        raise ValueError(
+            f"{symbol} is an index. fetch_ibkr qualifies a stock. "
+            "The committed SPX chain is scripts/build_cboe_spx_snapshot.py."
+        )
     from ib_async import IB, Option, Stock
 
     host, port, client_id = ib_settings()
@@ -342,7 +355,7 @@ def load_snapshot(path: str | Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def latest_snapshot(underlying: str = "SPY", directory: Path = SNAPSHOT_DIR) -> Path:
+def latest_snapshot(underlying: str = "SPX", directory: Path = SNAPSHOT_DIR) -> Path:
     paths = sorted(Path(directory).glob(f"{underlying}_*.parquet"))
     if not paths:
         raise FileNotFoundError(f"no {underlying} snapshot in {directory}")
@@ -381,14 +394,16 @@ def market_implied_vols(snapshot: pd.DataFrame, n_atm: int = 8,
     Puts are used for ``K < F`` and calls for ``K >= F``. Expiries where parity cannot be
     fitted (fewer than two strikes with both a call and a put) are dropped.
 
-    Each expiry gets a parity regression of ``C - P`` on ``K`` (:func:`infer_forward`). The
-    regression pins down where ``C - P`` crosses zero, so ``F`` is well determined, but the
-    slope ``-df`` is not: SPY puts are American and last trade prices are not synchronous,
-    and both tilt the line. So the discount factors come from one continuously compounded
-    rate, ``df_i = exp(-r T_i)``, taken from (in order) the ``rate`` argument, the
-    snapshot's ``rate`` column, or a least squares fit of ``-log(df_i) = r T_i`` to the
-    regression slopes. Each ``F_i`` is then re-estimated as the median of
-    ``K + (C - P) / df_i`` over the near-the-money strikes.
+    Each expiry keeps the parity regression of ``C - P`` on ``K``
+    (:func:`infer_forward`): ``df = -slope`` and ``F = intercept / df``. That is
+    enough for a European cash-settled chain. No dividend yield is fitted.
+
+    An explicit rate replaces that discount factor. The rate is the ``rate``
+    argument if it is not None, otherwise a finite ``rate`` column on the
+    snapshot. Then ``df_i = exp(-r T_i)`` and ``F_i`` is the median of
+    ``K + (C - P) / df_i`` over the near-the-money strikes. A blank ``rate``
+    column, which is what the committed SPX file stores, leaves the parity
+    pair in place.
     """
     fits = {}
     for expiry, group in snapshot.groupby("expiry", sort=True):
@@ -400,17 +415,14 @@ def market_implied_vols(snapshot: pd.DataFrame, n_atm: int = 8,
             continue
         K, C, P = both.index.to_numpy(), both["call"].to_numpy(), both["put"].to_numpy()
         F, df = infer_forward(K, C, P, float(group["spot"].iloc[0]), n_atm=n_atm)
-        if np.isfinite(F) and 0.5 < df < 1.5:
+        if np.isfinite(F) and np.isfinite(df) and 0.5 < df < 1.5:
             fits[expiry] = (float(group["T"].iloc[0]), F, df, K, C - P)
 
     if rate is None and "rate" in snapshot and np.isfinite(snapshot["rate"].iloc[0]):
         rate = float(snapshot["rate"].iloc[0])
-    if fits:
-        T = np.array([f[0] for f in fits.values()])
-        y = -np.log([f[2] for f in fits.values()])
-        r = float(T @ y / (T @ T)) if rate is None else rate
-        for expiry, (t, F, _, K, diff) in fits.items():
-            df = float(np.exp(-r * t))
+    if fits and rate is not None:
+        for expiry, (t, F, _, K, diff) in list(fits.items()):
+            df = float(np.exp(-rate * t))
             idx = np.argsort(np.abs(K - F))[:n_atm]
             fits[expiry] = (t, float(np.median(K[idx] + diff[idx] / df)), df, K, diff)
 
@@ -442,7 +454,12 @@ if __name__ == "__main__":
     import sys
 
     backend = sys.argv[1] if len(sys.argv) > 1 else "yfinance"
-    symbol = sys.argv[2] if len(sys.argv) > 2 else "SPY"
+    if backend == "ibkr" and len(sys.argv) < 3:
+        raise SystemExit(
+            "ibkr qualifies a stock. Pass the ticker. SPX is an index; "
+            "build that chain with scripts/build_cboe_spx_snapshot.py."
+        )
+    symbol = sys.argv[2] if len(sys.argv) > 2 else "SPX"
     fetch = {"yfinance": fetch_yfinance, "ibkr": fetch_ibkr}[backend]
     chain = fetch(symbol)
     path = save_snapshot(chain)

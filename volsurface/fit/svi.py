@@ -222,7 +222,7 @@ def _slice_report(pillars, groups, surface, k_min: float, k_max: float) -> pd.Da
 def _in_spread(quotes: pd.DataFrame, surface) -> float:
     """Fraction of two-sided quotes whose model call lies between bid and ask.
 
-    NaN when the snapshot has no two-sided market, which is the committed SPY file.
+    NaN when the quotes have no two-sided market.
     """
     usable = quotes.dropna(subset=["bid", "ask", "F", "df", "k", "T"])
     usable = usable[(usable["bid"] > 0.0) & (usable["ask"] > usable["bid"])]

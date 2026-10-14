@@ -3,13 +3,14 @@
 Pull an option chain, turn it into an implied volatility surface, and price it under
 Black-Scholes, Heston, SABR and rough Bergomi through one interface.
 
-![SPY smiles against one Heston fit, and the at-the-money skew term structure](docs/00_the_smile.png)
+![SPX smiles against one Heston fit, and the at-the-money skew term structure](docs/00_the_smile.png)
 
-The left panel shows SPY implied vols on 7 October 2026 (points) and the best single Heston
-fit to their at-the-money levels and skews (lines). The right panel is the reason this
-repository exists: the market's at-the-money skew grows like a power of $1/T$ as expiry
-shrinks, while Heston's flattens to a constant. Rough volatility models predict the power
-law. The sessions below work towards pricing them.
+The left panel shows SPX implied vols on 14 October 2026 (points) and the best of three
+Heston starts fitted to their at-the-money levels and skews (lines). The right panel is
+the reason this repository exists: the market's at-the-money skew grows like a power of
+$1/T$ as expiry shrinks, while Heston's flattens to a constant. Rough volatility models
+predict the power law. The sessions below work towards pricing them. The chain is SPX,
+not SPY: see [docs/notes/spx_not_spy.md](docs/notes/spx_not_spy.md).
 
 ## Why
 
@@ -35,8 +36,8 @@ Fetch a new snapshot (during US market hours for mid quotes; outside them the yf
 backend falls back to the last session's trade prices):
 
 ```bash
-python -m volsurface.chains yfinance SPY     # writes data/snapshots/SPY_<date>.parquet
-python -m volsurface.chains ibkr SPY         # needs IB Gateway or TWS; see .env.example
+python -m volsurface.chains yfinance SPX     # writes data/snapshots/SPX_<date>.parquet
+python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the committed chain
 ```
 
 ## Layout
@@ -57,10 +58,11 @@ python -m volsurface.chains ibkr SPY         # needs IB Gateway or TWS; see .env
 
 ## Found so far
 
-- **Session 00.** SPY's at-the-money skew follows $|\psi(T)| \approx 0.30\, T^{-0.26}$ from
-  one day to one year. No single Heston parameter set reproduces both ends: the best joint
-  fit puts $\rho$ at its bound of $-0.99$ and still gives a one-day skew of 1.0 against the
-  market's 1.6.
+- **Session 00.** On the 14 October 2026 SPXW mids, the at-the-money skew follows
+  $|\psi(T)| \approx 0.305\, T^{-0.333}$ from about 10 hours to 351 days. The best of three
+  Heston starts in the slider box has $\rho = -0.533$, inside $[-0.99, 0.99]$. The front
+  skew is 1.87 in the fit against the market's 2.96. At 351 days the fit is 0.18 against
+  the market's 0.28.
 
 ## Licence
 

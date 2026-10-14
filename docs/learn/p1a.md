@@ -27,8 +27,11 @@ These are not results.
 
 - The normalised call used here matches SANOS once the PDF is checked equation
   by equation. The HTML summary is all we have used.
-- Labelling the SPY snapshot American and physical is correct, and it is why
-  that file is the wrong input for a European martingale fit.
+- The committed chain is SPX, labelled European and cash-settled. SPY options
+  are American and the ETF pays dividends, so a European implied vol on that
+  chain does not match the contract. The loader still marks a SPY ticker
+  American and physical if one is passed. That label is why the snapshot is SPX.
+  See `docs/notes/spx_not_spy.md`.
 - The Heston cumulant stencil is accurate enough to place a cosine grid. `c1`
   matches the integrated expected variance, and `c2` and `c4` match a second
   stencil and a central difference on the Fang and Oosterlee parameter set.
