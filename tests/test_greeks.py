@@ -186,6 +186,38 @@ def test_omitted_bump_scales_with_the_level():
     assert mc.stderr is not None and np.isfinite(mc.stderr[0, 0]) and mc.stderr[0, 0] > 0.0
 
 
+def test_finite_difference_standard_error_is_calibrated_over_200_seeds():
+    """Sample standard deviation over mean reported standard error.
+
+    200 seeds, numbered 10_000 to 10_199. Exact geometric Brownian motion,
+    volatility 0.2, 2,000 antithetic paths, one step, common random numbers.
+    The bump is 1 on the forward and 0.04 on sigma. Gamma is the forward
+    second derivative at bump 2. The bands are [0.9, 1.1] for delta and vega
+    and [0.8, 1.2] for gamma. The ratio is the calibration, not a slope of
+    ``stderr`` against ``1/sqrt(n)``.
+    """
+    contract = [Contract(Vanilla(100.0), 1.0)]
+    model = GBM(sigma=0.2, n_paths=2_000, n_steps=1, scheme="exact", antithetic=True)
+    specs = (
+        ("delta", Forward(), 1, 1.0, 0.9, 1.1),
+        ("sigma", Param("sigma"), 1, 0.04, 0.9, 1.1),
+        ("gamma", Forward(), 2, 2.0, 0.8, 1.2),
+    )
+    seeds = range(10_000, 10_200)
+    for name, factor, order, bump, lo, hi in specs:
+        values = np.empty(len(seeds))
+        errors = np.empty(len(seeds))
+        for i, seed in enumerate(seeds):
+            engine = FiniteDifference(F=100.0, df=1.0, bump=bump, crn=True)
+            got = engine.compute(
+                model, contract, [factor], order=order, n_paths=2_000, seed=seed,
+            )
+            values[i] = got.value[0, 0]
+            errors[i] = got.stderr[0, 0]
+        ratio = float(np.std(values, ddof=1) / np.mean(errors))
+        assert lo < ratio < hi, (name, ratio)
+
+
 def test_pathwise_matches_black_and_refuses_a_digital_and_a_gamma():
     """40 strikes, independent seeds, 8,000 paths. The z-rule uses n = 40."""
     F, df, sigma, T = 100.0, 0.98, 0.22, 0.75
