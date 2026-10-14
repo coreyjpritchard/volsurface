@@ -2,7 +2,15 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The draft still leaves the hedge rebalancing step, the training path count, the bootstrap resample count and interval type, and the P&L units of `lambda = 1` open. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+
+## 2026-10-14 Review: open pins on the draft pre-registration
+
+H2 premiums are time-0 Monte Carlo means at 65,536 copies. Each premium is one number, held fixed in the bootstrap, with its standard error reported beside it. The H3 surface stays at 1,024 copies.
+
+Four B9 pins stay open beside the duration multiples, the ratio grid, and H5: the hedge rebalancing step, the training path count, the bootstrap resample count and interval type, and the units of P&L in which `lambda = 1` is set.
+
+**Hypothesis:** the same draft, once those four pins have values, keeps the H2 premium at 65,536 copies. The quantity to report is that copy count, next to 65536.
 
 ## 2026-10-14 Review: the forward curve, and the differenced window
 

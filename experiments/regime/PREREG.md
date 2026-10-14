@@ -94,8 +94,12 @@ bound above 0.
 ## H2. Vol-of-vol content
 
 The premium of a liability is its time-0 model price, one number for that
-liability, not a number per path. The premium-normalised gap is
-`Gap(L -> H)` divided by that premium. H2 is
+liability, not a number per path. Each premium is the Monte Carlo mean
+at `n_mc = 65536` copies, which is `2^16`. That count is for these
+premiums. The H3 surface stays at 1024 copies. The premium is held fixed
+in the bootstrap. Its Monte Carlo standard error is reported beside the
+premium. The premium-normalised gap is `Gap(L -> H)` divided by that
+premium. H2 is
 
 `Gap(L2 -> H) / premium(L2) - Gap(L1 -> H) / premium(L1) > 0`.
 
@@ -162,6 +166,13 @@ of three. These B9 pins stay open. This draft does not close them.
 - Regime duration of 0.5 times maturity.
 - The ratio grid `{1, 1.5, 2}`.
 - H5. The statements that motivated H5 remain UNVERIFIED.
+- The hedge rebalancing step. The time between hedge trades is unset.
+- The training path count. The 20,000 paths are the test set.
+- The bootstrap resample count and the interval type. The bootstrap is
+  hierarchical over paths and over network seeds. The confidence level
+  is the Bonferroni level above.
+- The units of P&L in which `lambda = 1` is set. The entropic risk uses
+  that lambda.
 
 ## Not the gate
 
