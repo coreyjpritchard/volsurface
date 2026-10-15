@@ -12,7 +12,7 @@ The primary bar is a coupling identity. Fed a path's own future pieces, a copy r
 
 The Monte Carlo call pre-gate cannot detect a 1 percent drift. Its minimum detectable drift is 0.348 of the quote at `H = 0.1` and 0.362 at `H = 1/2`, so that regression is a wiring smoke test.
 
-At gate settings, when `smile_k` is omitted, `surface_at` uses standardised moneyness `z * sqrt(xi0 * tau)`, `z` from -2.5 to 2.5, on the time from the clock to the last expiry. An explicit grid is unchanged. On eight paths, `n_mc` 1024 and a 21-day life, the out-of-the-money exact-zero rate at 21 days is 0 on 80 prices. The same strikes on the one-day node are far out for that maturity: 63 of those 80 prices are exactly zero.
+At gate settings, when `smile_k` is omitted, `surface_at` uses standardised moneyness `z * sqrt(xi0 * tau)`, `z` from -2.5 to 2.5, on the time from the clock to the last expiry. An explicit grid is unchanged. On eight paths, `n_mc` 1024 and a 21-day life, the out-of-the-money exact-zero rate at 21 days is 0 on 80 prices. The same strikes on the one-day node are far out for that maturity: 63 of those 80 prices are exactly zero. The fast suite is 213 passed, 1 skipped, 5 deselected, and its peak resident set is 1399 MiB.
 
 **Hypothesis:** on a fresh 32-path draw the coupling gap stays under `1e-12`. The quantity to report is the largest absolute gap, next to 8.95e-16.
 
