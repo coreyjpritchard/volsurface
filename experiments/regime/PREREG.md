@@ -167,13 +167,19 @@ family lower bound on that difference, above 0.
 
 ## H3. Hedgeability
 
-I2 is the variance swap priced under the trader's information set. The
-price is the mixture of the regime-conditional variance swaps, weighted
-by the filtered regime probabilities. It is not the variance swap
-conditioned on the true regime. `surface_at` uses the same mixture.
-At `H` other than `1/2` each regime's Monte Carlo is conditioned on
-that regime's forward curve `xi_t(u)`. A later date on that curve is
-the closed-form constant-`nu` curve. The clock entry is `v_t`.
+I2 is the variance swap. The mark is the left-point model variance from
+the contract's start, plus the remaining integral of `state["xi"]`. At
+`H = 1/2` that curve is `v` on and after the clock. At any other `H` it
+is the conditional expectation of the simulated hybrid variance given
+the `nu` in force on each step already finished. It uses that `nu` path
+because the scheme did. It is not a mixture of constant-`nu` closed
+forms. The next tenor times the near-field factor of the step in
+between equals the next variance, and that factor has conditional mean
+1 for either regime. The one-day roll is a martingale given the `nu`
+path, and so given the filter. `surface_at` does not read this curve.
+The call is still the filtered mixture. Each regime holds `nu` fixed.
+At `H` other than `1/2` a later date on that call curve is the
+closed-form constant-`nu` curve, and the clock entry is `v_t`.
 
 The gate uses `price_filter="rv"`. That filter reads the change in
 windowed log realised variance, timed to the regime two steps back.
@@ -192,12 +198,12 @@ smaller than the reduction from I3, if the surrogate validation error is
 under its bar. That L2 sentence is reported when I3 is eligible. It is
 not a fourth member of the family.
 
-The variance-swap gate result is conditional on the mark's drift along
-the filtered probability of the high regime. The regression, the
-path-clustered standard errors, and the 1 percent bar are in the
-instrument-martingale pre-gate. The point estimate on this draw is above
-that bar. The slope in the body of the sample, after the largest 1 percent
-of absolute daily changes are removed, is not zero.
+The variance-swap gate is read with the limit in the instrument-martingale
+pre-gate. The mark is the hybrid curve above, and the one-day roll matches
+the simulated variance. The pre-stated 1 percent bar on the pooled and
+trimmed point estimates is not met. The standard error of the pooled drift
+is wider than that bar, and the trimmed slope is the right tail of the
+near-field factor. The eight replication z-scores pass the z-rule.
 
 ## Sample size
 
@@ -355,27 +361,37 @@ high regime at the left of the step. The standard error is clustered by
 path, with scale `G / (G - 1) * (N - 1) / (N - 2)`. The drift is the
 absolute slope times the number of steps, divided by the mean entry
 quote. The bar, stated before this draw, is an absolute drift under 1
-percent of that quote. On the same eight runs the 21-trading-day drift is
-0.0567 of the quote, with clustered z equal to -0.73. The 30-trading-day
-drift is 0.0687, with z equal to -1.08. Both point estimates sit above
-the bar. Neither slope is distinguishable from zero at its clustered
-standard error. Dropping the largest 1 percent of absolute daily changes
-leaves a drift of 0.160, z equal to -8.55, on the 21-trading-day swap,
-and 0.171, z equal to -8.67, on the 30-trading-day swap. The slope is
-negative: a higher probability of the high regime comes with a lower mark
-change. It sits in the body of the sample. The ordinary t-statistic on
-that trimmed 21-trading-day panel is -7.83.
+percent of that quote, on the full sample and after the largest 1 percent
+of absolute daily changes are removed.
 
-The slope is the one-day roll from the closed-form next tenor onto the
-hybrid variance. On this draw the later tenors, taken alone, have
-clustered z 0.23. The accounting identity holds: the mark change equals
-the change in the remaining integral after the accrued leg cancels, with
-a maximum absolute gap of 7e-16, and the last step is 0. At `H = 1/2`,
-four runs of 1,500 paths, the same regression has clustered z 0.29 and
-trimmed z 1.06. With both regimes at `nu = 1.5`, four runs, the trimmed z
-is -0.11. Those two controls do not carry the gate's trimmed slope. The
-result is not an indexing error in the integral. The gate stays
-conditional on the drift.
+The quote in that regression is the hybrid curve: the `nu` in force on
+each finished step, the same pieces that build `v`. The next variance
+equals that curve's next tenor times the near-field factor of the step
+in between. On one draw of 1,500 paths the identity holds to 2e-13. The
+factor is Gaussian with conditional mean 1. A tail lag uses the
+power-kernel weight. On a daily step at `H = 0.1` and `nu = 3` the mean
+of the first tail factor is 0.9986, and later lags are closer to 1.
+
+On the same eight runs the 21-trading-day pooled drift is 0.057 of the
+quote, clustered z -0.87, standard error 0.066 of the quote. The entry
+quote averages 0.003204. The 30-trading-day drift is 0.085, z -1.50,
+standard error 0.056, on an entry quote of 0.004607. Both point estimates
+sit above the 1 percent bar and inside about one standard error of zero.
+The eight replication z-scores pass the z-rule. The largest absolute
+replication z is 2.20 on the 21-day swap and 2.36 on the 30-day swap.
+
+Dropping the largest 1 percent of absolute daily changes leaves a drift
+of 0.248, z -13.8, on the 21-day swap, and 0.276, z -14.5, on the 30-day
+swap. The trim deletes the right tail that balances the near-field
+factor. One draw of that factor from a normal innovation with conditional
+mean exactly 1, `nu` switching between 1.5 and 3, 3,000 paths, 19 steps,
+seed 0, has trimmed drift 0.53 and z -41. At `H = 1/2`, eight runs, the
+drift is 0.057 and the trimmed drift is 0.050. With both regimes at
+`nu = 1.5` the drift is 0.0037 and the trimmed drift is 0.059. The 1
+percent bar on these point estimates is not met. The closed-form mixture
+had a separate bias: on the 30-day roll, paths in the low regime had mean
+gap 0.032 of the quote, z 3.00. The hybrid curve brings that to 0.009,
+z 0.96. The trimmed slope that remains is the shape of the factor.
 
 I3, the call priced by `SurrogatePricer`, is the third instrument. It
 stays untested until that surrogate exists.

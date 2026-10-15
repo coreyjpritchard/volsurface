@@ -1031,42 +1031,47 @@ of the hybrid scheme stays in the plugin. If the method is missing, this
 module raises. It does not build a substitute rough driver, and it does
 not silently replace the requested `H` with `1/2`.
 
-Every price, including the variance swap and `surface_at`, is computed
-under the trader's information. The forward variance is the mixture of
-the regime-conditional curves, weighted by the filtered probabilities
-`regime_prob`. It is not conditioned on the true label `r_t`. At
-`H = 1/2` each regime-conditional expectation of future variance equals
-`v_t xi0(u) / xi0(t)`, so the mixture equals that common curve.
-`state["xi"]` stores the mixture. `VarianceSwapPricer` integrates it.
-`surface_at` is a Monte Carlo of the call under the same mixture. Each
-regime holds `nu` fixed. The variance level is that regime's forward
-curve `xi_t(u)`, and the future kernel is restarted from the clock. At
-`H = 1/2` the curve is flat at `v_t` and the step is the exponential
-martingale. A Black call on the expected variance would be flat in
-strike and independent of `nu`. The plugin is not called at that `H`.
-Any other `H` reads `state["dW"]` and restarts `volterra_components`
-from the clock. The past Volterra integral sits in `xi_t(u)` and is
-not drawn again. A later date is the closed-form constant-`nu` curve
-for that regime, and the clock entry is `v_t`. The closed-form diagonal
-is the kernel integral against `dW`. It drops the hybrid near field, so
+`VarianceSwapPricer` integrates `state["xi"]`. At `H = 1/2` that curve
+is `v` on and after the clock, so the filter weights do not enter. At
+any other `H` it is the conditional expectation of the simulated hybrid
+variance given the `nu` in force on each step already finished and the
+hybrid components of those steps. That is the `nu` path the scheme used
+to build `v`. A future step is left out. At lag 1 the near-field factor
+has conditional mean 1, so the next tenor is the conditional expectation
+of the next variance, for either regime and for the filter. The clock
+entry is `v_t`.
+
+`surface_at` does not read `state["xi"]`. It is a Monte Carlo of the
+call under the filtered mixture `regime_prob`. Each regime holds `nu`
+fixed. The variance level is that regime's restarted curve, and the
+future kernel is drawn again from the clock. At `H = 1/2` the curve is
+flat at `v_t` and the step is the exponential martingale. A Black call
+on the expected variance would be flat in strike and independent of
+`nu`. The plugin is not called at that `H`. Any other `H` reads
+`state["dW"]` and restarts `volterra_components` from the clock. The
+past Volterra integral sits in that restarted curve and is not drawn
+again. A later date is the closed-form constant-`nu` curve for that
+regime, and the clock entry is `v_t`. The closed-form diagonal is the
+kernel integral against `dW`. It drops the hybrid near field, so
 dividing by it lifts the curve. One limit of that restart stays open.
-The curve is not the conditional curve of a path whose past `nu`
-switched, because that curve would read the latent label, and a price
-does not. The grid from the clock to the last expiry
-has to be equally spaced. A non-uniform grid raises. The fresh factor
-is a martingale up to the hybrid scheme's error. The z-rule bounds
-`E[v] - xi0`. It is not an identity. The weights are `regime_prob` at
-the clock. The same shocks drive a Black path whose variance is the
-deterministic left forward curve. The control is that Black price. The
-copies are split in half, and the coefficient on each half is the other
-half's `cov / var`, so the residual variance is not the in-sample
-minimum. The known mean is the formula. One terminal is used for every
-strike. `n_mc` defaults to 1024. The seed is the path entropy and
-`spawn_key + (4, regime)`. The clock is not in the key, so every hedge
-date draws the same shocks. `SurfaceBatch.stderr` is the residual
-standard deviation divided by `sqrt(n_mc)`. The absolute price still
-carries that Monte Carlo error. A comparison of two mixtures on the
-same paths uses one seed per regime, so the gap is the gap in the
+The call curve is not the conditional curve of a path whose past `nu`
+switched, because that curve would read the latent label, and the call
+does not. The variance-swap curve does read the `nu` path, because
+otherwise the one-day roll is not the simulated variance. The grid from
+the clock to the last expiry has to be equally spaced. A non-uniform
+grid raises. The fresh factor is a martingale up to the hybrid scheme's
+error. The z-rule bounds `E[v] - xi0`. It is not an identity. The
+weights are `regime_prob` at the clock. The same shocks drive a Black
+path whose variance is the deterministic left forward curve. The control
+is that Black price. The copies are split in half, and the coefficient
+on each half is the other half's `cov / var`, so the residual variance
+is not the in-sample minimum. The known mean is the formula. One
+terminal is used for every strike. `n_mc` defaults to 1024. The seed is
+the path entropy and `spawn_key + (4, regime)`. The clock is not in the
+key, so every hedge date draws the same shocks. `SurfaceBatch.stderr`
+is the residual standard deviation divided by `sqrt(n_mc)`. The absolute
+price still carries that Monte Carlo error. A comparison of two mixtures
+on the same paths uses one seed per regime, so the gap is the gap in the
 weights.
 `total_variance` is the controlled log contract `-2 E[log Z]`, the
 variance-swap strike of those paths. Whether `Z` stays a martingale
@@ -1076,12 +1081,12 @@ a theorem in this file.
 Three Hamilton filters are defined. Prices read the spot filter.
 
 `price_filter` defaults to `"spot"`. `regime_prob` is then that filter,
-and `surface_at` mixes it. The variance swap integrates `state["xi"]`,
-which was mixed with the same probabilities when the path was drawn.
-At `H = 1/2` that curve does not depend on the weights. At any other
-`H` it does. Replacing `regime_prob` after the draw does not rebuild
-`xi`. The windowed filter is observable, so a price is allowed to read
-it, and the default does not. Set `price_filter` to `"rv"` to do that.
+and `surface_at` mixes it. The variance swap integrates `state["xi"]`.
+At `H = 1/2` that curve is `v` on and after the clock. At any other `H`
+it is the hybrid curve of the `nu` path, and the filter weights are not
+in it. Replacing `regime_prob` after the draw does not rebuild `xi`.
+The windowed filter is observable, so a call is allowed to read it, and
+the default does not. Set `price_filter` to `"rv"` to do that.
 The latent-variance benchmark is not a price in either case. Neither
 `state["regime_prob_rv"]` nor `state["regime_prob_latent"]` is read by
 `surface_at` under the default.

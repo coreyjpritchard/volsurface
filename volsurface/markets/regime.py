@@ -50,23 +50,28 @@ contribution of step ``j`` that lands at time index ``j + k`` is
 the sum is 0. The compensator stays the exact one,
 ``sum_j nu_j^2 ((t - t_j)^{2H} - (t - t_{j+1})^{2H}) / 2``.
 
-Every price is computed under the trader's information. The forward
-variance is the mixture of the regime-conditional curves, weighted by the
-filtered probabilities. It is not computed from the true label ``r_t``.
-At ``H = 1/2`` each regime-conditional expectation equals
-``v_t xi0(u) / xi0(t)``, so the mixture equals that common curve.
-``state["xi"]`` stores the mixture. ``VarianceSwapPricer`` integrates it.
-``surface_at`` prices the call by Monte Carlo under the same mixture.
-Each regime holds ``nu`` fixed. The variance level is that regime's
-forward curve ``xi_t(u)``: at ``H = 1/2`` it is flat at ``v_t``, and at
-any other ``H`` a later date is the closed-form constant-``nu`` curve
-and the clock entry is ``v_t``. The
+``state["xi"]`` is the curve ``VarianceSwapPricer`` integrates. At
+``H = 1/2`` it is ``v`` on and after the clock: every regime has the
+same conditional expectation, so the filter weights do not enter. At
+any other ``H`` it is the conditional expectation of the simulated
+hybrid variance given the ``nu`` in force on each step already finished
+and the hybrid components of those steps. That is the ``nu`` path the
+scheme used to build ``v``, not a mixture of constant-``nu`` closed
+forms. A future step is left out of the quote. Its near-field factor
+has conditional mean 1 for either regime, so the next tenor is a
+martingale given that ``nu`` path and therefore given the filter. The
+clock entry is ``v_t``. ``surface_at`` does not read this curve. It
+prices the call by Monte Carlo under the filtered mixture. Each regime
+holds ``nu`` fixed and restarts from the clock: at ``H = 1/2`` the
+curve is flat at ``v_t``, and at any other ``H`` a later date is the
+closed-form constant-``nu`` curve and the clock entry is ``v_t``. The
 future noise is a fresh kernel, independent of the past given that
-curve. The past Volterra integral sits in ``xi_t(u)`` and is not drawn
-again. Weights are ``regime_prob`` at the clock. The true label is not
-an argument. At ``H = 1/2`` the variance step is the exponential
-martingale and the plugin is not called. Any other ``H`` reads
-``state["dW"]`` and restarts ``volterra_components`` from the clock.
+curve. The past Volterra integral sits in that restarted curve and is
+not drawn again. Weights are ``regime_prob`` at the clock. The true
+label is not an argument of the call. At ``H = 1/2`` the variance step
+is the exponential martingale and the plugin is not called. Any other
+``H`` reads ``state["dW"]`` and restarts ``volterra_components`` from
+the clock.
 
 The same shocks drive a Black path whose variance is the deterministic
 left forward curve. The control is that Black price. Its mean is the
@@ -305,7 +310,22 @@ class RegimeSwitchingBergomi:
             "regime_prob_latent": latent_prob,
         }
         if store_forward:
-            state["xi"] = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
+            components = drawn["components"]
+            if components is None:
+                state["xi"] = trader_forward_variance(
+                    self.H, nus, v, priced, self.xi0, grid, dW
+                )
+            else:
+                # The nu in force on each finished step, the same array that
+                # builds v. A constant-nu mixture prices a path that never
+                # switched, and the one-day roll of that quote is not the
+                # scheme's next variance.
+                nu_step = nus[regime[:, :-1]]
+                state["xi"] = hybrid_path_forward_variance(
+                    self.H, nu_step, self.xi0, grid, components
+                )
+                diagonal = np.arange(grid.size)
+                state["xi"][:, diagonal, diagonal] = v
             state["xi_tenor"] = grid.copy()
         parent = as_seed_sequence(seed)
         plugin = self._plugin
@@ -773,6 +793,94 @@ def _assemble_driver(nu: np.ndarray, pieces: np.ndarray, weights: np.ndarray) ->
     return driver
 
 
+def hybrid_forward_variance(
+    H: float,
+    nu: float,
+    xi0: float,
+    times: np.ndarray,
+    components: np.ndarray,
+) -> np.ndarray:
+    """Conditional forward variance at one constant ``nu``. Shape ``(m, n, n)``.
+
+    Entry ``(path, clock, tenor)`` is the expectation of variance at that
+    tenor given the components on steps that finish at or before the clock,
+    with this ``nu`` on every step. On the clock the entry equals the
+    simulated variance. Behind the clock the entry is NaN.
+    """
+    grid = np.asarray(times, dtype=float)
+    pieces = np.asarray(components, dtype=float)
+    nu_step = np.full((pieces.shape[0], max(grid.size - 1, 0)), float(nu))
+    return hybrid_path_forward_variance(float(H), nu_step, float(xi0), grid, pieces)
+
+
+def hybrid_path_forward_variance(
+    H: float,
+    nu_step: np.ndarray,
+    xi0: float,
+    times: np.ndarray,
+    components: np.ndarray,
+) -> np.ndarray:
+    """Conditional forward variance of the simulated hybrid path.
+
+    ``nu_step`` has shape ``(m, n_steps)`` and is the vol of vol in force
+    on each step, the same array that builds ``v``. Entry
+    ``(path, clock, tenor)`` keeps only steps that finish at or before the
+    clock. Each such step contributes its hybrid piece, near field at lag
+    ``k`` and the power-kernel tail after that, minus that step's exact
+    compensator. A later step is omitted. At lag 1 the near-field factor
+    has conditional mean 1, so the next tenor is the conditional
+    expectation of the next variance. A tail lag uses the power-kernel
+    weight, whose variance is not the continuous kernel piece, so that
+    factor's mean is not exactly 1. Behind the clock the entry is NaN.
+    On the clock the entry is the simulated ``v``.
+    """
+    grid = np.asarray(times, dtype=float)
+    pieces = np.asarray(components, dtype=float)
+    nu = np.asarray(nu_step, dtype=float)
+    if pieces.ndim != 3:
+        raise ValueError(f"components must have shape (m, n_steps, kappa + 1), got {pieces.shape}")
+    m, n_steps, n_comp = pieces.shape
+    if grid.size != n_steps + 1 or nu.shape != (m, n_steps):
+        raise ValueError(
+            f"nu_step {nu.shape} and times {grid.size} do not match components {pieces.shape}"
+        )
+    if n_comp < 2:
+        raise ValueError("components must include the near field I_1, ..., I_kappa")
+    hurst = float(H)
+    level = float(xi0)
+    scale = math.sqrt(2.0 * hurst)
+    n = n_steps + 1
+    if n_steps == 0:
+        return np.full((m, n, n), level)
+    kappa = n_comp - 1
+    weights = _hybrid_tail_weights(hurst, n_steps, float(grid[-1]), kappa)
+    landed = np.zeros((m, n_steps, n))
+    steps = np.arange(n_steps)
+    two_h = 2.0 * hurst
+    for lag in range(1, n_steps + 1):
+        length = n_steps - lag + 1
+        if lag <= kappa:
+            values = pieces[:, :length, lag]
+        else:
+            weight = float(weights[lag - 1])
+            if weight == 0.0:
+                continue
+            values = weight * pieces[:, :length, 0]
+        choice = steps[:length]
+        start = grid[choice]
+        stop = grid[choice + 1]
+        tenor = grid[choice + lag]
+        piece = np.maximum(tenor - start, 0.0) ** two_h - np.maximum(tenor - stop, 0.0) ** two_h
+        vol = nu[:, choice]
+        landed[:, choice, choice + lag] = scale * vol * values - 0.5 * vol * vol * piece
+    exponent = np.zeros((m, n, n))
+    exponent[:, 1:, :] = np.cumsum(landed, axis=1)
+    xi = level * np.exp(exponent)
+    gap = grid[None, :] - grid[:, None]
+    tol = 1e-12 * max(1.0, float(grid[-1]))
+    return np.where(gap[None, :, :] >= -tol, xi, np.nan)
+
+
 def trader_forward_variance(
     H: float,
     nus: np.ndarray,
@@ -781,15 +889,17 @@ def trader_forward_variance(
     xi0: float,
     times: np.ndarray,
     dW: np.ndarray,
+    components: np.ndarray | None = None,
 ) -> np.ndarray:
     """Forward variance mixed over ``regime_prob``. Shape ``(m, n, n)``.
 
     The true regime label is not an argument. At ``H = 1/2`` every regime
     has the same conditional expectation, ``v_t`` when ``xi0`` is flat, so
     the mixture does not depend on the weights. At any other ``H`` a later
-    date is the closed-form constant-``nu`` curve for that regime. The
-    diagonal of that closed form is the kernel integral against ``dW``. It
-    drops the hybrid near field, so dividing by it lifts the whole curve.
+    date is the closed form built from ``dW`` when ``components`` is
+    omitted. Passing ``components`` mixes the constant-``nu`` hybrid curves,
+    each of which pretends that regime's ``nu`` was in force on every past
+    step. That is not the switched-path curve ``simulate_market`` stores.
     The diagonal of the mixture is the path's ``v_t``. Behind the clock
     the entry is NaN.
     """
@@ -808,12 +918,16 @@ def trader_forward_variance(
             f"regime_prob shape {probs.shape} does not match {(m, n, vol_of_vol.size)}"
         )
     mixed = np.zeros((m, n, n))
-    increments = np.asarray(dW, dtype=float)
     finite = np.where(ahead, 1.0, 0.0)
     for r, nu in enumerate(vol_of_vol):
-        component = bergomi_forward_variance(float(H), float(nu), xi0, grid, increments)
+        if components is None:
+            component = bergomi_forward_variance(
+                float(H), float(nu), xi0, grid, np.asarray(dW, dtype=float)
+            )
+        else:
+            component = hybrid_forward_variance(float(H), float(nu), xi0, grid, components)
         # NaN behind the clock must not enter the sum. The diagonal is
-        # overwritten below: that closed-form diagonal drops the near field.
+        # overwritten below with the simulated variance.
         usable = np.where(np.isfinite(component), component, 0.0) * finite[None, :, :]
         mixed += probs[:, :, r][:, :, None] * usable
     diagonal = np.arange(n)
@@ -1100,6 +1214,7 @@ def _draw_paths(model, n_paths: int, times: np.ndarray, seed, state0=None) -> di
         "dW": dW,
         "y": _log_realised_variance(Z, grid),
         "y_rv": _windowed_log_realised_variance(log_sub, grid),
+        "components": components,
     }
 
 

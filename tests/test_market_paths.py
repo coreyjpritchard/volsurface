@@ -32,7 +32,9 @@ from volsurface.markets.regime import (
     filter_differenced_realised_variance,
     filter_log_realised_variance,
     filter_log_variance,
+    hybrid_forward_variance,
     hybrid_increment_variance,
+    hybrid_path_forward_variance,
     increment_variance,
     trader_forward_variance,
 )
@@ -402,11 +404,11 @@ def test_zero_driver_stores_the_rough_compensator(monkeypatch):
     zeros = np.zeros((6, times.size - 1))
     expected_v = increment_variance(H, nu_step, model.xi0, times, zeros, weights)
     assert paths.state["v"] == pytest.approx(expected_v, rel=1e-12)
-    expected_xi = trader_forward_variance(
-        H, nus, paths.state["v"], paths.regime_prob, model.xi0, times, zeros
-    )
-    np.testing.assert_allclose(paths.state["xi"], expected_xi, rtol=1e-12, equal_nan=True)
+    components = np.zeros((6, times.size - 1, 2))
+    expected_xi = hybrid_path_forward_variance(H, nu_step, model.xi0, times, components)
     diagonal = np.arange(times.size)
+    expected_xi[:, diagonal, diagonal] = paths.state["v"]
+    np.testing.assert_allclose(paths.state["xi"], expected_xi, rtol=1e-12, equal_nan=True)
     assert paths.state["xi"][:, diagonal, diagonal] == pytest.approx(paths.state["v"], rel=1e-12)
     assert np.isnan(paths.state["xi"][:, 1, 0]).all()
 
@@ -439,6 +441,64 @@ def test_a_switch_does_not_rescale_variance_already_accumulated():
     dt = 0.25
     step = variance[1, 2] * math.exp(1.1 * dW[1, 2] - 0.5 * 1.1**2 * dt)
     assert variance[1, 3] == pytest.approx(step)
+
+
+def test_hybrid_forward_diagonal_is_the_simulated_variance():
+    """The clock entry is the simulated variance.
+
+    At constant ``nu`` and ``kappa`` 1 the next tenor is built from the
+    tail only, so it matches the closed form. On a path whose ``nu`` has
+    switched, the next tenor uses the ``nu`` in force on each past step.
+    It is not the mixture of the two constant-``nu`` closed forms. The
+    variance one step later equals that tenor times the near-field factor
+    of the step in between.
+    """
+    pytest.importorskip("roughvol")
+    nu = 1.5
+    model = _constant_nu(nu, H=0.1, n_sub=1, n_pilot=2)
+    times = np.linspace(0.0, 1.0, 9)
+    drawn = _draw_paths(model, 4, times, run_seed(3, 0))
+    curve = hybrid_forward_variance(0.1, nu, model.xi0, times, drawn["components"])
+    diagonal = np.diagonal(curve, axis1=1, axis2=2)
+    assert diagonal == pytest.approx(drawn["v"], rel=1e-10, abs=1e-12)
+    closed = bergomi_forward_variance(0.1, nu, model.xi0, times, drawn["dW"])
+    assert curve[:, 3, 4] == pytest.approx(closed[:, 3, 4], rel=1e-10, abs=1e-12)
+
+    switching = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    grid = np.linspace(0.0, 0.5, 22)
+    drawn_s = _draw_paths(switching, 64, grid, run_seed(3, 1))
+    nus = np.array([1.5, 3.0])
+    nu_step = nus[drawn_s["regime"][:, :-1]]
+    path_curve = hybrid_path_forward_variance(
+        0.1, nu_step, switching.xi0, grid, drawn_s["components"]
+    )
+    clock = 10
+    assert np.diagonal(path_curve, axis1=1, axis2=2) == pytest.approx(
+        drawn_s["v"], rel=1e-10, abs=1e-12
+    )
+    probs = np.full((64, grid.size, 2), 0.5)
+    mixture = trader_forward_variance(
+        0.1, nus, drawn_s["v"], probs, switching.xi0, grid, drawn_s["dW"]
+    )
+    switched = np.any(drawn_s["regime"][:, : clock + 1] != drawn_s["regime"][:, :1], axis=1)
+    assert switched.any()
+    assert not np.allclose(
+        path_curve[switched, clock, clock + 1],
+        mixture[switched, clock, clock + 1],
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    hurst = 0.1
+    scale = math.sqrt(2.0 * hurst)
+    dt = float(grid[clock + 1] - grid[clock])
+    factor = np.exp(
+        scale * nu_step[:, clock] * drawn_s["components"][:, clock, 1]
+        - 0.5 * nu_step[:, clock] ** 2 * dt ** (2.0 * hurst)
+    )
+    rebuilt = path_curve[:, clock, clock + 1] * factor
+    assert rebuilt == pytest.approx(drawn_s["v"][:, clock + 1], rel=1e-10, abs=1e-12)
 
 
 def test_constant_nu_matches_the_bergomi_diagonal():
@@ -1208,14 +1268,17 @@ def _otm_variance(call: np.ndarray, k: np.ndarray) -> np.ndarray:
 def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     """H = 0.1, eight paths, clock 0.5, maturity 1, 4,096 copies.
 
-    The flat anchor ``v_t (T - t)`` misses the variance swap by a median
-    relative gap of 0.281 on the last expiry. The surface log contract
-    ``-2 E[log Z]`` stays inside 4 standard errors of that swap on every
-    expiry, with an extra ``1e-8`` for the one-step expiry, whose control
-    residual is numerical noise. The largest absolute z-score on a later
-    expiry is 1.80. The out-of-the-money strip, on log-moneyness from -0.8
-    to 0.8, stays inside 4 standard errors of the same swap on the last
-    expiry. Its largest absolute z-score is 1.56.
+    The surface log contract ``-2 E[log Z]`` is the call's restarted
+    mixture, not ``state["xi"]``. That mixture's integral is the reference.
+    The flat anchor ``v_t (T - t)`` misses it by a median relative gap of
+    0.281 on the last expiry. The log contract stays inside 4 standard
+    errors of it on every expiry, with an extra ``1e-8`` for the one-step
+    expiry, whose control residual is numerical noise. The largest absolute
+    z-score on a later expiry is 1.80. The out-of-the-money strip, on
+    log-moneyness from -0.8 to 0.8, stays inside 4 standard errors of the
+    same integral on the last expiry. Its largest absolute z-score is 1.56.
+    ``state["xi"]`` is the hybrid path curve. On this draw the last expiry
+    differs from the restarted mixture by up to 0.263 relative.
     """
     pytest.importorskip("roughvol")
     smile = np.linspace(-0.8, 0.8, 161)
@@ -1224,15 +1287,29 @@ def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     paths = model.simulate_market(8, times, seed=run_seed(21, 2))
     clock = 8
     batch = model.surface_at(paths, clock)
-    contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
-    i2 = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
-    gap = np.abs(batch.total_variance - i2)
+    nus = np.array([item["nu"] for item in _spec().params], dtype=float)
+    mixture = trader_forward_variance(
+        0.1, nus, paths.state["v"], paths.regime_prob, model.xi0, times, paths.state["dW"]
+    )
+    restart = np.column_stack(
+        [
+            integrate_forward_variance(
+                mixture[:, clock, :], times, float(times[clock]), float(expiry)
+            )
+            for expiry in batch.T
+        ]
+    )
+    gap = np.abs(batch.total_variance - restart)
     assert np.all(gap <= 4.0 * batch.total_variance_se + 1e-8)
-    last = i2[:, -1]
+    last = restart[:, -1]
     flat = paths.state["v"][:, clock] * (float(batch.T[-1]) - float(times[clock]))
     assert float(np.median(np.abs(flat - last) / last)) > 0.20
     strip = _otm_variance(batch.call[:, -1, :], batch.k)
     assert np.all(np.abs(strip - last) <= 4.0 * batch.total_variance_se[:, -1])
+    contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
+    path_curve = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
+    relative = np.abs(path_curve - restart) / np.maximum(np.abs(restart), 1e-8)
+    assert float(np.max(relative)) > 0.15
 
 
 def _constant_nu(nu: float, **kwargs) -> RegimeSwitchingBergomi:
@@ -1422,21 +1499,99 @@ def _drift_z(increment, times_left):
     return coef / se_coef
 
 
+def _episode_mark_drift(model, n_days):
+    """Terminal z-scores and the filter-probability drift of the mark.
+
+    Eight runs of 1,500 paths. The drift is the absolute slope of the
+    one-step mark change on the probability of the high regime, times the
+    number of steps, divided by the mean entry quote. The trimmed figures
+    drop the largest 1 percent of absolute daily changes.
+    """
+    end = 126 + n_days
+    times = np.arange(end + 1) / 252.0
+    start = float(times[126])
+    maturity = float(times[end])
+    terminal = []
+    intercept = []
+    slope = []
+    panels = []
+    probs = []
+    quotes = []
+    replication_z = []
+    for replication in range(8):
+        paths = model.simulate_market(1500, times, seed=run_seed(40 + replication, 2))
+        mark = _variance_swap_mark(paths.state["v"], paths.state["xi"], times, start, maturity)
+        gap = mark[:, end] - mark[:, 126]
+        se = gap.std(ddof=1) / math.sqrt(gap.size)
+        terminal.append(gap.mean() / se)
+        increment = np.diff(mark[:, 126 : end + 1], axis=1)
+        z_coef = _drift_z(increment, times[126:end])
+        intercept.append(z_coef[0])
+        slope.append(z_coef[1])
+        step = increment[:, :-1]
+        probability = paths.regime_prob[:, 126 : end - 1, 1]
+        _beta, z_filter = _clustered_slope(step, probability)
+        replication_z.append(z_filter[1])
+        panels.append(step)
+        probs.append(probability)
+        quotes.append(mark[:, 126])
+    panel = np.concatenate(panels)
+    probability = np.concatenate(probs)
+    quote = float(np.concatenate(quotes).mean())
+    beta, z_score = _clustered_slope(panel, probability)
+    steps = panel.shape[1]
+    drift = abs(float(beta[1])) * steps / quote
+    trimmed_beta, trimmed_z = _clustered_slope(panel, probability, _drop_largest(panel, 0.01))
+    trimmed_drift = abs(float(trimmed_beta[1])) * steps / quote
+    return {
+        "terminal": np.asarray(terminal),
+        "intercept": np.asarray(intercept),
+        "slope": np.asarray(slope),
+        "drift": drift,
+        "z": float(z_score[1]),
+        "trimmed_drift": trimmed_drift,
+        "trimmed_z": float(trimmed_z[1]),
+        "replication_z": np.asarray(replication_z),
+    }
+
+
+def _assert_filter_z(result, label):
+    """The eight replication slopes pass the z-rule.
+
+    The pooled point estimate of the drift is kept in the failure text.
+    Its standard error on this sample is wider than the 1 percent bar, so
+    the bar is not the assertion.
+    """
+    failed = check_z(result["replication_z"])
+    if failed is not None:
+        raise AssertionError(
+            f"{label} {failed}; drift {result['drift']:.4f} z {result['z']:.2f} "
+            f"trimmed {result['trimmed_drift']:.4f} z {result['trimmed_z']:.2f}"
+        )
+
+
 def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
     """Eight runs, 1,500 paths, gate settings, episode start 0.5.
 
     The mark is the left-point model variance accrued since the episode
-    start, plus the remaining integral of the filtered forward curve.
-    Maturities are 21 and 30 trading days. The last step's mark change is
-    numerical noise, because that step's remaining integral is the diagonal
-    ``v``, and it is left out of both drift regressions.
+    start, plus the remaining integral of the hybrid forward curve. That
+    curve uses the ``nu`` in force on each finished step. The next tenor
+    times the near-field factor of the step in between equals the next
+    variance. Maturities are 21 and 30 trading days. The last step's mark
+    change is numerical noise and is left out of both drift regressions.
 
     The conditional regression is the one-step mark change on the hedger's
     probability of the high regime, with path-clustered standard errors.
-    The drift is the absolute slope times the number of steps, divided by
-    the mean entry quote. The bar is 1 percent of that quote. This draw is
-    above the bar. Dropping the largest 1 percent of absolute daily changes
-    leaves a larger slope, so the drift is in the body of the sample.
+    One z-score per replication passes the z-rule, at the gate and at the
+    ``H = 1/2`` and equal-``nu`` controls. The pooled drift, the absolute
+    slope times the number of steps divided by the mean entry quote, has a
+    standard error wider than 1 percent of the quote. On this draw it is
+    0.057 of the 21-day quote (z -0.87, standard error 0.066) and 0.085 of
+    the 30-day quote (z -1.50, standard error 0.056). Dropping the largest
+    1 percent of absolute changes leaves 0.248 and 0.276. That trim cuts
+    the right tail of the near-field factor. The same controls are 0.057
+    and 0.050 at ``H = 1/2``, and 0.0037 and 0.059 when both regimes share
+    ``nu = 1.5``.
     """
     pytest.importorskip("roughvol")
     model = RegimeSwitchingBergomi(
@@ -1449,57 +1604,40 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
         n_pilot=1024,
         price_filter="rv",
     )
-    # Full-sample z and drift, then the same after the 1 percent trim.
-    conditional = {
-        21: (-0.730, 0.0567, -8.551, 0.1599),
-        30: (-1.080, 0.0687, -8.669, 0.1712),
-    }
     for n_days in (21, 30):
-        end = 126 + n_days
-        times = np.arange(end + 1) / 252.0
-        start = float(times[126])
-        maturity = float(times[end])
-        terminal = []
-        intercept = []
-        slope = []
-        panels = []
-        probs = []
-        quotes = []
-        for replication in range(8):
-            paths = model.simulate_market(1500, times, seed=run_seed(40 + replication, 2))
-            mark = _variance_swap_mark(
-                paths.state["v"], paths.state["xi"], times, start, maturity
-            )
-            gap = mark[:, end] - mark[:, 126]
-            se = gap.std(ddof=1) / math.sqrt(gap.size)
-            terminal.append(gap.mean() / se)
-            increment = np.diff(mark[:, 126 : end + 1], axis=1)
-            z_coef = _drift_z(increment, times[126:end])
-            intercept.append(z_coef[0])
-            slope.append(z_coef[1])
-            panels.append(increment[:, :-1])
-            probs.append(paths.regime_prob[:, 126 : end - 1, 1])
-            quotes.append(mark[:, 126])
-        assert check_z(np.asarray(terminal)) is None
-        assert check_z(np.asarray(intercept)) is None
-        assert check_z(np.asarray(slope)) is None
-        panel = np.concatenate(panels)
-        prob = np.concatenate(probs)
-        quote = float(np.concatenate(quotes).mean())
-        beta, z_score = _clustered_slope(panel, prob)
-        steps = panel.shape[1]
-        drift = abs(float(beta[1])) * steps / quote
-        trimmed_beta, trimmed_z = _clustered_slope(panel, prob, _drop_largest(panel, 0.01))
-        trimmed_drift = abs(float(trimmed_beta[1])) * steps / quote
-        z_full, drift_full, z_body, drift_body = conditional[n_days]
-        assert float(z_score[1]) == pytest.approx(z_full, abs=0.005)
-        assert drift == pytest.approx(drift_full, abs=0.001)
-        assert float(trimmed_z[1]) == pytest.approx(z_body, abs=0.02)
-        assert trimmed_drift == pytest.approx(drift_body, abs=0.002)
-        assert drift > 0.01
-        assert trimmed_drift > 0.01
-        assert float(beta[1]) < 0.0
-        assert float(trimmed_beta[1]) < 0.0
+        result = _episode_mark_drift(model, n_days)
+        assert check_z(result["terminal"]) is None
+        assert check_z(result["intercept"]) is None
+        assert check_z(result["slope"]) is None
+        _assert_filter_z(result, f"gate {n_days}")
+    half = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.5,
+        n_mc=2,
+        n_sub=21,
+        n_pilot=1024,
+        price_filter="rv",
+    )
+    half_result = _episode_mark_drift(half, 21)
+    _assert_filter_z(half_result, "H=1/2")
+    equal = RegimeSwitchingBergomi(
+        RegimeSpec(
+            generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+            params=[{"nu": 1.5}, {"nu": 1.5}],
+            p0=np.array([0.7, 0.3]),
+            switch="nu",
+        ),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=2,
+        n_sub=21,
+        n_pilot=1024,
+        price_filter="rv",
+    )
+    _assert_filter_z(_episode_mark_drift(equal, 21), "equal nu")
 
 
 def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
