@@ -260,8 +260,13 @@ class RegimeSwitchingBergomi:
         *,
         seed: int | np.random.SeedSequence,
         state0=None,
+        store_forward: bool = True,
     ) -> MarketPaths:
-        """Paths, the chain, the filter, and the trader's forward variance."""
+        """Paths, the chain, the filter, and the trader's forward variance.
+
+        ``store_forward=False`` skips ``state["xi"]``. A score that reads
+        only the filters does not need that array. The default still stores it.
+        """
         drawn = _draw_paths(self, n_paths, times, seed, state0=state0)
         grid = drawn["grid"]
         nus = drawn["nus"]
@@ -289,24 +294,25 @@ class RegimeSwitchingBergomi:
             priced = spot_prob
         Y = np.zeros((n_paths, grid.size))
         Y[:, 1:] = np.cumsum(dW, axis=1)
-        xi = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
+        state = {
+            "v": v,
+            "Y": Y,
+            "dW": dW,
+            "y": observed,
+            "y_rv": y_rv,
+            "regime_prob_spot": spot_prob,
+            "regime_prob_rv": rv_prob,
+            "regime_prob_latent": latent_prob,
+        }
+        if store_forward:
+            state["xi"] = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
+            state["xi_tenor"] = grid.copy()
         parent = as_seed_sequence(seed)
         plugin = self._plugin
         return MarketPaths(
             times=grid,
             Z=Z,
-            state={
-                "v": v,
-                "Y": Y,
-                "dW": dW,
-                "y": observed,
-                "y_rv": y_rv,
-                "xi": xi,
-                "xi_tenor": grid.copy(),
-                "regime_prob_spot": spot_prob,
-                "regime_prob_rv": rv_prob,
-                "regime_prob_latent": latent_prob,
-            },
+            state=state,
             F0=_flat(self.forward),
             df=_discount(self.rate),
             regime=regime,

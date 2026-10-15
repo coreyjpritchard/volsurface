@@ -1,5 +1,6 @@
 """Market paths, pricers, and the nu-only regime chain. DESIGN sections 21 and 22."""
 
+import gc
 import math
 from dataclasses import replace
 
@@ -1353,6 +1354,58 @@ def _variance_swap_mark(variance, xi, times, start, maturity):
     return mark
 
 
+def _clustered_slope(increment, probability, mask=None):
+    """Slope of the mark change on the probability of the high regime.
+
+    Each row is one path and one cluster. ``mask`` drops observations, in
+    row-major order. The scale on the sandwich is
+    ``G / (G - 1) * (N - 1) / (N - 2)``. The return is the intercept and
+    the slope, then their clustered z-scores.
+    """
+    y = np.asarray(increment, dtype=float)
+    p = np.asarray(probability, dtype=float)
+    flat_y = y.reshape(-1)
+    flat_p = p.reshape(-1)
+    path_id = np.repeat(np.arange(y.shape[0]), y.shape[1])
+    if mask is not None:
+        keep = np.asarray(mask, dtype=bool).reshape(-1)
+        flat_y = flat_y[keep]
+        flat_p = flat_p[keep]
+        path_id = path_id[keep]
+    design = np.column_stack((np.ones(flat_y.size), flat_p))
+    xtx = design.T @ design
+    beta = np.linalg.solve(xtx, design.T @ flat_y)
+    resid = flat_y - design @ beta
+    order = np.argsort(path_id, kind="mergesort")
+    ordered = path_id[order]
+    scores = design[order] * resid[order, None]
+    breaks = np.flatnonzero(np.diff(ordered)) + 1
+    meat = np.zeros((2, 2))
+    groups = 0
+    start = 0
+    stops = (*breaks, ordered.size)
+    for stop in stops:
+        total = scores[start:stop].sum(axis=0)
+        meat += np.outer(total, total)
+        groups += 1
+        start = stop
+    bread = np.linalg.inv(xtx)
+    n = flat_y.size
+    scale = (groups / (groups - 1)) * ((n - 1) / (n - 2))
+    se = np.sqrt(np.diag(scale * (bread @ meat @ bread)))
+    return beta, beta / se
+
+
+def _drop_largest(increment, fraction):
+    """Row-major mask that keeps the smallest ``1 - fraction`` absolute changes."""
+    flat = np.abs(np.asarray(increment, dtype=float)).reshape(-1)
+    keep_n = int(math.floor((1.0 - fraction) * flat.size))
+    order = np.argsort(flat)
+    mask = np.zeros(flat.size, dtype=bool)
+    mask[order[:keep_n]] = True
+    return mask
+
+
 def _drift_z(increment, times_left):
     """Weighted least squares, dropping a step whose sample variance is noise."""
     variance = increment.var(axis=0, ddof=1)
@@ -1376,7 +1429,14 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
     start, plus the remaining integral of the filtered forward curve.
     Maturities are 21 and 30 trading days. The last step's mark change is
     numerical noise, because that step's remaining integral is the diagonal
-    ``v``, and it is left out of the drift regression.
+    ``v``, and it is left out of both drift regressions.
+
+    The conditional regression is the one-step mark change on the hedger's
+    probability of the high regime, with path-clustered standard errors.
+    The drift is the absolute slope times the number of steps, divided by
+    the mean entry quote. The bar is 1 percent of that quote. This draw is
+    above the bar. Dropping the largest 1 percent of absolute daily changes
+    leaves a larger slope, so the drift is in the body of the sample.
     """
     pytest.importorskip("roughvol")
     model = RegimeSwitchingBergomi(
@@ -1389,6 +1449,11 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
         n_pilot=1024,
         price_filter="rv",
     )
+    # Full-sample z and drift, then the same after the 1 percent trim.
+    conditional = {
+        21: (-0.730, 0.0567, -8.551, 0.1599),
+        30: (-1.080, 0.0687, -8.669, 0.1712),
+    }
     for n_days in (21, 30):
         end = 126 + n_days
         times = np.arange(end + 1) / 252.0
@@ -1397,6 +1462,9 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
         terminal = []
         intercept = []
         slope = []
+        panels = []
+        probs = []
+        quotes = []
         for replication in range(8):
             paths = model.simulate_market(1500, times, seed=run_seed(40 + replication, 2))
             mark = _variance_swap_mark(
@@ -1409,9 +1477,29 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
             z_coef = _drift_z(increment, times[126:end])
             intercept.append(z_coef[0])
             slope.append(z_coef[1])
+            panels.append(increment[:, :-1])
+            probs.append(paths.regime_prob[:, 126 : end - 1, 1])
+            quotes.append(mark[:, 126])
         assert check_z(np.asarray(terminal)) is None
         assert check_z(np.asarray(intercept)) is None
         assert check_z(np.asarray(slope)) is None
+        panel = np.concatenate(panels)
+        prob = np.concatenate(probs)
+        quote = float(np.concatenate(quotes).mean())
+        beta, z_score = _clustered_slope(panel, prob)
+        steps = panel.shape[1]
+        drift = abs(float(beta[1])) * steps / quote
+        trimmed_beta, trimmed_z = _clustered_slope(panel, prob, _drop_largest(panel, 0.01))
+        trimmed_drift = abs(float(trimmed_beta[1])) * steps / quote
+        z_full, drift_full, z_body, drift_body = conditional[n_days]
+        assert float(z_score[1]) == pytest.approx(z_full, abs=0.005)
+        assert drift == pytest.approx(drift_full, abs=0.001)
+        assert float(trimmed_z[1]) == pytest.approx(z_body, abs=0.02)
+        assert trimmed_drift == pytest.approx(drift_body, abs=0.002)
+        assert drift > 0.01
+        assert trimmed_drift > 0.01
+        assert float(beta[1]) < 0.0
+        assert float(trimmed_beta[1]) < 0.0
 
 
 def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
@@ -1569,7 +1657,9 @@ def _episode_draw(nus, hurst, n_paths):
     )
     model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=hurst, n_mc=2)
     times = np.arange(126 + 30 + 1) / 252.0
-    paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2))
+    paths = model.simulate_market(
+        n_paths, times, seed=run_seed(12, 2), store_forward=False
+    )
     return paths, _switched_by(paths.regime)
 
 
@@ -1578,7 +1668,9 @@ def test_episode_filter_scores_after_burn_in():
 
     The filter sees the path from 0. Scores are split by whether the regime
     has switched by the date. The windowed observation uses 21 intraday
-    returns, and that level is left-point variance plus noise.
+    returns, and that level is left-point variance plus noise. Each draw is
+    scored and then freed. The forward-variance array is not stored, because
+    the scores do not read it.
     """
     pytest.importorskip("roughvol")
     # (hurst, n_paths, switched, filter) -> confusion, brier at t0.
@@ -1618,26 +1710,31 @@ def test_episode_filter_scores_after_burn_in():
             True: ([[13467, 3159], [3628, 38485]], 0.18514544),
         },
     }
-    draws = {}
+    filters = ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent")
     for hurst, nus in ((0.5, (0.4, 1.1)), (0.1, (1.5, 3.0))):
         for n_paths in (600, 4000):
-            draws[(hurst, n_paths)] = _episode_draw(nus, hurst, n_paths)
-    for hurst, n_paths, switched, name in t0:
-        paths, changed = draws[(hurst, n_paths)]
-        mask = changed[:, 126] if switched else ~changed[:, 126]
-        scored = regime_scores(paths.state[name][mask, 126], paths.regime[mask, 126])
-        confusion, brier = t0[(hurst, n_paths, switched, name)]
-        assert scored["confusion"].tolist() == confusion
-        assert scored["brier"] == pytest.approx(brier, abs=1e-8)
-    rough, changed = draws[(0.1, 4000)]
-    for horizon, splits in pooled.items():
-        for switched, (confusion, brier) in splits.items():
-            probs = []
-            labels = []
-            for date in range(126, 126 + horizon):
-                mask = changed[:, date] if switched else ~changed[:, date]
-                probs.append(rough.state["regime_prob_rv"][mask, date])
-                labels.append(rough.regime[mask, date])
-            scored = regime_scores(np.concatenate(probs), np.concatenate(labels))
-            assert scored["confusion"].tolist() == confusion
-            assert scored["brier"] == pytest.approx(brier, abs=1e-8)
+            paths, changed = _episode_draw(nus, hurst, n_paths)
+            assert "xi" not in paths.state
+            for switched in (False, True):
+                mask0 = changed[:, 126] if switched else ~changed[:, 126]
+                for name in filters:
+                    scored = regime_scores(
+                        paths.state[name][mask0, 126], paths.regime[mask0, 126]
+                    )
+                    confusion, brier = t0[(hurst, n_paths, switched, name)]
+                    assert scored["confusion"].tolist() == confusion
+                    assert scored["brier"] == pytest.approx(brier, abs=1e-8)
+            if hurst == 0.1 and n_paths == 4000:
+                for horizon, splits in pooled.items():
+                    for switched, (confusion, brier) in splits.items():
+                        probs = []
+                        labels = []
+                        for date in range(126, 126 + horizon):
+                            mask = changed[:, date] if switched else ~changed[:, date]
+                            probs.append(paths.state["regime_prob_rv"][mask, date])
+                            labels.append(paths.regime[mask, date])
+                        scored = regime_scores(np.concatenate(probs), np.concatenate(labels))
+                        assert scored["confusion"].tolist() == confusion
+                        assert scored["brier"] == pytest.approx(brier, abs=1e-8)
+            del paths, changed
+            gc.collect()

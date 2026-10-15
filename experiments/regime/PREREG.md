@@ -192,6 +192,13 @@ smaller than the reduction from I3, if the surrogate validation error is
 under its bar. That L2 sentence is reported when I3 is eligible. It is
 not a fourth member of the family.
 
+The variance-swap gate result is conditional on the mark's drift along
+the filtered probability of the high regime. The regression, the
+path-clustered standard errors, and the 1 percent bar are in the
+instrument-martingale pre-gate. The point estimate on this draw is above
+that bar. The slope in the body of the sample, after the largest 1 percent
+of absolute daily changes are removed, is not zero.
+
 ## Sample size
 
 Training uses 100,000 paths. Validation uses 20,000 paths. The test uses
@@ -343,6 +350,33 @@ variance. The last step is left out of the regression: its remaining
 integral is the diagonal `v`, so the mark change is numerical noise.
 The intercept z-scores and the slope z-scores pass for both maturities.
 
+The same mark changes are regressed on the hedger's probability of the
+high regime at the left of the step. The standard error is clustered by
+path, with scale `G / (G - 1) * (N - 1) / (N - 2)`. The drift is the
+absolute slope times the number of steps, divided by the mean entry
+quote. The bar, stated before this draw, is an absolute drift under 1
+percent of that quote. On the same eight runs the 21-trading-day drift is
+0.0567 of the quote, with clustered z equal to -0.73. The 30-trading-day
+drift is 0.0687, with z equal to -1.08. Both point estimates sit above
+the bar. Neither slope is distinguishable from zero at its clustered
+standard error. Dropping the largest 1 percent of absolute daily changes
+leaves a drift of 0.160, z equal to -8.55, on the 21-trading-day swap,
+and 0.171, z equal to -8.67, on the 30-trading-day swap. The slope is
+negative: a higher probability of the high regime comes with a lower mark
+change. It sits in the body of the sample. The ordinary t-statistic on
+that trimmed 21-trading-day panel is -7.83.
+
+The slope is the one-day roll from the closed-form next tenor onto the
+hybrid variance. On this draw the later tenors, taken alone, have
+clustered z 0.23. The accounting identity holds: the mark change equals
+the change in the remaining integral after the accrued leg cancels, with
+a maximum absolute gap of 7e-16, and the last step is 0. At `H = 1/2`,
+four runs of 1,500 paths, the same regression has clustered z 0.29 and
+trimmed z 1.06. With both regimes at `nu = 1.5`, four runs, the trimmed z
+is -0.11. Those two controls do not carry the gate's trimmed slope. The
+result is not an indexing error in the integral. The gate stays
+conditional on the drift.
+
 I3, the call priced by `SurrogatePricer`, is the third instrument. It
 stays untested until that surrogate exists.
 
@@ -368,7 +402,10 @@ bins. A bin with fewer than 40 paths is left out.
 The windowed score assumes 21 intraday returns on each day. The windowed
 level is left-point model variance `v` plus chi-squared noise on 21
 degrees, up to the drift and the bridge. It is not integrated variance.
-That is the realism limit of these daily-grid skills.
+That is the realism limit of these daily-grid skills. With integrated
+variance in place of that left-point level, the pre-registered windowed
+skills on the paths that stayed and the paths that switched are 0.884 and
+0.456 at 13 intraday returns per day, and 0.814 and 0.300 at 6.
 
 At the episode start, market-test settings, `H = 1/2`, `nu` 0.4 and 1.1,
 600 paths. Not switched. Spot skill -0.0671, calibration error 0.0879.
@@ -401,8 +438,10 @@ Switched: windowed skill 0.5391, confusion
 155. Not switched: windowed skill 0.9190, confusion
 `[[37047, 874], [478, 22862]]`. Switched: windowed skill 0.5438,
 confusion `[[13467, 3159], [3628, 38485]]`. Spot skill on the switched
-paths is negative at both horizons. The windowed filter keeps skill near
-0.54 on those paths.
+paths is negative at both horizons. The spot emission is fixed, the same
+mean in both regimes, and it is misspecified. The posterior is
+overconfident, so it lags after a switch. The windowed filter keeps skill
+near 0.54 on those paths.
 
 ## Not the gate
 
@@ -476,7 +515,10 @@ H5 is exploratory. It is not a gate. The link to minimal DYSANOS is the
 tail diffusion in DYSANOS v3, arXiv:2608.12587, Appendix C, equations
 (55) and (56). Those two equations were read from the paper's HTML.
 This restatement does not claim a reading of the rest of the paper.
-Minimal DYSANOS in this repository does not implement the diffusion.
+Minimal DYSANOS in this repository multiplies the innovation by an
+optional scalar, the `scale` argument of `simulate_factors`. That scale
+is off unless it is requested, and it is not fitted. The diffusion in
+equations (55) and (56) is not that factor.
 
 Equation (55) draws the innovation from a scalar log-variance state `g`.
 With `z` a standard normal vector independent of the scalar shock in
