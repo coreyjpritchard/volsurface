@@ -8,7 +8,11 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 The call uses the true regime at the clock and the same hybrid curve as the variance swap. `regime_prob` is the hedger's probability, not a pricing weight. Given the true `nu` path, the mark is a martingale up to the hybrid tail-weight bias. That bias is the closed form `hybrid_tail_mark_bias`. At `H = 0.1` and `dt = 1/252` the 21-day fraction is -0.000436 at `nu = 1.5` and -0.001745 at `nu = 3`. The 30-day fraction is -0.000456 and -0.001825. The stationary mixture, `pi_high = 1.5/2.3`, is -0.001290 and -0.001349. Each is under 1 percent of the quote. Lag 1 is exact: `2 H Var(I_1) = dt^{2H}` to `1e-12`. Rebuilding the next variance from the next tenor, to 2e-13 on one draw, is a code-consistency identity.
 
-The Monte Carlo check is the untrimmed path-clustered regression. Its 95 percent interval contains 0, and the minimum detectable drift at 80 percent power is recorded with that draw. A trimmed regression is a diagnostic.
+The Monte Carlo check is the untrimmed path-clustered regression. On eight runs of 1,500 paths the 21-day signed drift is -0.0573 of the quote, standard error 0.0661, 95 percent interval (-0.187, 0.072), minimum detectable drift 0.185. The 30-day signed drift is -0.0849, standard error 0.0565, interval (-0.196, 0.026), minimum detectable drift 0.158. Both intervals contain 0. The trimmed diagnostics are -0.248 and -0.276. At `H = 1/2` the signed drift is 0.0575. With both regimes at `nu = 1.5` it is 0.0037. A trimmed regression is a diagnostic.
+
+On the episode grid, 157 daily times through `t0` plus 30 trading days, eight runs of 2,000 paths, `E[log v_T]` passes the z-rule. Constant `nu` has largest absolute z 1.46 and mean z 0.203. The switching market has largest absolute z 1.04 and mean z 0.032. The forward curve is not stored for that check. The call's log contract on the pinned eight-path draw stays inside 4 standard errors of the variance-swap integral. The largest absolute z is 3.47, and the flat anchor's median relative gap on the last expiry is 0.290.
+
+One simulate of 1,500 paths on the 30-day episode grid peaks at 484 MiB. The forward-variance array is 282 MiB. Building that array adds about 293 MiB above the inputs. The fast suite is 205 passed, 1 skipped, 5 deselected, and its peak resident set is 1409 MiB.
 
 **Hypothesis:** on a fresh evaluation of `hybrid_tail_mark_bias` at these two vols of vol, the 21-day stationary mixture stays inside 0.002 of zero. The quantity to report is that fraction, next to -0.001290.
 

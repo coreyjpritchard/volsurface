@@ -1227,12 +1227,13 @@ def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     surface log contract ``-2 E[log Z]`` is that curve's integral, up to
     Monte Carlo error. The reference is the variance-swap integral of the
     same curve. The flat anchor ``v_t (T - t)`` misses it: on this draw
-    the median relative gap on the last expiry is above 0.20. The log
-    contract stays inside 4 standard errors of the integral on every
-    expiry, with an extra ``1e-8`` for the one-step expiry, whose control
-    residual is numerical noise. The out-of-the-money strip, on
-    log-moneyness from -0.8 to 0.8, stays inside 4 standard errors of the
-    same integral on the last expiry.
+    the median relative gap on the last expiry is 0.290. The log contract
+    stays inside 4 standard errors of the integral on every expiry, with
+    an extra ``1e-8`` for the one-step expiry, whose control residual is
+    numerical noise. The largest absolute z-score is 3.47. The
+    out-of-the-money strip, on log-moneyness from -0.8 to 0.8, stays
+    inside 4 standard errors of the same integral on the last expiry. Its
+    largest absolute z-score is 2.28.
     """
     pytest.importorskip("roughvol")
     smile = np.linspace(-0.8, 0.8, 161)
@@ -1588,11 +1589,15 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
     the quote. The Monte Carlo check is the untrimmed regression of the
     one-step mark change on the hedger's probability of the high regime,
     with path-clustered standard errors. The 95 percent interval contains
-    0. The minimum detectable drift at 80 percent power is reported beside
-    it. One z-score per replication passes the z-rule, at the gate and at
-    the ``H = 1/2`` and equal-``nu`` controls. Dropping the largest 1
-    percent of absolute changes is a diagnostic. It cuts the right tail of
-    the near-field factor and is not a bar.
+    0. On this draw the 21-day signed drift is -0.0573 of the quote,
+    standard error 0.0661, interval (-0.187, 0.072), minimum detectable
+    drift 0.185. The 30-day signed drift is -0.0849, standard error
+    0.0565, interval (-0.196, 0.026), minimum detectable drift 0.158.
+    One z-score per replication passes the z-rule, at the gate and at the
+    ``H = 1/2`` and equal-``nu`` controls. Those signed drifts are 0.0575
+    and 0.0037. Dropping the largest 1 percent of absolute changes is a
+    diagnostic. It cuts the right tail of the near-field factor and is
+    not a bar. On this draw the trimmed drifts are -0.248 and -0.276.
     """
     pytest.importorskip("roughvol")
     model = RegimeSwitchingBergomi(

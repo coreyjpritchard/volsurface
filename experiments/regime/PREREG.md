@@ -345,6 +345,14 @@ match. On the switching market the target is pathwise: `log xi0` minus
 that path's compensator. The same eight seeds pass. The largest absolute
 z is 1.74. The pre-gate is this log-space check.
 
+The same check on the episode grid, daily from time 0 through `t0` plus
+30 trading days, 157 times, `T = 156/252`. Eight runs of 2,000 paths,
+seeds `run_seed(70 + r, 2)`. The forward curve is not stored. Constant
+`nu` of 1.5 and of 3 share z-scores, because the driver is linear in
+`nu`. The largest absolute z is 1.46 and the mean z is 0.203. On the
+switching market the largest absolute z is 1.04 and the mean z is 0.032.
+Both pass the z-rule.
+
 ### Instrument martingale
 
 The spot on the 30-step daily grid is a martingale. Eight runs of 2,000
@@ -394,10 +402,26 @@ tail factor is 0.9986, and later lags are closer to 1.
 The Monte Carlo check is the untrimmed regression. Its 95 percent
 interval has to contain 0. The minimum detectable drift at 80 percent
 power is `(1.960 + 0.842)` times the clustered standard error of the
-drift fraction. A regression that drops the largest 1 percent of
-absolute daily changes is a diagnostic. The trim deletes the right tail
-that balances the near-field factor. One draw of that factor from a
-normal innovation with conditional mean exactly 1, `nu` switching
+drift fraction. On the eight runs the 21-trading-day signed drift is
+-0.0573 of the quote, clustered z -0.87, standard error 0.0661. The 95
+percent interval is (-0.187, 0.072). The minimum detectable drift is
+0.185 of the quote. The entry quote averages 0.003204. The
+30-trading-day signed drift is -0.0849, z -1.50, standard error 0.0565,
+interval (-0.196, 0.026), minimum detectable drift 0.158, on an entry
+quote of 0.004607. Both intervals contain 0. The eight replication
+z-scores pass the z-rule. The largest absolute replication z is 2.20 on
+the 21-day swap and 2.36 on the 30-day swap.
+
+At `H = 1/2` the signed drift is 0.0575, standard error 0.0673, interval
+(-0.074, 0.189), and the trimmed diagnostic is 0.0504. With both regimes
+at `nu = 1.5` the signed drift is 0.0037, standard error 0.0715,
+interval (-0.137, 0.144), and the trimmed diagnostic is 0.0588.
+
+A regression that drops the largest 1 percent of absolute daily changes
+is a diagnostic. On this draw it leaves -0.248, z -13.8, on the 21-day
+swap, and -0.276, z -14.5, on the 30-day swap. The trim deletes the
+right tail that balances the near-field factor. One draw of that factor
+from a normal innovation with conditional mean exactly 1, `nu` switching
 between 1.5 and 3, 3,000 paths, 19 steps, seed 0, has trimmed drift
 -0.53 and z -41. The closed-form mixture had a separate roll bias: on
 the 30-day roll, paths in the low regime had mean gap 0.032 of the
