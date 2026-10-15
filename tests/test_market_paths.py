@@ -1258,6 +1258,200 @@ def test_gate_mode_requires_the_stored_hybrid_curve():
     assert np.isfinite(model.surface_at(stored, 1).call).all()
 
 
+def _coupled_replay(model, drawn, clock: int) -> tuple[np.ndarray, np.ndarray]:
+    """Copy map fed this path's own future pieces. Returns variance and log Z.
+
+    The variance row is the copy's left variance, including the terminal
+    level. ``log Z`` is the sum of log increments from the clock, the same
+    shock the simulator stored.
+    """
+    grid = np.asarray(drawn["grid"], dtype=float)
+    regime = drawn["regime"]
+    nu_step = drawn["nus"][regime[:, :-1]]
+    v = drawn["v"]
+    perp = drawn["perp"]
+    rho = float(model.rho)
+    ortho = math.sqrt(max(0.0, 1.0 - rho * rho))
+    n_times = grid.size - clock
+    log_z = np.zeros((v.shape[0], n_times))
+    if model.H == 0.5:
+        dW = drawn["dW"]
+        variance = np.empty((v.shape[0], n_times))
+        multiplier = np.ones(v.shape[0])
+        variance[:, 0] = v[:, clock]
+        for step in range(n_times - 1):
+            dt = float(grid[clock + step + 1] - grid[clock + step])
+            shock_w = dW[:, clock + step]
+            nu = nu_step[:, clock + step]
+            left = v[:, clock] * multiplier
+            shock = rho * shock_w + ortho * math.sqrt(dt) * perp[:, clock + step]
+            increment = np.sqrt(np.maximum(left, 0.0)) * shock - 0.5 * left * dt
+            log_z[:, step + 1] = log_z[:, step] + increment
+            multiplier = multiplier * np.exp(nu * shock_w - 0.5 * nu * nu * dt)
+            variance[:, step + 1] = v[:, clock] * multiplier
+        return variance, log_z
+    components = drawn["components"]
+    xi = hybrid_path_forward_variance(model.H, nu_step, model.xi0, grid, components)
+    diagonal = np.arange(grid.size)
+    xi[:, diagonal, diagonal] = v
+    short = grid[clock:] - float(grid[clock])
+    pieces = components[:, clock:, :]
+    factor = hybrid_increment_variance(model.H, nu_step[:, clock:], 1.0, short, pieces)
+    variance = xi[:, clock, clock:] * factor
+    for step in range(n_times - 1):
+        dt = float(short[step + 1] - short[step])
+        shock_w = pieces[:, step, 0]
+        shock = rho * shock_w + ortho * math.sqrt(dt) * perp[:, clock + step]
+        left = np.maximum(variance[:, step], 0.0)
+        log_z[:, step + 1] = log_z[:, step] + np.sqrt(left) * shock - 0.5 * left * dt
+    return variance, log_z
+
+
+def _coupled_gaps(model, drawn, clock: int) -> tuple[float, float]:
+    variance, log_z = _coupled_replay(model, drawn, clock)
+    v_gap = float(np.max(np.abs(variance - drawn["v"][:, clock:])))
+    spot = np.log(drawn["Z"][:, clock:]) - np.log(drawn["Z"][:, clock])[:, None]
+    z_gap = float(np.max(np.abs(log_z - spot)))
+    return v_gap, z_gap
+
+
+def test_copy_fed_the_paths_pieces_reproduces_variance_and_log_spot():
+    """Coupling identity. A copy fed the path's own future pieces matches the draw.
+
+    The pieces are the future ``nu`` path, the future hybrid components or
+    the future ``dW`` at ``H = 1/2``, the stored orthogonal shock, and the
+    forward curve at the clock. Both ``v`` and ``log Z`` from that clock
+    match to ``1e-12``. Clocks are the start, the middle, and the last
+    step of a 21-day grid, 32 paths, seeds ``run_seed(81, 2)`` and
+    ``run_seed(82, 2)``. On this draw the largest absolute gap is
+    8.95e-16, on ``log Z`` at ``H = 1/2``.
+    """
+    pytest.importorskip("roughvol")
+    day = 1.0 / 252.0
+    times = np.arange(22) * day
+    clocks = (0, 10, 20)
+    rough = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    half = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.5, n_mc=2, n_sub=1, n_pilot=2
+    )
+    drawn_rough = _draw_paths(rough, 32, times, run_seed(81, 2))
+    drawn_half = _draw_paths(half, 32, times, run_seed(82, 2))
+    for clock in clocks:
+        rough_v, rough_z = _coupled_gaps(rough, drawn_rough, clock)
+        half_v, half_z = _coupled_gaps(half, drawn_half, clock)
+        assert rough_v < 1e-12 and rough_z < 1e-12, f"rough clock {clock} {rough_v} {rough_z}"
+        assert half_v < 1e-12 and half_z < 1e-12, f"half clock {clock} {half_v} {half_z}"
+
+
+def test_copy_chain_switch_rate_matches_expm():
+    """One-step regime rates match ``expm(Q dt)`` under the z-rule.
+
+    Eight replications. The copy chain is 4,000 paths from each starting
+    regime, ``dt = 1/252``. The simulator chain is 2,000 paths at
+    ``H = 1/2``, split by the regime at the left endpoint. The probability
+    is the high-regime entry of ``_stochastic(expm(Q dt))``. That matrix
+    matches ``expm(Q dt)`` to ``1e-12``. Seeds are ``run_seed(80 + r, 2)``
+    for the copy and ``run_seed(90 + r, 2)`` for the simulator. On this
+    draw the copy's largest absolute z is 2.07 and the simulator's is 2.39.
+    """
+    nus = np.array([1.5, 3.0])
+    generator_q = np.array([[-1.5, 1.5], [0.8, -0.8]])
+    dt = 1.0 / 252.0
+    raw = expm(generator_q * dt)
+    step = _stochastic(raw)
+    assert float(np.max(np.abs(raw - step))) < 1e-12
+    grid = np.array([0.0, dt, 2.0 * dt])
+    n_sim = 4000
+    copy_scores = []
+    for replication in range(8):
+        rng = generator(run_seed(80 + replication, 2))
+        for row in (0, 1):
+            start = np.full(n_sim, row, dtype=int)
+            nu = _future_nu(nus, generator_q, start, grid, rng)
+            freq = float(np.mean(nu[:, 1] == nus[1]))
+            probability = float(step[row, 1])
+            se = math.sqrt(probability * (1.0 - probability) / n_sim)
+            copy_scores.append((freq - probability) / se)
+    copy_z = np.asarray(copy_scores)
+    failed = check_z(copy_z)
+    if failed is not None:
+        raise AssertionError(failed)
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.5, n_mc=2, n_sub=1, n_pilot=2
+    )
+    sim_scores = []
+    for replication in range(8):
+        drawn = _draw_paths(model, 2000, np.array([0.0, dt]), run_seed(90 + replication, 2))
+        regime = drawn["regime"]
+        for row in (0, 1):
+            mask = regime[:, 0] == row
+            count = int(mask.sum())
+            assert count > 100
+            freq = float(np.mean(regime[mask, 1] == 1))
+            probability = float(step[row, 1])
+            se = math.sqrt(probability * (1.0 - probability) / count)
+            sim_scores.append((freq - probability) / se)
+    sim_z = np.asarray(sim_scores)
+    failed = check_z(sim_z)
+    if failed is not None:
+        raise AssertionError(failed)
+
+
+def test_gate_surface_defaults_to_standardised_moneyness():
+    """Gate settings, ``smile_k`` omitted, ``n_mc`` 1024, ``T`` of 21 trading days.
+
+    The default strike grid is ``k = z * sqrt(xi0 * tau)`` with ``z`` from
+    -2.5 to 2.5 and ``tau`` the time from the clock to the last expiry.
+    An explicit ``smile_k`` is left as given. The spot-filter default stays
+    nine strikes from -0.2 to 0.2. The out-of-the-money exact-zero rate is
+    the share of last-expiry call prices with ``k > 0`` that are exactly 0.
+    On eight paths, seed ``run_seed(83, 2)``, that rate at 21 days is 0
+    on 80 prices. The same strikes on the one-day node are far out for
+    that maturity, and 63 of those 80 prices are exactly zero.
+    """
+    pytest.importorskip("roughvol")
+    spot = _model()
+    assert np.allclose(spot.smile_k, np.linspace(-0.2, 0.2, 9))
+    short = np.linspace(0.0, 0.2, 5)
+    spot_paths = spot.simulate_market(2, short, seed=run_seed(4, 2))
+    assert np.allclose(spot.surface_at(spot_paths, 0).k, np.linspace(-0.2, 0.2, 9))
+    explicit = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=4,
+        n_sub=1,
+        n_pilot=2,
+        price_filter="rv",
+        smile_k=np.array([0.0]),
+    )
+    explicit_paths = explicit.simulate_market(2, short, seed=run_seed(4, 2))
+    assert np.allclose(explicit.surface_at(explicit_paths, 1).k, np.array([0.0]))
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=1024,
+        n_sub=21,
+        n_pilot=1024,
+        price_filter="rv",
+    )
+    day = 1.0 / 252.0
+    times = np.arange(22) * day
+    paths = model.simulate_market(8, times, seed=run_seed(83, 2))
+    batch = model.surface_at(paths, 0)
+    tau = float(times[-1])
+    smile = np.linspace(-2.5, 2.5, 21) * math.sqrt(0.04 * tau)
+    assert np.allclose(batch.k, smile)
+    wing = batch.call[:, -1, batch.k > 0.0]
+    zero_rate = float(np.mean(wing == 0.0))
+    assert zero_rate < 0.05, f"otm call zero rate {zero_rate:.4f} on {wing.size} prices"
+
+
 def test_surface_standard_error_is_below_the_raw_monte_carlo_noise():
     """One path, nu = 1.1, H = 1/2, 32 steps, 1,024 copies, seed entropy 7.
 
@@ -1880,18 +2074,18 @@ def test_call_mark_on_the_daily_episode_passes_the_clustered_interval():
 
     The mark is the conditional expectation of ``max(Z_T / Z_entry - 1, 0)``.
     Each copy starts at the true regime and switches with the generator.
-    At ``H = 1/2`` the variance multiplier is an exponential martingale for
-    every ``nu`` path, so the model drift is 0, under 1 percent of the
-    quote. At ``H = 0.1`` the variance level carries the hybrid tail bias,
-    which is under 1 percent of the variance quote, and the call has no
-    separate closed form.
+    The model drift is 0 by construction: each copy replicates the
+    simulator's law, and the variance swap's tail-weight bias does not
+    enter the call. The primary bar is the coupling identity. This
+    regression is a wiring smoke test. It cannot detect a 1 percent
+    drift. The minimum detectable drift on this sample is about 0.35 of
+    the quote.
 
     The Monte Carlo check is the untrimmed regression of the one-step mark
     change on the hedger's probability of the high regime, with
     path-clustered standard errors. The 95 percent interval contains 0.
-    The standard error on this sample is about 0.12 of the quote, so the
-    1 percent bar is not applied to the point estimate. The minimum
-    detectable drift at 80 percent power is reported in the failure text.
+    The minimum detectable drift at 80 percent power is reported in the
+    failure text.
     Eight runs, ``n_pilot`` 128, 64 copies. The rough sample is 150 paths:
     signed drift -0.018, standard error 0.124, interval (-0.262, 0.226),
     minimum detectable drift 0.348, on a quote of 0.01630. ``H = 1/2``

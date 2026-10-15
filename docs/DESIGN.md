@@ -1058,8 +1058,9 @@ integral sits in the curve and is not drawn again. The call curve is the
 conditional curve of the path whose past `nu` switched, because the
 variance swap uses that curve and the call uses it too. The grid from
 the clock to the last expiry has to be equally spaced. A non-uniform
-grid raises. The fresh near-field factor is a martingale. The tail-weight
-bias is the same one the variance swap carries. `regime_prob` is not a
+grid raises. The call is a martingale by construction up to Monte Carlo
+error. Each copy replicates the simulator's law. The tail-weight bias
+does not enter the call. `regime_prob` is not a
 weight. The same shocks drive a Black path whose variance is the
 deterministic left forward curve. The control is that Black price. The
 copies are split in half, and the coefficient on each half is the other

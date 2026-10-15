@@ -185,9 +185,9 @@ starts from the true regime at the clock and runs the chain forward
 with the same generator, so `nu` switches inside the copy. Holding
 today's `nu` fixed for the remaining life is not that price. The
 variance swap is a martingale given the true `nu` path, up to the
-tail-weight bias. The call is a martingale on the simulation filtration
-up to Monte Carlo error and that same bias in the variance level,
-because the copies carry the future chain. The filter is not a pricing
+tail-weight bias. The call is a martingale by construction up to
+Monte Carlo error, because each copy replicates the simulator's law.
+The tail-weight bias does not enter the call. The filter is not a pricing
 weight. H1 and H2 measure the hedger's information gap: the filter
 against this informed price.
 
@@ -439,18 +439,26 @@ expiring 21 trading days later. The mark at a later clock is
 `Z_entry / Z_clock`. Each copy starts at the true regime and runs the
 chain forward. Holding today's `nu` fixed is not this price.
 
-At `H = 1/2` the variance multiplier is an exponential martingale for
-every `nu` path, so the model drift is 0, under 1 percent of the quote.
-At `H = 0.1` the variance level carries the hybrid tail bias, under 1
-percent of the variance quote, and the call has no separate closed form.
-The Monte Carlo check is the untrimmed clustered interval. It contains
-0. On eight runs the rough sample is 150 paths and 64 copies: signed
-drift -0.018 of the quote, standard error 0.124, interval (-0.262, 0.226),
-minimum detectable drift 0.348, quote 0.01630. `H = 1/2` uses 400 paths
-and 64 copies: signed drift 0.057, standard error 0.129, interval
-(-0.196, 0.311), minimum detectable drift 0.362, quote 0.01643. Both
-standard errors are larger than 1 percent of the quote, so that bar is
-not applied to the point estimate. `n_pilot` is 128. A trimmed
+The call's model drift is 0 by construction. Each copy replicates the
+simulator's law, the regime chain steps with `expm(Q dt)`, the control
+variate is unbiased, and the tower property does the rest. The variance
+swap's tail-weight bias does not enter the call. The primary bar is a
+coupling identity. Fed a path's own future pieces, a copy reproduces the
+simulated `v` and `log Z` to `1e-12`. On 32 paths and a 21-day grid,
+at the start, the middle and the last step, the largest absolute gap is
+8.95e-16. The regime switch rates match `expm(Q dt)` under the z-rule.
+The copy's one-step rate, eight runs of 4,000 paths from each regime,
+has largest absolute z 2.07. The simulator's chain, eight runs of 2,000
+paths, has largest absolute z 2.39.
+
+The Monte Carlo check is a wiring smoke test. It cannot detect a 1
+percent drift: the minimum detectable drift is about 0.35 of the quote.
+The untrimmed clustered interval contains 0. On eight runs the rough
+sample is 150 paths and 64 copies: signed drift -0.018 of the quote,
+standard error 0.124, interval (-0.262, 0.226), minimum detectable drift
+0.348, quote 0.01630. `H = 1/2` uses 400 paths and 64 copies: signed
+drift 0.057, standard error 0.129, interval (-0.196, 0.311), minimum
+detectable drift 0.362, quote 0.01643. `n_pilot` is 128. A trimmed
 regression is a diagnostic: -0.053 and 0.181 on this draw.
 
 The log contract of the call, on the pinned eight-path draw with 4,096
@@ -462,6 +470,14 @@ is 4.25, and the path-mean z is 0.039. The flat anchor is a
 non-triviality check: its mean absolute relative gap is 0.302, which is
 4.60 standard errors. The median on this draw is 0.290. None of the 80
 out-of-the-money call prices is exactly zero.
+
+At gate settings, when `smile_k` is omitted, `surface_at` uses that
+standardised moneyness on the time from the clock to the last expiry.
+An explicit grid is unchanged. The spot-filter default stays nine strikes
+from -0.2 to 0.2. On eight paths, `n_mc` 1024 and a 21-day life, the
+out-of-the-money exact-zero rate at 21 days is 0 on 80 prices. The same
+strikes on the one-day node are far out for that maturity, and 63 of
+those 80 prices are exactly zero.
 
 I3, the call priced by `SurrogatePricer`, is the third instrument. It
 stays untested until that surrogate exists.

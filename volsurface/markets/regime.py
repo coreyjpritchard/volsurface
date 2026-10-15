@@ -67,12 +67,12 @@ of the quote on the gate grid. The clock entry is ``v_t``.
 copy starts from the true regime at the clock and runs the chain
 forward with the same generator, so ``nu`` switches inside the copy.
 The variance swap is a martingale given the true ``nu`` path, up to
-the tail-weight bias. The call is a martingale on the simulation
-filtration up to Monte Carlo error and that same bias, because the
-copies carry the future chain. Holding today's ``nu`` fixed for the
-remaining life is not that price. The filter is the hedger's
-probability. It is not a pricing weight, so H1 and H2 measure the
-gap between that probability and this informed price. In gate mode
+the tail-weight bias. The call is a martingale by construction up to
+Monte Carlo error, because each copy replicates the simulator's law.
+The tail-weight bias does not enter the call. Holding today's ``nu``
+fixed for the remaining life is not that price. The filter is the
+hedger's probability. It is not a pricing weight, so H1 and H2 measure
+the gap between that probability and this informed price. In gate mode
 (``price_filter="rv"`` and ``H`` other than 1/2) a missing
 ``state["xi"]`` raises. Otherwise, when the curve is absent, the
 variance level is the restarted curve of the regime at the clock.
@@ -254,6 +254,7 @@ class RegimeSwitchingBergomi:
         self.obs_sigma = float(obs_sigma)
         self.forward = float(forward)
         self.rate = float(rate)
+        self._smile_default = smile_k is None
         self.smile_k = (
             np.linspace(-0.2, 0.2, 9) if smile_k is None else np.asarray(smile_k, dtype=float)
         )
@@ -383,9 +384,13 @@ class RegimeSwitchingBergomi:
         ``price_filter="rv"`` with ``H`` other than 1/2: a missing curve
         raises. Otherwise the level is the restarted curve of the regime
         at the clock. Two calls on the same paths use the same seed.
-        Strikes are ``exp(smile_k)``, one grid for every path.
+        Strikes are ``exp(k)``, one grid for every path. In gate mode,
+        when ``smile_k`` was omitted, ``k`` is standardised moneyness
+        ``z * sqrt(xi0 * tau)`` with ``z`` from -2.5 to 2.5 and ``tau``
+        the time from the clock to the last expiry. Otherwise ``k`` is
+        ``smile_k``.
         """
-        k = np.asarray(self.smile_k, dtype=float)
+        k = self._strike_grid(paths, i_t)
         call, stderr, total, total_se, times, indices = self._surface_calls(
             paths, i_t, np.exp(k)
         )
@@ -410,6 +415,15 @@ class RegimeSwitchingBergomi:
             paths, i_t, strikes
         )
         return call, stderr
+
+    def _strike_grid(self, paths: MarketPaths, i_t: int) -> np.ndarray:
+        """Log strikes. A default smile in gate mode is standardised moneyness."""
+        if self._smile_default and self.price_filter == "rv" and self.H != 0.5:
+            times = np.asarray(paths.times, dtype=float)
+            tau = float(times[-1] - times[int(i_t)])
+            if tau > 0.0:
+                return np.linspace(-2.5, 2.5, 21) * math.sqrt(self.xi0 * tau)
+        return np.asarray(self.smile_k, dtype=float)
 
     def _surface_calls(self, paths: MarketPaths, i_t: int, strikes):
         """Prices, standard errors, log contract, and the expiry indices."""
@@ -1338,6 +1352,7 @@ def _draw_paths(model, n_paths: int, times: np.ndarray, seed, state0=None) -> di
         "v": v,
         "Z": Z,
         "dW": dW,
+        "perp": perp,
         "y": _log_realised_variance(Z, grid),
         "y_rv": _windowed_log_realised_variance(log_sub, grid),
         "components": components,
