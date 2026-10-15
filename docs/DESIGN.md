@@ -1042,10 +1042,14 @@ factor mean is not exactly 1. Given the true `nu` path, the mark is a
 martingale up to that tail-weight bias, about -0.1 percent of the quote
 on the gate grid. The clock entry is `v_t`.
 
-`surface_at` prices the call on `state["xi"]` at the clock and on the
-true regime, `paths.regime`. The future factor holds that regime's `nu`
-fixed and the kernel is drawn again from the clock. When `state["xi"]`
-is absent, the variance level is the restarted curve of that same `nu`.
+`surface_at` prices the call on `state["xi"]` at the clock. Each Monte
+Carlo copy starts from the true regime, `paths.regime` at that clock,
+and runs the chain forward with the same generator, so `nu` switches
+inside the copy. Holding today's `nu` fixed for the remaining life is
+not that price. The kernel is drawn again from the clock. In gate mode
+(`price_filter="rv"` and `H` other than 1/2) a missing `state["xi"]`
+raises. Otherwise, when the curve is absent, the variance level is the
+restarted curve of the regime at the clock.
 At `H = 1/2` the curve is flat at `v_t` and the step is the exponential
 martingale. A Black call on the expected variance would be flat in strike
 and independent of `nu`. The plugin is not called at that `H`. Any other
@@ -1062,8 +1066,11 @@ copies are split in half, and the coefficient on each half is the other
 half's `cov / var`, so the residual variance is not the in-sample
 minimum. The known mean is the formula. One terminal is used for every
 strike. `n_mc` defaults to 1024. The seed is the path entropy and
-`spawn_key + (4, regime)`. The clock is not in the key, so every hedge
-date draws the same shocks. `SurfaceBatch.stderr` is the residual
+`spawn_key + (4, 0)`. The clock is not in the key, so every hedge
+date draws the same shocks. With two or more regimes the regime child
+draws the forward chain and the other child is split into the vol and
+spot streams. A one-regime spec does not draw that chain.
+`SurfaceBatch.stderr` is the residual
 standard deviation divided by `sqrt(n_mc)`. The absolute price still
 carries that Monte Carlo error.
 `total_variance` is the controlled log contract `-2 E[log Z]`, the

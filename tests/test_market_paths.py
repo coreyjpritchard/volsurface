@@ -23,6 +23,8 @@ from volsurface.markets.regime import (
     RegimeSwitchingBergomi,
     _bridge_log_returns,
     _draw_paths,
+    _expiry_indices,
+    _future_nu,
     _kernel_weights,
     _log_variance_increments,
     _step_compensator,
@@ -41,7 +43,7 @@ from volsurface.markets.regime import (
 )
 from volsurface.markets.seeds import DRAW_ORDER, run_seed, stream_seeds
 from volsurface.mc.rng import generator
-from volsurface.mc.zrule import check_z
+from volsurface.mc.zrule import check_z, max_abs_bound, mean_abs_bound
 from volsurface.models.bs import BlackScholes
 from volsurface.models.heston import Heston
 
@@ -1183,6 +1185,79 @@ def test_rough_surface_requires_the_forward_driver():
         _single_regime(0.4, 8, H=0.1).surface_at(replace(paths, state=state), 0)
 
 
+def test_forward_copies_leave_the_clock_regime():
+    """The forward chain uses the same generator as the simulator.
+
+    Four thousand copies start in the low regime. The first column stays
+    there. The next column matches ``expm(Q dt)`` within 4 standard errors.
+    Later columns do reach the high vol of vol: a frozen ``nu`` would not.
+    """
+    nus = np.array([1.5, 3.0])
+    generator_q = np.array([[-1.5, 1.5], [0.8, -0.8]])
+    dt = 1.0 / 252.0
+    n_steps = 21
+    grid = np.arange(n_steps + 1) * dt
+    n_sim = 4000
+    start = np.zeros(n_sim, dtype=int)
+    nu = _future_nu(nus, generator_q, start, grid, generator(1))
+    assert nu.shape == (n_sim, n_steps)
+    assert np.all(nu[:, 0] == 1.5)
+    stay = float(expm(generator_q * dt)[0, 0])
+    got = float(np.mean(nu[:, 1] == 1.5))
+    se = math.sqrt(stay * (1.0 - stay) / n_sim)
+    assert abs(got - stay) < 4.0 * se
+    assert float(np.mean(nu[:, 1:] == 3.0)) > 0.02
+
+
+def test_surface_copies_switch_off_the_clock_regime(monkeypatch):
+    """``surface_at`` draws the forward chain from the label at the clock."""
+    seen = {}
+    real = _future_nu
+
+    def wrap(*args, **kwargs):
+        out = real(*args, **kwargs)
+        seen["nu"] = out
+        return out
+
+    monkeypatch.setattr("volsurface.markets.regime._future_nu", wrap)
+    model = _model(n_mc=8)
+    times = np.linspace(0.0, 0.2, 11)
+    paths = model.simulate_market(20, times, seed=run_seed(5, 2))
+    regime = np.array(paths.regime, copy=True)
+    regime[:, 2] = 0
+    model.surface_at(replace(paths, regime=regime), 2)
+    nu = seen["nu"]
+    assert np.all(nu[:, 0] == 0.4)
+    assert np.any(nu[:, 1:] == 1.1)
+
+
+def test_gate_mode_requires_the_stored_hybrid_curve():
+    """Gate mode is ``price_filter="rv"`` with ``H`` other than 1/2.
+
+    A missing ``state["xi"]`` raises. The spot filter still builds the
+    restarted curve from ``dW``, which is the quoted-path fallback.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=4,
+        n_sub=1,
+        n_pilot=2,
+        price_filter="rv",
+        smile_k=np.array([0.0]),
+    )
+    times = np.linspace(0.0, 0.1, 5)
+    missing = model.simulate_market(4, times, seed=run_seed(3, 2), store_forward=False)
+    assert "xi" not in missing.state
+    with pytest.raises(ValueError, match="xi"):
+        model.surface_at(missing, 1)
+    stored = model.simulate_market(4, times, seed=run_seed(3, 2))
+    assert np.isfinite(model.surface_at(stored, 1).call).all()
+
+
 def test_surface_standard_error_is_below_the_raw_monte_carlo_noise():
     """One path, nu = 1.1, H = 1/2, 32 steps, 1,024 copies, seed entropy 7.
 
@@ -1223,34 +1298,67 @@ def _otm_variance(call: np.ndarray, k: np.ndarray) -> np.ndarray:
 def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     """H = 0.1, eight paths, clock 0.5, maturity 1, 4,096 copies.
 
-    The call is priced on the true regime and on ``state["xi"]``. The
-    surface log contract ``-2 E[log Z]`` is that curve's integral, up to
-    Monte Carlo error. The reference is the variance-swap integral of the
-    same curve. The flat anchor ``v_t (T - t)`` misses it: on this draw
-    the median relative gap on the last expiry is 0.290. The log contract
-    stays inside 4 standard errors of the integral on every expiry, with
-    an extra ``1e-8`` for the one-step expiry, whose control residual is
-    numerical noise. The largest absolute z-score is 3.47. The
-    out-of-the-money strip, on log-moneyness from -0.8 to 0.8, stays
-    inside 4 standard errors of the same integral on the last expiry. Its
-    largest absolute z-score is 2.28.
+    Strikes are standardised moneyness on the last expiry,
+    ``k = z * sqrt(xi0) * sqrt(tau)`` with ``z`` from -2.5 to 2.5. The
+    call is priced on the true regime, the forward chain, and
+    ``state["xi"]``. The one-step expiry is an identity: the factor's
+    first column is 1, so the log-contract gap is under ``1e-12``. The
+    other six expiries are 48 comparisons. ``max |z|`` is below
+    ``max_abs_bound(48)`` (4.25) and the mean of the eight path-mean
+    z-scores is below ``mean_abs_bound(8)``. Nodes share paths, so the
+    binomial fraction band is not applied. On this draw the largest
+    absolute z is 2.26 and the path-mean z is 0.039. The flat anchor
+    ``v_t (T - t)`` is a non-triviality check: the z-score of its mean
+    absolute relative gap, not a median. On this draw that mean is 0.302,
+    4.60 standard errors, and the median is 0.290. The out-of-the-money
+    strip's eight path z-scores pass the z-rule. Its largest absolute z
+    is 0.96. None of the 80 out-of-the-money call prices is exactly zero.
     """
     pytest.importorskip("roughvol")
-    smile = np.linspace(-0.8, 0.8, 161)
-    model = _model(H=0.1, n_mc=4096, smile_k=smile)
     times = np.linspace(0.0, 1.0, 17)
-    paths = model.simulate_market(8, times, seed=run_seed(21, 2))
     clock = 8
+    tau = float(times[-1] - times[clock])
+    width = math.sqrt(0.04 * tau)
+    smile = np.linspace(-2.5, 2.5, 21) * width
+    model = _model(H=0.1, n_mc=4096, smile_k=smile)
+    paths = model.simulate_market(8, times, seed=run_seed(21, 2))
     batch = model.surface_at(paths, clock)
     contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
     swap = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
-    gap = np.abs(batch.total_variance - swap)
-    assert np.all(gap <= 4.0 * batch.total_variance_se + 1e-8)
+    one_step = np.abs(batch.total_variance[:, 0] - swap[:, 0])
+    assert np.all(one_step < 1e-12)
+    later = batch.total_variance[:, 1:] - swap[:, 1:]
+    later_se = batch.total_variance_se[:, 1:]
+    assert later.shape == (8, 6)
+    assert np.all(later_se > 0.0)
+    scores = later / later_se
+    failed = check_z(scores, mean=False, fraction=False)
+    path_mean = scores.mean(axis=1)
+    centre = float(path_mean.mean())
+    text = (
+        f"max |z| {float(np.max(np.abs(scores))):.4f} "
+        f"bound {max_abs_bound(scores.size):.4f} "
+        f"path-mean z {centre:.4f} bound {mean_abs_bound(path_mean.size):.4f}"
+    )
+    if failed is not None:
+        raise AssertionError(f"{text}; {failed}")
+    assert abs(centre) < mean_abs_bound(path_mean.size), text
     last = swap[:, -1]
     flat = paths.state["v"][:, clock] * (float(batch.T[-1]) - float(times[clock]))
-    assert float(np.median(np.abs(flat - last) / np.maximum(np.abs(last), 1e-8))) > 0.20
+    absolute = np.abs((flat - last) / last)
+    flat_se = float(absolute.std(ddof=1) / math.sqrt(absolute.size))
+    flat_z = float(absolute.mean() / flat_se)
+    assert flat_z > 2.0, f"flat-anchor mean {float(absolute.mean()):.4f} z {flat_z:.2f}"
     strip = _otm_variance(batch.call[:, -1, :], batch.k)
-    assert np.all(np.abs(strip - last) <= 4.0 * batch.total_variance_se[:, -1])
+    strip_se = batch.total_variance_se[:, -1]
+    assert np.all(strip_se > 0.0)
+    strip_failed = check_z((strip - last) / strip_se)
+    if strip_failed is not None:
+        raise AssertionError(strip_failed)
+    otm = batch.k > 0.0
+    wing = batch.call[:, -1, otm]
+    zero_rate = float(np.mean(wing == 0.0))
+    assert zero_rate < 0.05, f"otm call zero rate {zero_rate:.4f}"
 
 
 def _constant_nu(nu: float, **kwargs) -> RegimeSwitchingBergomi:
@@ -1317,6 +1425,54 @@ def test_switching_log_variance_mean_matches_the_path_compensator():
         se = gap.std(ddof=1) / math.sqrt(gap.size)
         scores.append(gap.mean() / se)
     assert check_z(np.asarray(scores)) is None
+
+
+def test_episode_grid_log_variance_mean_matches_the_compensator():
+    """Episode grid, 157 daily times, eight runs of 2,000 paths, ``H = 0.1``.
+
+    ``T = 156/252``, from time 0 through ``t0`` plus 30 trading days. The
+    forward curve is not stored. Constant ``nu`` of 1.5 and of 3 share
+    z-scores, because the driver is linear in ``nu``. On seeds
+    ``run_seed(70 + r, 2)`` the largest absolute z is 1.46 and the mean z
+    is 0.203. The switching market has largest absolute z 1.04 and mean
+    z 0.032. Both pass the z-rule.
+    """
+    pytest.importorskip("roughvol")
+    times = np.arange(126 + 30 + 1) / 252.0
+    maturity = float(times[-1])
+    constant_scores = None
+    for nu in (1.5, 3.0):
+        model = _constant_nu(nu, n_sub=1, n_pilot=2)
+        target = math.log(model.xi0) - 0.5 * nu * nu * maturity ** (2.0 * model.H)
+        scores = []
+        for replication in range(8):
+            paths = model.simulate_market(
+                2000, times, seed=run_seed(70 + replication, 2), store_forward=False
+            )
+            log_v = np.log(paths.state["v"][:, -1])
+            se = log_v.std(ddof=1) / math.sqrt(log_v.size)
+            scores.append((log_v.mean() - target) / se)
+        got = np.asarray(scores)
+        if constant_scores is None:
+            constant_scores = got
+        else:
+            assert np.allclose(got, constant_scores)
+        assert check_z(got) is None
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    nus = np.array([1.5, 3.0])
+    switching = []
+    for replication in range(8):
+        paths = model.simulate_market(
+            2000, times, seed=run_seed(70 + replication, 2), store_forward=False
+        )
+        nu_step = nus[paths.regime[:, :-1]]
+        compensator = _step_compensator(model.H, nu_step, times)[:, -1]
+        gap = np.log(paths.state["v"][:, -1]) - (math.log(model.xi0) - compensator)
+        se = gap.std(ddof=1) / math.sqrt(gap.size)
+        switching.append(gap.mean() / se)
+    assert check_z(np.asarray(switching)) is None
 
 
 def test_daily_spot_is_a_martingale_and_has_no_time_slope():
@@ -1574,6 +1730,79 @@ def test_hybrid_tail_mark_bias_is_under_one_percent_of_the_quote():
         assert abs(mixed) < 0.01
 
 
+def _fixed_atm_mark(model, paths, start, end):
+    """Mark of the at-the-money call entered at ``start`` and expiring at ``end``.
+
+    The payoff is ``max(Z_end / Z_start - 1, 0)``. At a later clock the
+    unit-forward strike is ``Z_start / Z_clock``, and the mark multiplies
+    that call by ``Z_clock / Z_start``.
+    """
+    entry = np.asarray(paths.Z[:, start], dtype=float)
+    columns = []
+    for clock in range(start, end):
+        if int(_expiry_indices(paths.times.size, clock)[-1]) != end:
+            raise AssertionError(f"clock {clock} does not expire at index {end}")
+        strike = (entry / paths.Z[:, clock])[:, None]
+        call, _stderr = model.unit_forward_calls(paths, clock, strike)
+        columns.append(paths.Z[:, clock] / entry * call[:, -1, 0])
+    return np.column_stack(columns)
+
+
+def _episode_call_drift(model, n_days, n_paths, n_reps):
+    """Filter-probability drift of the fixed at-the-money call.
+
+    The drift is the signed slope of the one-step mark change on the
+    hedger's probability of the high regime, times the number of steps,
+    divided by the mean entry quote. The window stops at the last price
+    before expiry. ``se`` is the path-clustered standard error of that
+    fraction. The trimmed figures drop the largest 1 percent of absolute
+    daily changes. They are a diagnostic.
+    """
+    end = 126 + n_days
+    times = np.arange(end + 1) / 252.0
+    panels = []
+    probs = []
+    quotes = []
+    replication_z = []
+    terminal = []
+    for replication in range(n_reps):
+        paths = model.simulate_market(n_paths, times, seed=run_seed(40 + replication, 2))
+        mark = _fixed_atm_mark(model, paths, 126, end)
+        payoff = np.maximum(paths.Z[:, end] / paths.Z[:, 126] - 1.0, 0.0)
+        gap = payoff - mark[:, 0]
+        se_gap = gap.std(ddof=1) / math.sqrt(gap.size)
+        terminal.append(gap.mean() / se_gap)
+        increment = np.diff(mark, axis=1)
+        probability = paths.regime_prob[:, 126 : end - 1, 1]
+        if probability.shape != increment.shape:
+            raise AssertionError(f"probability {probability.shape} increment {increment.shape}")
+        _beta, z_filter = _clustered_slope(increment, probability)
+        replication_z.append(float(z_filter[1]))
+        panels.append(increment)
+        probs.append(probability)
+        quotes.append(mark[:, 0])
+    panel = np.concatenate(panels)
+    probability = np.concatenate(probs)
+    quote = float(np.concatenate(quotes).mean())
+    beta, z_score = _clustered_slope(panel, probability)
+    steps = panel.shape[1]
+    z = float(z_score[1])
+    drift = float(beta[1]) * steps / quote
+    se = float(drift / z) if z != 0.0 else float("inf")
+    trimmed_beta, trimmed_z = _clustered_slope(panel, probability, _drop_largest(panel, 0.01))
+    return {
+        "terminal": np.asarray(terminal),
+        "drift": drift,
+        "se": se,
+        "z": z,
+        "quote": quote,
+        "trimmed_drift": float(trimmed_beta[1]) * steps / quote,
+        "trimmed_z": float(trimmed_z[1]),
+        "replication_z": np.asarray(replication_z),
+        "mdd": (_Z95 + _Z80) * se,
+    }
+
+
 def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
     """Eight runs, 1,500 paths, gate settings, episode start 0.5.
 
@@ -1646,7 +1875,57 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
     _assert_filter_z(_episode_mark_drift(equal, 21), "equal nu")
 
 
-def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
+def test_call_mark_on_the_daily_episode_passes_the_clustered_interval():
+    """Fixed at-the-money call, forward chain, episode start 0.5, 21 trading days.
+
+    The mark is the conditional expectation of ``max(Z_T / Z_entry - 1, 0)``.
+    Each copy starts at the true regime and switches with the generator.
+    At ``H = 1/2`` the variance multiplier is an exponential martingale for
+    every ``nu`` path, so the model drift is 0, under 1 percent of the
+    quote. At ``H = 0.1`` the variance level carries the hybrid tail bias,
+    which is under 1 percent of the variance quote, and the call has no
+    separate closed form.
+
+    The Monte Carlo check is the untrimmed regression of the one-step mark
+    change on the hedger's probability of the high regime, with
+    path-clustered standard errors. The 95 percent interval contains 0.
+    The standard error on this sample is about 0.12 of the quote, so the
+    1 percent bar is not applied to the point estimate. The minimum
+    detectable drift at 80 percent power is reported in the failure text.
+    Eight runs, ``n_pilot`` 128, 64 copies. The rough sample is 150 paths:
+    signed drift -0.018, standard error 0.124, interval (-0.262, 0.226),
+    minimum detectable drift 0.348, on a quote of 0.01630. ``H = 1/2``
+    uses 400 paths: signed drift 0.057, standard error 0.129, interval
+    (-0.196, 0.311), minimum detectable drift 0.362, on a quote of 0.01643.
+    Trimmed diagnostics are -0.053 and 0.181.
+    """
+    pytest.importorskip("roughvol")
+    rough = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=64,
+        n_sub=21,
+        n_pilot=128,
+        price_filter="rv",
+        smile_k=np.array([0.0]),
+    )
+    half = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.5,
+        n_mc=64,
+        n_sub=21,
+        n_pilot=128,
+        price_filter="rv",
+        smile_k=np.array([0.0]),
+    )
+    for hurst, model, n_paths in ((0.1, rough, 150), (0.5, half, 400)):
+        result = _episode_call_drift(model, 21, n_paths, 8)
+        _assert_filter_z(result, f"call H={hurst}")
+        assert check_z(result["terminal"]) is None
     """Eight runs, 1,500 paths, H = 0.1, T = 1. Entered at the time-0 quote.
 
     The quote is the remaining integral, and at inception the left-point

@@ -180,11 +180,15 @@ A tail lag's factor mean is not exactly 1. Given the true `nu` path, the
 mark is a martingale up to that tail-weight bias, about -0.1 percent of
 the quote.
 
-`surface_at` prices the call on the same curve and on the true regime
-at the clock. The future factor holds that regime's `nu` fixed. The
-filter is not a pricing weight. Both instruments are martingales on the
-simulation filtration, up to the tail-weight bias and the call's Monte
-Carlo error. H1 and H2 measure the hedger's information gap: the filter
+`surface_at` prices the call on the same curve. Each Monte Carlo copy
+starts from the true regime at the clock and runs the chain forward
+with the same generator, so `nu` switches inside the copy. Holding
+today's `nu` fixed for the remaining life is not that price. The
+variance swap is a martingale given the true `nu` path, up to the
+tail-weight bias. The call is a martingale on the simulation filtration
+up to Monte Carlo error and that same bias in the variance level,
+because the copies carry the future chain. The filter is not a pricing
+weight. H1 and H2 measure the hedger's information gap: the filter
 against this informed price.
 
 The gate uses `price_filter="rv"`. That filter reads the change in
@@ -194,8 +198,9 @@ for the hedger's probability in H3 or H4. `n_mc` is 1024. The error bar
 on a price is `SurfaceBatch.stderr`, the residual standard deviation
 divided by `sqrt(n_mc)`. A price that enters the gate is the Monte Carlo
 mean, and the standard error is reported beside it. The surface seed is
-`spawn_key + (4, regime)`. The clock is not in the key, so hedge dates
-share shocks.
+`spawn_key + (4, 0)`. The clock is not in the key, so hedge dates
+share shocks. With two or more regimes the regime child draws the
+forward chain. A one-regime spec does not.
 
 The gate contrast is the L1 reduction: `Gap` with I1 minus `Gap` with I2,
 for L1, above 0. The variance swap hedges the level of variance. The bar
@@ -426,6 +431,37 @@ between 1.5 and 3, 3,000 paths, 19 steps, seed 0, has trimmed drift
 -0.53 and z -41. The closed-form mixture had a separate roll bias: on
 the 30-day roll, paths in the low regime had mean gap 0.032 of the
 quote, z 3.00. The hybrid curve brings that to 0.009, z 0.96.
+
+The call pre-gate uses the same regression on a fixed contract. The
+payoff is `max(Z_T / Z_entry - 1, 0)`, entered at the money at `t0` and
+expiring 21 trading days later. The mark at a later clock is
+`(Z_clock / Z_entry)` times the unit-forward call at strike
+`Z_entry / Z_clock`. Each copy starts at the true regime and runs the
+chain forward. Holding today's `nu` fixed is not this price.
+
+At `H = 1/2` the variance multiplier is an exponential martingale for
+every `nu` path, so the model drift is 0, under 1 percent of the quote.
+At `H = 0.1` the variance level carries the hybrid tail bias, under 1
+percent of the variance quote, and the call has no separate closed form.
+The Monte Carlo check is the untrimmed clustered interval. It contains
+0. On eight runs the rough sample is 150 paths and 64 copies: signed
+drift -0.018 of the quote, standard error 0.124, interval (-0.262, 0.226),
+minimum detectable drift 0.348, quote 0.01630. `H = 1/2` uses 400 paths
+and 64 copies: signed drift 0.057, standard error 0.129, interval
+(-0.196, 0.311), minimum detectable drift 0.362, quote 0.01643. Both
+standard errors are larger than 1 percent of the quote, so that bar is
+not applied to the point estimate. `n_pilot` is 128. A trimmed
+regression is a diagnostic: -0.053 and 0.181 on this draw.
+
+The log contract of the call, on the pinned eight-path draw with 4,096
+copies, matches the variance-swap integral under the z-rule. Strikes are
+standardised moneyness, `z` from -2.5 to 2.5 on the last expiry. The
+one-step expiry is an identity, gap under `1e-12`. The other 48
+comparisons have largest absolute z 2.26, below `max_abs_bound(48)` which
+is 4.25, and the path-mean z is 0.039. The flat anchor is a
+non-triviality check: its mean absolute relative gap is 0.302, which is
+4.60 standard errors. The median on this draw is 0.290. None of the 80
+out-of-the-money call prices is exactly zero.
 
 I3, the call priced by `SurrogatePricer`, is the third instrument. It
 stays untested until that surrogate exists.
