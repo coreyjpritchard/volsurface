@@ -12,13 +12,19 @@ from volsurface import bs
 from volsurface.core.protocols import capabilities
 from volsurface.core.types import Contract, Digital, MarketPaths, RegimeSpec, Vanilla
 from volsurface.markets.filter import hamilton_filter, regime_scores
-from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, VarianceSwapPricer
+from volsurface.markets.pricers import (
+    ClosedFormPricer,
+    SurrogatePricer,
+    VarianceSwapPricer,
+    integrate_forward_variance,
+)
 from volsurface.markets.regime import (
     RegimeSwitchingBergomi,
     _bridge_log_returns,
     _draw_paths,
     _kernel_weights,
     _log_variance_increments,
+    _step_compensator,
     _stochastic,
     _surface_seed,
     bergomi_forward_variance,
@@ -1252,13 +1258,10 @@ def _prereg_spec() -> RegimeSpec:
 def test_log_variance_mean_matches_the_compensator():
     """Eight runs, 2,000 paths, H = 0.1, T = 1. The z-rule is the threshold.
 
-    Constant nu. The target is ``log xi0 - nu^2 T^{2H} / 2``, which is
-    ``E[log v_T]`` when the Volterra driver has mean zero. At n = 8 the
+    Constant nu. The target is ``log xi0 - nu^2 T^{2H} / 2``. At n = 8 the
     max-|z| bound is 3.836 and the mean bound is 1.237. On seeds
-    ``run_seed(70 + r, 2)`` the largest absolute log-space z is 1.49, and
-    the two vols of vol share that draw because the driver is linear in
-    nu. The level ``E[v] - xi0`` passes at nu = 1.5 and fails at nu = 3,
-    where the largest absolute z is 9.21.
+    ``run_seed(70 + r, 2)`` the largest absolute z is 1.49. The two vols of
+    vol share that draw because the driver is linear in nu.
     """
     pytest.importorskip("roughvol")
     times = np.linspace(0.0, 1.0, 11)
@@ -1266,21 +1269,35 @@ def test_log_variance_mean_matches_the_compensator():
         model = _constant_nu(nu)
         target = math.log(model.xi0) - 0.5 * nu * nu * float(times[-1]) ** (2.0 * model.H)
         log_scores = []
-        level_scores = []
         for replication in range(8):
             paths = model.simulate_market(2000, times, seed=run_seed(70 + replication, 2))
-            variance = paths.state["v"][:, -1]
-            log_v = np.log(variance)
+            log_v = np.log(paths.state["v"][:, -1])
             se = log_v.std(ddof=1) / math.sqrt(log_v.size)
             log_scores.append((log_v.mean() - target) / se)
-            se_v = variance.std(ddof=1) / math.sqrt(variance.size)
-            level_scores.append((variance.mean() - model.xi0) / se_v)
         assert check_z(np.asarray(log_scores)) is None
-        level = np.asarray(level_scores)
-        if nu == 1.5:
-            assert check_z(level) is None
-        else:
-            assert check_z(level) is not None
+
+
+def test_switching_log_variance_mean_matches_the_path_compensator():
+    """Eight runs, 2,000 paths, the pre-registered switching market, T = 1.
+
+    The target on each path is ``log xi0`` minus that path's compensator.
+    The largest absolute z on seeds ``run_seed(70 + r, 2)`` is 1.74.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    times = np.linspace(0.0, 1.0, 11)
+    nus = np.array([1.5, 3.0])
+    scores = []
+    for replication in range(8):
+        paths = model.simulate_market(2000, times, seed=run_seed(70 + replication, 2))
+        nu_step = nus[paths.regime[:, :-1]]
+        compensator = _step_compensator(model.H, nu_step, times)[:, -1]
+        gap = np.log(paths.state["v"][:, -1]) - (math.log(model.xi0) - compensator)
+        se = gap.std(ddof=1) / math.sqrt(gap.size)
+        scores.append(gap.mean() / se)
+    assert check_z(np.asarray(scores)) is None
 
 
 def test_daily_spot_is_a_martingale_and_has_no_time_slope():
@@ -1321,12 +1338,89 @@ def test_daily_spot_is_a_martingale_and_has_no_time_slope():
     assert check_z(np.asarray(slope)) is None
 
 
+def _variance_swap_mark(variance, xi, times, start, maturity):
+    """Left-point model variance from ``start``, plus the remaining integral."""
+    accrued = np.zeros(variance.shape[0])
+    mark = np.empty_like(variance)
+    grid = np.asarray(times, dtype=float)
+    for i, t in enumerate(grid):
+        remaining = integrate_forward_variance(xi[:, i, :], grid, float(t), maturity)
+        mark[:, i] = accrued + remaining
+        if i < grid.size - 1 and float(t) >= start - 1e-15 and float(t) < maturity - 1e-15:
+            left = max(float(t), start)
+            right = min(float(grid[i + 1]), maturity)
+            accrued = accrued + variance[:, i] * (right - left)
+    return mark
+
+
+def _drift_z(increment, times_left):
+    """Weighted least squares, dropping a step whose sample variance is noise."""
+    variance = increment.var(axis=0, ddof=1)
+    keep = variance > 1e-18
+    kept = increment[:, keep]
+    means = kept.mean(axis=0)
+    scale = variance[keep] / kept.shape[0]
+    clock = np.asarray(times_left, dtype=float)[keep]
+    design = np.column_stack([np.ones(clock.size), clock])
+    weight = 1.0 / scale
+    weighted = design * weight[:, None]
+    coef = np.linalg.solve(design.T @ weighted, design.T @ (weight * means))
+    se_coef = np.sqrt(np.diag(np.linalg.inv(design.T @ weighted)))
+    return coef / se_coef
+
+
+def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
+    """Eight runs, 1,500 paths, gate settings, episode start 0.5.
+
+    The mark is the left-point model variance accrued since the episode
+    start, plus the remaining integral of the filtered forward curve.
+    Maturities are 21 and 30 trading days. The last step's mark change is
+    numerical noise, because that step's remaining integral is the diagonal
+    ``v``, and it is left out of the drift regression.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(),
+        xi0=0.04,
+        rho=-0.4,
+        H=0.1,
+        n_mc=2,
+        n_sub=21,
+        n_pilot=1024,
+        price_filter="rv",
+    )
+    for n_days in (21, 30):
+        end = 126 + n_days
+        times = np.arange(end + 1) / 252.0
+        start = float(times[126])
+        maturity = float(times[end])
+        terminal = []
+        intercept = []
+        slope = []
+        for replication in range(8):
+            paths = model.simulate_market(1500, times, seed=run_seed(40 + replication, 2))
+            mark = _variance_swap_mark(
+                paths.state["v"], paths.state["xi"], times, start, maturity
+            )
+            gap = mark[:, end] - mark[:, 126]
+            se = gap.std(ddof=1) / math.sqrt(gap.size)
+            terminal.append(gap.mean() / se)
+            increment = np.diff(mark[:, 126 : end + 1], axis=1)
+            z_coef = _drift_z(increment, times[126:end])
+            intercept.append(z_coef[0])
+            slope.append(z_coef[1])
+        assert check_z(np.asarray(terminal)) is None
+        assert check_z(np.asarray(intercept)) is None
+        assert check_z(np.asarray(slope)) is None
+
+
 def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
     """Eight runs, 1,500 paths, H = 0.1, T = 1. Entered at the time-0 quote.
 
-    The quote is the remaining integral, and at inception the accrued leg
-    is zero. The gap is realised variance minus that quote. Constant nu of
-    1.5 and of 3, and the switching market, each pass the z-rule.
+    The quote is the remaining integral, and at inception the left-point
+    leg is zero. The gap is the left-point model variance minus that quote.
+    Constant nu of 1.5 and of 3, and the switching market, each pass the
+    z-rule.
     """
     pytest.importorskip("roughvol")
     pricer = VarianceSwapPricer()
@@ -1401,57 +1495,72 @@ def _top_weight_share(pnl: np.ndarray, lam: float) -> float:
     return float(weight[order].sum() / weight.sum())
 
 
-def test_short_call_tail_weight_uses_one_evaluation_seed():
-    """65,536 premium paths, 20,000 evaluation paths, one seed for both lambdas.
-
-    The premium seed is ``run_seed(1, 0)``. The evaluation seed is
-    ``run_seed(12, 2)``. Minus the mean is 0.004158 at both lambda = 1 and
-    lambda = 0.1. The top 1 percent weight share is 1.000 at lambda = 1
-    and 0.02277 at lambda = 0.1, so the pin stays at 0.1.
-    """
-    pytest.importorskip("roughvol")
-    model = RegimeSwitchingBergomi(
-        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
-    )
-    times = np.arange(31) / 252.0
+def _call_book(model, n_steps):
+    times = np.arange(n_steps + 1) / 252.0
     premium_paths = _draw_paths(model, 65536, times, run_seed(1, 0))
     evaluation = _draw_paths(model, 20000, times, run_seed(12, 2))
     premium_payoff = np.maximum(premium_paths["Z"][:, -1] - 1.0, 0.0)
     evaluation_payoff = np.maximum(evaluation["Z"][:, -1] - 1.0, 0.0)
     premium = float(premium_payoff.mean())
     premium_se = float(premium_payoff.std(ddof=1) / math.sqrt(premium_payoff.size))
-    pnl = (premium - evaluation_payoff) / premium
+    bare = (premium - evaluation_payoff) / premium
+    tau = times[-1] - times[:-1]
+    variance = evaluation["v"]
+    spot = evaluation["Z"]
+
+    def hedged(sigma):
+        held = bs.delta(spot[:, :-1], 1.0, tau, sigma)
+        hedge = (held * np.diff(spot, axis=1)).sum(axis=1)
+        turnover = np.abs(held[:, 0]) + np.abs(np.diff(held, axis=1)).sum(axis=1)
+        turnover = turnover + np.abs(held[:, -1])
+        return (premium - evaluation_payoff + hedge - 1e-4 * turnover) / premium
+
+    sqrt_v = hedged(np.sqrt(np.maximum(variance[:, :-1], 1e-16)))
+    flat = hedged(np.full(variance[:, :-1].shape, math.sqrt(model.xi0)))
+    return premium, premium_se, bare, sqrt_v, flat
+
+
+def test_short_call_tail_weight_uses_one_evaluation_seed():
+    """65,536 premium paths and 20,000 evaluation paths, one seed per book.
+
+    The premium seed is ``run_seed(1, 0)``. The evaluation seed is
+    ``run_seed(12, 2)``. On the 30-day book minus the mean is 0.004158, the
+    lambda = 1 tail share is 1.000, and the lambda = 0.1 tail share is
+    0.02277. The hedged lambda = 0.1 tail shares, with the spot cost, are
+    0.01368 and 0.01671 on the 21-day book.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    month_premium, month_se, month_bare, month_sqrt, month_flat = _call_book(model, 21)
+    premium, premium_se, bare, sqrt_v, flat = _call_book(model, 30)
+    assert month_premium == pytest.approx(0.02070205, abs=1e-8)
+    assert month_se == pytest.approx(0.00012343, abs=1e-8)
+    assert _top_weight_share(month_bare, 0.1) == pytest.approx(0.02337, abs=1e-5)
+    assert _top_weight_share(month_bare, 0.1) < 0.10
+    assert _top_weight_share(month_sqrt, 0.1) == pytest.approx(0.013678, abs=1e-5)
+    assert _top_weight_share(month_flat, 0.1) == pytest.approx(0.016711, abs=1e-5)
     assert premium == pytest.approx(0.02459316, abs=1e-8)
     assert premium_se == pytest.approx(0.00014734, abs=1e-8)
-    assert -float(pnl.mean()) == pytest.approx(0.004158, abs=1e-6)
-    assert _top_weight_share(pnl, 1.0) == pytest.approx(1.0, abs=1e-4)
-    assert _entropic(pnl, 1.0) == pytest.approx(17.596, abs=1e-3)
-    share = _top_weight_share(pnl, 0.1)
+    assert -float(bare.mean()) == pytest.approx(0.004158, abs=1e-6)
+    assert _top_weight_share(bare, 1.0) == pytest.approx(1.0, abs=1e-4)
+    assert _entropic(bare, 1.0) == pytest.approx(17.596, abs=1e-3)
+    share = _top_weight_share(bare, 0.1)
     assert share == pytest.approx(0.02277, abs=1e-5)
     assert share < 0.10
-    assert _entropic(pnl, 0.1) == pytest.approx(0.1495, abs=1e-4)
+    assert _entropic(bare, 0.1) == pytest.approx(0.1495, abs=1e-4)
+    assert _top_weight_share(sqrt_v, 0.1) == pytest.approx(0.013627, abs=1e-5)
+    assert _top_weight_share(flat, 0.1) == pytest.approx(0.015811, abs=1e-5)
 
 
-def _calibration_error(predicted_high: np.ndarray, truth_high: np.ndarray) -> float:
-    """Path-weighted mean absolute gap. Five bins. Bins under 40 paths drop out."""
-    edges = np.linspace(0.0, 1.0, 6)
-    weighted = 0.0
-    total = 0
-    for band in range(5):
-        if band < 4:
-            mask = (predicted_high >= edges[band]) & (predicted_high < edges[band + 1])
-        else:
-            mask = (predicted_high >= edges[band]) & (predicted_high <= edges[band + 1])
-        count = int(mask.sum())
-        if count < 40:
-            continue
-        gap = abs(float(truth_high[mask].mean()) - float(predicted_high[mask].mean()))
-        weighted += count * gap
-        total += count
-    return weighted / total
+def _switched_by(regime):
+    changed = np.zeros(regime.shape, dtype=bool)
+    changed[:, 1:] = np.cumsum(regime[:, 1:] != regime[:, :-1], axis=1) > 0
+    return changed
 
 
-def _daily_filter_draw(nus, hurst, n_paths, n_steps):
+def _episode_draw(nus, hurst, n_paths):
     spec = RegimeSpec(
         generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
         params=[{"nu": float(nu)} for nu in nus],
@@ -1459,87 +1568,76 @@ def _daily_filter_draw(nus, hurst, n_paths, n_steps):
         switch="nu",
     )
     model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=hurst, n_mc=2)
-    times = np.arange(n_steps + 1) / 252.0
+    times = np.arange(126 + 30 + 1) / 252.0
     paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2))
-    labels = paths.regime[:, 10]
-    scored = {}
-    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
-        row = regime_scores(paths.state[name][:, 10], labels)
-        row["calibration"] = _calibration_error(
-            paths.state[name][:, 10, 1], (labels == 1).astype(float)
-        )
-        scored[name] = row
-    return np.bincount(labels, minlength=2), scored
+    return paths, _switched_by(paths.regime)
 
 
-def test_daily_grid_filter_scores():
-    """Clock index 10, dt = 1/252, seed entropy 12, test split, pilot 1,024.
+def test_episode_filter_scores_after_burn_in():
+    """Episode start t = 0.5, daily grid, seed entropy 12, test split.
 
-    Spot and latent scores match across the 21-step and 30-step grids.
-    Windowed scores do not. The integer confusion counts are the pin.
+    The filter sees the path from 0. Scores are split by whether the regime
+    has switched by the date. The windowed observation uses 21 intraday
+    returns, and that level is left-point variance plus noise.
     """
     pytest.importorskip("roughvol")
-    spot_600 = ([[364, 32], [189, 15]], 0.4809644680, 0.0784)
-    latent_600 = ([[389, 7], [13, 191]], 0.0667484959, 0.0091)
-    spot_4000 = ([[2438, 200], [1242, 120]], 0.4761432292, 0.0883)
-    latent_4000 = ([[2608, 30], [92, 1270]], 0.0543439271, 0.0055)
-    rough_spot_600 = ([[348, 48], [124, 80]], 0.4174169869, 0.1325)
-    rough_latent_600 = ([[375, 21], [36, 168]], 0.1539068940, 0.0230)
-    rough_spot_4000 = ([[2394, 244], [847, 515]], 0.3956454855, 0.1172)
-    rough_latent_4000 = ([[2523, 115], [251, 1111]], 0.1448836078, 0.0188)
-    expected = {
-        (21, 0.5, 600): {
-            "regime_prob_spot": spot_600,
-            "regime_prob_rv": ([[396, 0], [204, 0]], 0.4521688906, 0.0131),
-            "regime_prob_latent": latent_600,
+    # (hurst, n_paths, switched, filter) -> confusion, brier at t0.
+    t0 = {
+        (0.5, 600, False, "regime_prob_spot"): ([[139, 57], [62, 58]], 0.50267677),
+        (0.5, 600, False, "regime_prob_rv"): ([[68, 128], [45, 75]], 0.54923517),
+        (0.5, 600, False, "regime_prob_latent"): ([[196, 0], [0, 120]], 0.00435509),
+        (0.5, 600, True, "regime_prob_spot"): ([[46, 26], [137, 75]], 0.64478160),
+        (0.5, 600, True, "regime_prob_rv"): ([[26, 46], [77, 135]], 0.48128047),
+        (0.5, 600, True, "regime_prob_latent"): ([[65, 7], [4, 208]], 0.06166986),
+        (0.5, 4000, False, "regime_prob_spot"): ([[915, 446], [444, 377]], 0.52163865),
+        (0.5, 4000, False, "regime_prob_rv"): ([[470, 891], [288, 533]], 0.55024360),
+        (0.5, 4000, False, "regime_prob_latent"): ([[1354, 7], [6, 815]], 0.00870802),
+        (0.5, 4000, True, "regime_prob_spot"): ([[317, 179], [830, 492]], 0.67056211),
+        (0.5, 4000, True, "regime_prob_rv"): ([[177, 319], [480, 842]], 0.48736833),
+        (0.5, 4000, True, "regime_prob_latent"): ([[452, 44], [51, 1271]], 0.09253899),
+        (0.1, 600, False, "regime_prob_spot"): ([[151, 45], [7, 113]], 0.26204393),
+        (0.1, 600, False, "regime_prob_rv"): ([[192, 4], [0, 120]], 0.02991517),
+        (0.1, 600, False, "regime_prob_latent"): ([[193, 3], [2, 118]], 0.02996947),
+        (0.1, 600, True, "regime_prob_spot"): ([[33, 39], [31, 181]], 0.39412234),
+        (0.1, 600, True, "regime_prob_rv"): ([[57, 15], [14, 198]], 0.16045452),
+        (0.1, 600, True, "regime_prob_latent"): ([[61, 11], [13, 199]], 0.13240425),
+        (0.1, 4000, False, "regime_prob_spot"): ([[1070, 291], [54, 767]], 0.24866322),
+        (0.1, 4000, False, "regime_prob_rv"): ([[1327, 34], [13, 808]], 0.03691441),
+        (0.1, 4000, False, "regime_prob_latent"): ([[1341, 20], [8, 813]], 0.02633243),
+        (0.1, 4000, True, "regime_prob_spot"): ([[244, 252], [263, 1059]], 0.44903988),
+        (0.1, 4000, True, "regime_prob_rv"): ([[396, 100], [128, 1194]], 0.20154028),
+        (0.1, 4000, True, "regime_prob_latent"): ([[406, 90], [108, 1214]], 0.17108644),
+    }
+    pooled = {
+        21: {
+            False: ([[26578, 637], [293, 16276]], 0.03668642),
+            True: ([[9039, 2201], [2476, 26500]], 0.18563385),
         },
-        (21, 0.5, 4000): {
-            "regime_prob_spot": spot_4000,
-            "regime_prob_rv": ([[2638, 0], [1362, 0]], 0.4486474928, 0.0091),
-            "regime_prob_latent": latent_4000,
-        },
-        (30, 0.5, 600): {
-            "regime_prob_spot": spot_600,
-            "regime_prob_rv": ([[393, 3], [202, 2]], 0.4540668308, 0.0264),
-            "regime_prob_latent": latent_600,
-        },
-        (30, 0.5, 4000): {
-            "regime_prob_spot": spot_4000,
-            "regime_prob_rv": ([[2624, 14], [1349, 13]], 0.4508755459, 0.0165),
-            "regime_prob_latent": latent_4000,
-        },
-        (21, 0.1, 600): {
-            "regime_prob_spot": rough_spot_600,
-            "regime_prob_rv": ([[372, 24], [46, 158]], 0.1856481704, 0.0307),
-            "regime_prob_latent": rough_latent_600,
-        },
-        (21, 0.1, 4000): {
-            "regime_prob_spot": rough_spot_4000,
-            "regime_prob_rv": ([[2477, 161], [330, 1032]], 0.1873039228, 0.0255),
-            "regime_prob_latent": rough_latent_4000,
-        },
-        (30, 0.1, 600): {
-            "regime_prob_spot": rough_spot_600,
-            "regime_prob_rv": ([[361, 35], [46, 158]], 0.2049787460, 0.0369),
-            "regime_prob_latent": rough_latent_600,
-        },
-        (30, 0.1, 4000): {
-            "regime_prob_spot": rough_spot_4000,
-            "regime_prob_rv": ([[2484, 154], [321, 1041]], 0.1833731590, 0.0219),
-            "regime_prob_latent": rough_latent_4000,
+        30: {
+            False: ([[37047, 874], [478, 22862]], 0.03822418),
+            True: ([[13467, 3159], [3628, 38485]], 0.18514544),
         },
     }
-    labels = {
-        (0.5, 600): [396, 204],
-        (0.1, 600): [396, 204],
-        (0.5, 4000): [2638, 1362],
-        (0.1, 4000): [2638, 1362],
-    }
-    for n_steps, hurst, n_paths in expected:
-        nus = (0.4, 1.1) if hurst == 0.5 else (1.5, 3.0)
-        counts, scored = _daily_filter_draw(nus, hurst, n_paths, n_steps)
-        assert counts.tolist() == labels[(hurst, n_paths)]
-        for name, (confusion, brier, calibration) in expected[(n_steps, hurst, n_paths)].items():
-            assert scored[name]["confusion"].tolist() == confusion
-            assert scored[name]["brier"] == pytest.approx(brier, abs=1e-9)
-            assert scored[name]["calibration"] == pytest.approx(calibration, abs=5e-5)
+    draws = {}
+    for hurst, nus in ((0.5, (0.4, 1.1)), (0.1, (1.5, 3.0))):
+        for n_paths in (600, 4000):
+            draws[(hurst, n_paths)] = _episode_draw(nus, hurst, n_paths)
+    for hurst, n_paths, switched, name in t0:
+        paths, changed = draws[(hurst, n_paths)]
+        mask = changed[:, 126] if switched else ~changed[:, 126]
+        scored = regime_scores(paths.state[name][mask, 126], paths.regime[mask, 126])
+        confusion, brier = t0[(hurst, n_paths, switched, name)]
+        assert scored["confusion"].tolist() == confusion
+        assert scored["brier"] == pytest.approx(brier, abs=1e-8)
+    rough, changed = draws[(0.1, 4000)]
+    for horizon, splits in pooled.items():
+        for switched, (confusion, brier) in splits.items():
+            probs = []
+            labels = []
+            for date in range(126, 126 + horizon):
+                mask = changed[:, date] if switched else ~changed[:, date]
+                probs.append(rough.state["regime_prob_rv"][mask, date])
+                labels.append(rough.regime[mask, date])
+            scored = regime_scores(np.concatenate(probs), np.concatenate(labels))
+            assert scored["confusion"].tolist() == confusion
+            assert scored["brier"] == pytest.approx(brier, abs=1e-8)

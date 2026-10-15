@@ -7,8 +7,9 @@ after the contract expiry, held constant. It is not grown at interest.
 
 ``VarianceSwapPricer`` integrates the remaining forward variance
 ``int_t^T xi_t(u) du``. The integral is a left Riemann sum on
-``state["xi_tenor"]``. Accrued realised variance from the contract's
-start up to ``t`` is not added. At inception that accrued leg is zero.
+``state["xi_tenor"]``. The left-point model variance from the contract's
+start up to ``t``, the sum of ``v`` at the left of each step times the
+step, is not added. At inception that leg is zero.
 
 ``SurrogatePricer`` stores its validation error in basis points and raises
 when that error is above the bar it was given.
@@ -113,9 +114,10 @@ class ClosedFormPricer:
 class VarianceSwapPricer:
     """Remaining total variance ``int_t^T xi_t(u) du`` from the stored curve.
 
-    Accrued realised variance up to ``t`` is not added. A mark of a live
-    swap is that accrued leg, plus this remaining integral, minus the
-    strike times the contractual variance period.
+    The left-point model variance up to ``t`` is not added. That leg is the
+    sum of ``v`` at the left of each step times the step. It is not the sum
+    of squared log returns. A mark of a live swap is that leg, plus this
+    remaining integral, minus the strike times the contractual variance period.
     """
 
     def supports(self, model, contract) -> bool:

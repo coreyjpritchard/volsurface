@@ -12,13 +12,23 @@ experiment runner are not in this repository. They live in
 
 ## Liabilities and instruments
 
-L1 is the 30-day at-the-money call. L2 is the forward-start at-the-money
-straddle that starts in 15 days and expires in 45 days.
+A day is `1/252` of a trading year. Every maturity below uses that day.
 
-I1 is the spot. I2 adds the 30-day variance swap to the spot. I3 adds the
-30-day at-the-money call to the spot, priced by `SurrogatePricer`. I3
-enters a comparison only when that pricer's validation error is under the
-bar it was given.
+L1 is the at-the-money call with maturity 21 trading days, one month.
+L2 is the forward-start at-the-money straddle that starts 15 trading days
+after the episode and expires 45 trading days after the episode. Its life
+is 30 trading days.
+
+I1 is the spot. I2 adds the 21-trading-day variance swap to the spot. I3
+adds the 21-trading-day at-the-money call to the spot, priced by
+`SurrogatePricer`. I3 enters a comparison only when that pricer's
+validation error is under the bar it was given. The martingale pre-gate
+does not include I3. That instrument stays untested until the surrogate
+exists.
+
+The hedging episode starts at `t0 = 0.5`, which is 126 trading days. Paths
+are drawn from time 0, so the filter at every episode date sees the
+burn-in.
 
 ## Policies
 
@@ -57,9 +67,7 @@ total weight. If the share is 10 percent or more, replace `lambda` by
 value. Do not halve a second time. The measured check is in the pre-gate
 section. It passes at `lambda = 0.1`, so the value stays 0.1.
 
-The time between hedge trades is `1/252` of a year. The daily grids in
-this draft have 21 steps and 30 steps. L1, the 30-day call, uses 30
-steps. L2 uses the same daily step out to 45 days.
+The time between hedge trades is one day, `1/252` of a trading year.
 
 The regime chain is the one the market tests run. The generator is
 
@@ -73,19 +81,33 @@ Mean holding times are 2/3 of a year and 1.25 years. The initial law is
 `(0.348, 0.652)`. The same initial law is kept when the generator is
 scaled.
 
-Duration of about 5 times maturity uses `Q5 = 2.332 Q`. Duration of about
-0.5 times maturity uses `Q0.5 = 23.32 Q`. The scaled generators are
+Regime duration is the unweighted mean of the two mean holding times,
+`(2/3 + 5/4) / 2 = 23/24` of a year. Scaling the generator by `c` divides
+that duration by `c`. L1's maturity is `21/252 = 1/12` of a year. The
+scale that makes the duration 5 times that maturity is
+
+`c5 = (23/24) / (5/12) = 2.3`,
+
+so `Q5 = 2.3 Q`. The scale that makes the duration 0.5 times that
+maturity is
+
+`c0.5 = (23/24) / (1/24) = 23`,
+
+so `Q0.5 = 23 Q`. The scaled generators are
 
 ```
-Q5   = [[-3.498,  3.498],
-        [ 1.8656, -1.8656]]
+Q5   = [[-3.45,  3.45],
+        [ 1.84, -1.84]]
 
-Q0.5 = [[-34.98,  34.98],
-        [ 18.656, -18.656]]
+Q0.5 = [[-34.5,  34.5],
+        [ 18.4, -18.4]]
 ```
 
 These two replace the primary generator for that sensitivity. They are
-not a second gate.
+not a second gate. L2's life is 30 trading days. The same generators then
+have duration `5 * 21/30 = 3.5` times that life, and `0.5 * 21/30 = 0.35`
+times that life. Those two multiples are what falls out of the L1 scales.
+They are not a separate pin.
 
 The ratio grid is a dose-response report. It is outside the family of
 three. `nu_L` stays 1.5. `nu_H` is in `{1.5, 2.25, 3}`, so the ratios are
@@ -139,8 +161,8 @@ premium. H2 is
 
 `Gap(L2 -> H) / premium(L2) - Gap(L1 -> H) / premium(L1) > 0`.
 
-L1 is the 30-day at-the-money call. L2 is the forward-start at-the-money
-straddle that starts in 15 days and expires in 45 days. The bar is the
+L1 is the 21-trading-day at-the-money call. L2 is the forward-start
+at-the-money straddle with a life of 30 trading days. The bar is the
 family lower bound on that difference, above 0.
 
 ## H3. Hedgeability
@@ -173,8 +195,9 @@ not a fourth member of the family.
 ## Sample size
 
 Training uses 100,000 paths. Validation uses 20,000 paths. The test uses
-20,000 paths. These three counts stay fixed. The pilot starts from 5
-network seeds.
+20,000 paths. These three counts stay fixed. The validation paths are used
+only for early stopping and for selection. They do not enter the test and
+they do not enter the gate. The pilot starts from 5 network seeds.
 
 Seed variance dominates when the sample variance of the seed-level mean
 contrasts, divided by the number of seeds, exceeds the mean within-seed
@@ -198,19 +221,21 @@ of the gap is above 0.10 of the high-`nu` regime's entropic risk.
 
 ## Pinned, and still a draft
 
-The eight settings that were open are now pinned. Pinning them does not
-freeze the file.
+Eight settings that were open are now pinned. The list has eight items.
+Pinning them does not freeze the file.
 
 - P&L is per unit of the liability's time-0 premium, at `lambda = 0.1`,
   with the tail-weight rule above.
-- The hedge step is `1/252`, on 21-step and 30-step grids.
-- The path counts are 100,000, 20,000 and 20,000, untouched.
+- The hedge step is one day, `1/252` of a trading year.
+- The path counts are 100,000, 20,000 and 20,000, untouched. Validation
+  is only for early stopping and selection.
 - The bootstrap is the hierarchical paired percentile bootstrap above,
   with the 5-to-10 seed rule.
-- `Q5 = 2.332 Q` and `Q0.5 = 23.32 Q`, same `p0`.
+- Regime duration of 5 times the 21-day maturity, `Q5 = 2.3 Q`.
+- Regime duration of 0.5 times the 21-day maturity, `Q0.5 = 23 Q`.
 - The ratio grid is `nu_H` in `{1.5, 2.25, 3}` at `nu_L = 1.5`, outside
   the family. Ratio 1 is the negative control.
-- H5 stays exploratory. Its statement is the pre-gate section.
+- H5 stays exploratory. Its statement is below.
 
 ## Pre-gate checks
 
@@ -219,24 +244,34 @@ family of three.
 
 ### Tail weight, one evaluation seed
 
-The hedger is not in this repository, so the check is the unhedged short
-call. The market is the pre-registered switching market: `H = 0.1`, `nu`
-1.5 and 3, `rho = -0.4`, flat `xi0 = 0.04`, the primary generator, and
-`p0 = (0.7, 0.3)`. The unit forward starts at 1. The payoff is
-`max(Z_T - 1, 0)` with `T = 30/252`. `X = (premium - payoff) / premium`.
+The market is the pre-registered switching market: `H = 0.1`, `nu` 1.5
+and 3, `rho = -0.4`, flat `xi0 = 0.04`, the primary generator, and
+`p0 = (0.7, 0.3)`. The unit forward starts at 1. The books below are
+written at time 0. The payoff is `max(Z_T - 1, 0)`.
+`X = (premium - payoff + hedge - cost) / premium`. The unhedged book has
+`hedge = 0` and `cost = 0`. The premium is the mean payoff on 65,536
+paths from `run_seed(1, 0)`. The evaluation sample is 20,000 paths from
+`run_seed(12, 2)`, one sample for every lambda on that book.
 
-The premium is the mean payoff on 65,536 paths from `run_seed(1, 0)`.
-That premium is 0.02459316, with Monte Carlo standard error 0.00014734.
-The evaluation sample is 20,000 paths from `run_seed(12, 2)`. Both
-lambda rows use this one sample. Minus the mean of `X` is 0.004158.
-The sample mean does not depend on lambda, so the two rows share that
-number.
+On the 30-trading-day call the premium is 0.02459316, with Monte Carlo
+standard error 0.00014734. Minus the mean of the unhedged `X` is
+0.004158. Both lambda rows share that number. At `lambda = 1` the
+entropic risk is 17.596 and the top 200 paths carry exponential-weight
+share 1.000. That fails the 10 percent bar. At `lambda = 0.1` the
+entropic risk is 0.1495 and the share is 0.02277. That passes.
 
-At `lambda = 1` the entropic risk is 17.596. The top 200 paths, which
-are 1 percent of 20,000, carry exponential-weight share 1.000. That
-fails the 10 percent bar. At `lambda = 0.1` the entropic risk is 0.1495
-and the same 200 paths carry share 0.02277. That passes. Lambda stays
-0.1. It is not halved.
+On the 21-trading-day call the premium is 0.02070205, with standard
+error 0.00012343. At `lambda = 0.1` the unhedged share is 0.02337. That
+also passes. Lambda stays 0.1. It is not halved.
+
+The hedged book rebalances once a day. The hedge is the Black-Scholes
+call delta. One column uses volatility `sqrt(v_t)`. The other uses the
+flat volatility `sqrt(xi0) = 0.2`. The spot cost is `1e-4` of notional
+on the turnover, including entry and the unwind. At `lambda = 0.1` the
+top 1 percent shares on the 21-trading-day call are 0.01368 at
+`sqrt(v_t)` and 0.01671 at the flat volatility. Those are the 1.4 percent
+and 1.7 percent shares, to one decimal place. On the 30-trading-day call
+the same two hedges give 0.01363 and 0.01581.
 
 ### Quote information
 
@@ -249,21 +284,20 @@ curve. They do not write a price back into the filter. The audit
 recomputes the three probability arrays from `y`, `y_rv` and `log v` and
 matches the arrays stored on the path.
 
-### Variance-swap accrued leg
+### Variance-swap left-point leg
 
 `VarianceSwapPricer` returns the remaining integral `int_t^T xi_t(u) du`,
-a left Riemann sum on `xi_tenor`. It does not add accrued realised
-variance. At inception the accrued leg is zero, so the time-0 quote is
-the whole floating leg. The mark of a live swap is accrued realised
-variance from the start of the contract up to `t`, plus that remaining
-integral, minus the strike times the contractual variance period.
+a left Riemann sum on `xi_tenor`. It does not add the left-point model
+variance. That leg is the sum of `v` at the left of each step times the
+step. It is not the sum of squared log returns. At inception the leg is
+zero, so the entry quote is the whole floating leg. The mark of a live
+swap is the left-point model variance from the contract's start up to
+`t`, plus that remaining integral, minus the strike times the contractual
+variance period.
 
-A variance swap held from inception to maturity, entered at that time-0
-quote, has mean P&L inside the z-rule on the draws in the martingale
-check below. The deep-hedging repository needs its own unit test that a
-variance swap entered at the model mid has zero expected P&L, including
-the accrued leg when the swap is marked before expiry. That test is not
-in this repository. The hedger is not here.
+The pre-gate tests that mark. See the martingale section. The
+deep-hedging repository still needs the same test on its own P&L. The
+hedger is not here.
 
 ### Log-space mean of variance
 
@@ -279,12 +313,12 @@ and `|mean z|` is below `3.5 / sqrt(n)`. At `n = 8` those bounds are
 3.836 and 1.237.
 
 Eight runs of 2,000 paths, `H = 0.1`, `T = 1`, 11 times, seeds
-`run_seed(70 + r, 2)`. The log-space z-scores pass at `nu = 1.5` and at
-`nu = 3`. The largest absolute z is 1.49. The driver is linear in `nu`
-and the shocks are shared, so the two log-space z-scores are the same
-draw. The level check `E[v] - xi0` passes at `nu = 1.5` and fails at
-`nu = 3`: the largest absolute z is 9.21. The pre-gate is the log-space
-check.
+`run_seed(70 + r, 2)`. The log-space z-scores pass at constant `nu = 1.5`
+and at constant `nu = 3`. The largest absolute z is 1.49. The driver is
+linear in `nu` and the shocks are shared, so those two log-space draws
+match. On the switching market the target is pathwise: `log xi0` minus
+that path's compensator. The same eight seeds pass. The largest absolute
+z is 1.74. The pre-gate is this log-space check.
 
 ### Instrument martingale
 
@@ -298,59 +332,77 @@ variance. The intercept z-scores and the slope z-scores pass the z-rule.
 The largest absolute z on this draw is 1.20 for the terminal mean, 1.75
 for the intercept, and 2.21 for the slope.
 
-The same z-rule on a variance swap held to maturity, eight runs of 1,500
-paths, `T = 1`, 11 times, `H = 0.1`, seeds `run_seed(40 + r, 0)`. The
-gap is realised variance minus the time-0 remaining integral. Constant
-`nu = 1.5` has mean ratio 1.004 and passes. Constant `nu = 3` has mean
-ratio 0.965 and passes. The switching market has mean ratio 0.975 and
-passes.
+The variance-swap mark is tested on the daily episode at the gate
+settings: `H = 0.1`, `nu` 1.5 and 3, `price_filter="rv"`, `n_sub = 21`.
+The contract is entered at `t0 = 0.5`. Eight runs of 1,500 paths, seeds
+`run_seed(40 + r, 2)`. The gap is the mark at maturity minus the mark at
+`t0`. Its z-scores pass for the 21-trading-day swap and for the
+30-trading-day swap. The one-step mark change is regressed on a constant
+and on calendar time, weighted by the reciprocal of that date's sample
+variance. The last step is left out of the regression: its remaining
+integral is the diagonal `v`, so the mark change is numerical noise.
+The intercept z-scores and the slope z-scores pass for both maturities.
 
-### Daily-grid filter scores
+I3, the call priced by `SurrogatePricer`, is the third instrument. It
+stays untested until that surrogate exists.
 
-Clock index 10, seed entropy 12, test split, `n_pilot = 1024`, step
-`1/252`. The chain at that clock is the same on the 21-step and 30-step
-grids: 600 paths give 396 low and 204 high, base rate 0.6600; 4,000
-paths give 2,638 low and 1,362 high, base rate 0.6595. Spot scores and
-latent scores at this clock match across the two horizons, because those
-dates share the draw. Windowed scores do not. The windowed bridge is
-drawn after every coarse normal, so the windowed sample depends on the
-horizon.
+A hold from time 0 to `T = 1`, eight runs of 1,500 paths, seeds
+`run_seed(40 + r, 0)`, compares the left-point model variance with the
+time-0 remaining integral. Constant `nu = 1.5` has mean ratio 1.004 and
+passes. Constant `nu = 3` has mean ratio 0.965 and passes. The switching
+market has mean ratio 0.975 and passes.
+
+### Episode filter scores
+
+The grid is daily from time 0 through `t0` plus 30 trading days. The
+episode starts at index 126. Seed entropy 12, test split, `n_pilot = 1024`,
+`n_sub = 21`. A path is switched at a date when its regime on the path up
+to that date is not constant. The chain does not depend on `H` or on
+`nu`. At `t0`, 600 paths split into 316 not switched and 284 switched.
+4,000 paths split into 2,182 and 1,818.
 
 Calibration error is the path-weighted mean absolute gap between the bin
 hit rate and the mean predicted probability of the high regime. Five
 bins. A bin with fewer than 40 paths is left out.
 
-Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1. 21 steps, 600 paths.
-Spot: 379 of 600, skill -0.0717, calibration error 0.0784. Windowed: 396
-of 600, all called low, skill -0.0075, calibration error 0.0131. Latent:
-580 of 600, skill 0.8513, calibration error 0.0091. The same settings,
-4,000 paths. Spot skill -0.0602, calibration error 0.0883. Windowed
-skill 0.0011, calibration error 0.0091, confusion
-`[[2638, 0], [1362, 0]]`. Latent skill 0.8790, calibration error 0.0055.
+The windowed score assumes 21 intraday returns on each day. The windowed
+level is left-point model variance `v` plus chi-squared noise on 21
+degrees, up to the drift and the bridge. It is not integrated variance.
+That is the realism limit of these daily-grid skills.
 
-30 steps, 600 paths, market-test. Spot and latent match the 21-step
-scores. Windowed: 395 of 600, skill -0.0117, calibration error 0.0264.
-4,000 paths. Windowed skill -0.0039, calibration error 0.0165, confusion
-`[[2624, 14], [1349, 13]]`.
+At the episode start, market-test settings, `H = 1/2`, `nu` 0.4 and 1.1,
+600 paths. Not switched. Spot skill -0.0671, calibration error 0.0879.
+Windowed skill -0.1659, calibration error 0.1806. Latent skill 0.9908,
+calibration error 0.0188. Switched. Spot skill -0.7035, calibration
+error 0.3504. Windowed skill -0.2716, calibration error 0.1877. Latent
+skill 0.8371, calibration error 0.0054. The same settings, 4,000 paths.
+Not switched: spot skill -0.1113, windowed skill -0.1723, latent skill
+0.9814. Switched: spot skill -0.6900, windowed skill -0.2283, latent
+skill 0.7668.
 
-Pre-registered settings, `H = 0.1`, `nu` 1.5 and 3. 21 steps, 600 paths.
-Spot: 428 of 600, skill 0.0699, calibration error 0.1325. Windowed: 530
-of 600, skill 0.5863, calibration error 0.0307. Latent: 543 of 600,
-skill 0.6571, calibration error 0.0230. The same settings, 4,000 paths.
-Spot skill 0.1191, calibration error 0.1172. Windowed skill 0.5830,
-calibration error 0.0255, confusion `[[2477, 161], [330, 1032]]`. Latent
-skill 0.6774, calibration error 0.0188.
+At the episode start, pre-registered settings, `H = 0.1`, `nu` 1.5 and 3,
+600 paths. Not switched. Spot hit rate 0.8354, skill 0.4437, calibration
+error 0.1081. Windowed hit rate 0.9873, skill 0.9365, calibration error
+0.0433. Latent hit rate 0.9842, skill 0.9364, calibration error 0.0308.
+Switched. Spot hit rate 0.7535, skill -0.0413, calibration error 0.1660.
+Windowed hit rate 0.8979, skill 0.5761, calibration error 0.0319. Latent
+hit rate 0.9155, skill 0.6502, calibration error 0.0299. The same
+settings, 4,000 paths. Not switched: spot skill 0.4702, windowed skill
+0.9214, latent skill 0.9439. Switched: spot skill -0.1317, windowed
+skill 0.4921, latent skill 0.5688. The 4,000-path windowed confusions
+are `[[1327, 34], [13, 808]]` on the paths that stayed and
+`[[396, 100], [128, 1194]]` on the paths that switched.
 
-30 steps, 600 paths, pre-registered. Spot and latent match the 21-step
-scores. Windowed: 519 of 600, skill 0.5433, calibration error 0.0369.
-4,000 paths. Windowed skill 0.5917, calibration error 0.0219, confusion
-`[[2484, 154], [321, 1041]]`.
-
-Holding times are 2/3 of a year and 1.25 years, so a clock at 10/252 of
-a year has had little time to switch. The market-test windowed filter
-calls the low regime. Its skill is about zero. The pre-registered
-windowed skill is about 0.54 to 0.59, because the gap from `nu` 1.5 to
-`nu` 3 is visible in the variance path of the initial regime.
+Pooled over the episode's own dates, pre-registered settings, 4,000
+paths. The 21-day episode has dates 126 through 146. Not switched:
+windowed skill 0.9220, confusion `[[26578, 637], [293, 16276]]`.
+Switched: windowed skill 0.5391, confusion
+`[[9039, 2201], [2476, 26500]]`. The 30-day episode has dates 126 through
+155. Not switched: windowed skill 0.9190, confusion
+`[[37047, 874], [478, 22862]]`. Switched: windowed skill 0.5438,
+confusion `[[13467, 3159], [3628, 38485]]`. Spot skill on the switched
+paths is negative at both horizons. The windowed filter keeps skill near
+0.54 on those paths.
 
 ## Not the gate
 
@@ -390,9 +442,8 @@ flat `xi0 = 0.04` are the pins above. The spot cost `1e-4` is not an
 input to any filter. The chain does not depend on `H` or on `nu`: 277
 paths in the low regime and 323 in the high regime. The base rate is
 0.5383. Quoting it scores Brier 0.4971 and log score -0.6902. Brier
-skill is `1 - Brier / Brier_base`. The daily-grid scores are in the
-pre-gate section. They are a different clock length, and the base rate
-there is about 0.66.
+skill is `1 - Brier / Brier_base`. The episode scores, after the burn-in,
+are in the pre-gate section.
 
 Market-test settings, `H = 1/2`, `nu` 0.4 and 1.1, 600 paths. Spot: 287
 of 600, skill -0.0505, calibration error 0.0713. Windowed: 345 of 600,
@@ -442,7 +493,8 @@ Stationarity gives `g ~ Normal(0, v_g)`, and then
 `E[rho exp(g - v_g / 2)] = rho`. The fit on 703 pre-2025 one-week
 innovations is `(rho, phi, v_g) = (0.878, 0.139, 0.0649)`, from the
 Kalman likelihood of equation (57),
-`log(delta^2) = log rho + g - v_g / 2 + log(chi^2_200 / 200)`. On 158
-innovations from 2025, the log-radius negative log likelihood falls from
-2.453 to 0.125 against a pre-2025-scaled Gaussian. Neither H4 nor H5 is
-frozen.
+`log(delta^2) = log rho + g - v_g / 2 + log(chi^2_200 / 200)`. That scale
+is the paper's fit on its factor innovations. It is not fitted to the
+variance in this repository. On 158 innovations from 2025, the log-radius
+negative log likelihood falls from 2.453 to 0.125 against a
+pre-2025-scaled Gaussian. Neither H4 nor H5 is frozen.
