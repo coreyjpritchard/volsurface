@@ -50,23 +50,37 @@ contribution of step ``j`` that lands at time index ``j + k`` is
 the sum is 0. The compensator stays the exact one,
 ``sum_j nu_j^2 ((t - t_j)^{2H} - (t - t_{j+1})^{2H}) / 2``.
 
-Every price is computed under the trader's information. The forward
-variance is the mixture of the regime-conditional curves, weighted by the
-filtered probabilities. It is not computed from the true label ``r_t``.
-At ``H = 1/2`` each regime-conditional expectation equals
-``v_t xi0(u) / xi0(t)``, so the mixture equals that common curve.
-``state["xi"]`` stores the mixture. ``VarianceSwapPricer`` integrates it.
-``surface_at`` prices the call by Monte Carlo under the same mixture.
-Each regime holds ``nu`` fixed. The variance level is that regime's
-forward curve ``xi_t(u)``: at ``H = 1/2`` it is flat at ``v_t``, and at
-any other ``H`` a later date is the closed-form constant-``nu`` curve
-and the clock entry is ``v_t``. The
-future noise is a fresh kernel, independent of the past given that
-curve. The past Volterra integral sits in ``xi_t(u)`` and is not drawn
-again. Weights are ``regime_prob`` at the clock. The true label is not
-an argument. At ``H = 1/2`` the variance step is the exponential
-martingale and the plugin is not called. Any other ``H`` reads
-``state["dW"]`` and restarts ``volterra_components`` from the clock.
+``state["xi"]`` is the curve ``VarianceSwapPricer`` integrates. At
+``H = 1/2`` it is ``v`` on and after the clock: every regime has the
+same conditional expectation, so the filter weights do not enter. At
+any other ``H`` it is the conditional expectation of the simulated
+hybrid variance given the ``nu`` in force on each step already finished
+and the hybrid components of those steps. That is the ``nu`` path the
+scheme used to build ``v``, not a mixture of constant-``nu`` closed
+forms. A future step is left out of the quote. Its near-field factor
+has conditional mean 1. A tail lag uses the power-kernel weight, so
+that factor's mean is not exactly 1. Given the true ``nu`` path, the
+mark is a martingale up to that tail-weight bias, about -0.1 percent
+of the quote on the gate grid. The clock entry is ``v_t``.
+
+``surface_at`` prices the call on that same curve. Each Monte Carlo
+copy starts from the true regime at the clock and runs the chain
+forward with the same generator, so ``nu`` switches inside the copy.
+The variance swap is a martingale given the true ``nu`` path, up to
+the tail-weight bias. The call is a martingale by construction up to
+Monte Carlo error, because each copy replicates the simulator's law.
+The tail-weight bias does not enter the call. Holding today's ``nu``
+fixed for the remaining life is not that price. The filter is the
+hedger's probability. It is not a pricing weight, so H1 and H2 measure
+the gap between that probability and this informed price. In gate mode
+(``price_filter="rv"`` and ``H`` other than 1/2) a missing
+``state["xi"]`` raises. Otherwise, when the curve is absent, the
+variance level is the restarted curve of the regime at the clock.
+At ``H = 1/2`` the variance step is the exponential martingale and
+the plugin is not called. Any other ``H`` restarts
+``volterra_components`` from the clock. The past Volterra integral
+sits in the curve and is not drawn again. A one-regime spec stays
+in that regime and does not draw the chain.
 
 The same shocks drive a Black path whose variance is the deterministic
 left forward curve. The control is that Black price. Its mean is the
@@ -81,12 +95,15 @@ is the controlled log contract ``-2 E[log Z]`` on those paths, which is
 the variance-swap strike, and ``total_variance_se`` is its standard error.
 
 The Monte Carlo seed is a ``SeedSequence`` with the path's entropy and
-``spawn_key + (4, regime)``. The clock is not in the key, so every hedge
+``spawn_key + (4, 0)``. The clock is not in the key, so every hedge
 date draws the same shocks. It is not one of the four simulation
-children. At ``H = 1/2`` each step draws ``dW`` for every path and every
-copy, then the orthogonal shock. At any other ``H`` the plugin consumes
-the vol child and the spot child draws the orthogonal shock. The unit
-forward is 1 and the strike is ``exp(k)``.
+children. With two or more regimes the regime child draws the forward
+chain and the other child is split into the vol and spot streams. A
+one-regime spec does not draw that chain: at ``H = 1/2`` each step
+draws ``dW`` for every path and every copy, then the orthogonal shock,
+and at any other ``H`` the plugin consumes the vol child and the spot
+child draws the orthogonal shock. The unit forward is 1 and the strike
+is ``exp(k)``.
 
 The spot filter and the latent-variance benchmark share one timing.
 Column 0 is ``p0``. The observation on the step that ends at ``t_i`` is
@@ -106,8 +123,9 @@ variance and not ``nu``. The variance in regime ``j`` is
 ``pi^2 / 2 + nu_j^2``. ``pi^2 / 2`` is about 4.93. For ``nu`` of 0.4 and
 1.1 the extra term is 0.16 and 1.21, so the two emissions are close.
 ``state["regime_prob_spot"]`` holds this filter. ``price_filter``
-defaults to ``"spot"``, and ``regime_prob`` is then this filter. Prices
-read ``regime_prob``. They do not read the other two filters.
+defaults to ``"spot"``, and ``regime_prob`` is then this filter. The
+hedger reads ``regime_prob``. The call and the variance swap do not.
+The call reads ``paths.regime`` and, when it is stored, ``state["xi"]``.
 
 The windowed realised-variance filter is observable. Inside each clock
 step the spot's Brownian increment is refined to ``n_sub`` sub-steps,
@@ -136,8 +154,9 @@ market seed. The pilot statistic is the change in ``y``. It does not
 read ``v``. A sample variance below ``1e-8`` is floored there so the
 Gaussian likelihood stays finite. The probabilities sit in
 ``state["regime_prob_rv"]``. ``price_filter="rv"`` makes ``regime_prob``
-this filter. The default does not, because the spot filter is the one
-the prices were built on. Both are observable. The latent benchmark is
+this filter. The default stays ``"spot"``. Prices do not read either
+array. The gate sets ``"rv"`` so the hedger's probability is the
+windowed filter. Both filters are observable. The latent benchmark is
 not.
 
 The latent-variance benchmark reads ``log v_i - log v_{i-1}``. Its
@@ -235,6 +254,7 @@ class RegimeSwitchingBergomi:
         self.obs_sigma = float(obs_sigma)
         self.forward = float(forward)
         self.rate = float(rate)
+        self._smile_default = smile_k is None
         self.smile_k = (
             np.linspace(-0.2, 0.2, 9) if smile_k is None else np.asarray(smile_k, dtype=float)
         )
@@ -260,8 +280,13 @@ class RegimeSwitchingBergomi:
         *,
         seed: int | np.random.SeedSequence,
         state0=None,
+        store_forward: bool = True,
     ) -> MarketPaths:
-        """Paths, the chain, the filter, and the trader's forward variance."""
+        """Paths, the chain, the filter, and the trader's forward variance.
+
+        ``store_forward=False`` skips ``state["xi"]``. A score that reads
+        only the filters does not need that array. The default still stores it.
+        """
         drawn = _draw_paths(self, n_paths, times, seed, state0=state0)
         grid = drawn["grid"]
         nus = drawn["nus"]
@@ -289,24 +314,40 @@ class RegimeSwitchingBergomi:
             priced = spot_prob
         Y = np.zeros((n_paths, grid.size))
         Y[:, 1:] = np.cumsum(dW, axis=1)
-        xi = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
+        state = {
+            "v": v,
+            "Y": Y,
+            "dW": dW,
+            "y": observed,
+            "y_rv": y_rv,
+            "regime_prob_spot": spot_prob,
+            "regime_prob_rv": rv_prob,
+            "regime_prob_latent": latent_prob,
+        }
+        if store_forward:
+            components = drawn["components"]
+            if components is None:
+                state["xi"] = trader_forward_variance(
+                    self.H, nus, v, priced, self.xi0, grid, dW
+                )
+            else:
+                # The nu in force on each finished step, the same array that
+                # builds v. A constant-nu mixture prices a path that never
+                # switched, and the one-day roll of that quote is not the
+                # scheme's next variance.
+                nu_step = nus[regime[:, :-1]]
+                state["xi"] = hybrid_path_forward_variance(
+                    self.H, nu_step, self.xi0, grid, components
+                )
+                diagonal = np.arange(grid.size)
+                state["xi"][:, diagonal, diagonal] = v
+            state["xi_tenor"] = grid.copy()
         parent = as_seed_sequence(seed)
         plugin = self._plugin
         return MarketPaths(
             times=grid,
             Z=Z,
-            state={
-                "v": v,
-                "Y": Y,
-                "dW": dW,
-                "y": observed,
-                "y_rv": y_rv,
-                "xi": xi,
-                "xi_tenor": grid.copy(),
-                "regime_prob_spot": spot_prob,
-                "regime_prob_rv": rv_prob,
-                "regime_prob_latent": latent_prob,
-            },
+            state=state,
             F0=_flat(self.forward),
             df=_discount(self.rate),
             regime=regime,
@@ -335,91 +376,140 @@ class RegimeSwitchingBergomi:
         )
 
     def surface_at(self, paths: MarketPaths, i_t: int) -> SurfaceBatch:
-        """Monte Carlo calls mixed over the filtered regime probabilities.
+        """Monte Carlo calls on ``state["xi"]`` and the forward regime chain.
 
-        Each regime is simulated with that regime's ``nu`` held fixed.
-        The variance level is the regime-conditional forward curve
-        ``xi_t(u)``, and the future kernel is restarted from the clock.
-        The draws do not read ``paths.regime``. Weights are ``regime_prob``
-        at the clock. That array is the spot filter unless
-        ``price_filter`` is ``"rv"``. ``state["regime_prob_latent"]`` and,
-        under the default, ``state["regime_prob_rv"]`` are not read. Two
-        calls on the same paths use the same seed, so the prices match.
-        The gap between two mixtures on those shared seeds is the gap in
-        the weights. It is not a second Monte Carlo error.
+        Each copy starts at ``paths.regime`` at the clock and switches with
+        the generator. ``regime_prob`` is not a weight. When ``state["xi"]``
+        is stored, that curve is the variance level. Gate mode is
+        ``price_filter="rv"`` with ``H`` other than 1/2: a missing curve
+        raises. Otherwise the level is the restarted curve of the regime
+        at the clock. Two calls on the same paths use the same seed.
+        Strikes are ``exp(k)``, one grid for every path. In gate mode,
+        when ``smile_k`` was omitted, ``k`` is standardised moneyness
+        ``z * sqrt(xi0 * tau)`` with ``z`` from -2.5 to 2.5 and ``tau``
+        the time from the clock to the last expiry. Otherwise ``k`` is
+        ``smile_k``.
         """
-        if paths.regime_prob is None:
-            raise ValueError("surface_at mixes filtered regime probabilities")
+        k = self._strike_grid(paths, i_t)
+        call, stderr, total, total_se, times, indices = self._surface_calls(
+            paths, i_t, np.exp(k)
+        )
+        return SurfaceBatch(
+            T=times[indices].copy(),
+            k=k.copy(),
+            call=call,
+            stderr=stderr,
+            total_variance=total,
+            total_variance_se=total_se,
+        )
+
+    def unit_forward_calls(self, paths: MarketPaths, i_t: int, strikes: np.ndarray):
+        """Unit-forward calls at ``strikes``. Shape of the price is ``(m, n_exp, n_k)``.
+
+        ``strikes`` has shape ``(n_k,)``, shared by every path, or
+        ``(m, n_k)``, one row per path. A fixed absolute strike, marked
+        across clocks, is the row ``Z_entry / Z_clock``. The spot ratio
+        times that unit-forward call is the mark of ``max(Z_T / Z_entry - K, 0)``.
+        """
+        call, stderr, _total, _total_se, _times, _indices = self._surface_calls(
+            paths, i_t, strikes
+        )
+        return call, stderr
+
+    def _strike_grid(self, paths: MarketPaths, i_t: int) -> np.ndarray:
+        """Log strikes. A default smile in gate mode is standardised moneyness."""
+        if self._smile_default and self.price_filter == "rv" and self.H != 0.5:
+            times = np.asarray(paths.times, dtype=float)
+            tau = float(times[-1] - times[int(i_t)])
+            if tau > 0.0:
+                return np.linspace(-2.5, 2.5, 21) * math.sqrt(self.xi0 * tau)
+        return np.asarray(self.smile_k, dtype=float)
+
+    def _surface_calls(self, paths: MarketPaths, i_t: int, strikes):
+        """Prices, standard errors, log contract, and the expiry indices."""
+        if paths.regime is None:
+            raise ValueError("surface_at prices the call on paths.regime")
         clock = int(i_t)
         times = np.asarray(paths.times, dtype=float)
         indices = _expiry_indices(times.size, clock)
         v_now = np.asarray(paths.state["v"][:, clock], dtype=float)
         nus = np.array([float(item["nu"]) for item in self.spec.params], dtype=float)
-        probs = np.asarray(paths.regime_prob[:, clock, :], dtype=float)
-        if probs.shape != (v_now.shape[0], nus.size):
-            raise ValueError(
-                f"regime_prob shape {probs.shape} does not match "
-                f"{(v_now.shape[0], nus.size)} paths and regimes"
-            )
-        k = np.asarray(self.smile_k, dtype=float)
-        strikes = np.exp(k)
         m = v_now.shape[0]
+        labels = np.asarray(paths.regime[:, clock], dtype=int)
+        if labels.shape != (m,):
+            raise ValueError(f"regime column has shape {labels.shape}, expected {(m,)}")
+        if np.any((labels < 0) | (labels >= nus.size)):
+            raise ValueError(f"regime index must lie in 0..{nus.size - 1} for this spec")
         if int(indices[-1]) == clock:
             call = _intrinsic_calls(m, strikes)
-            return SurfaceBatch(
-                T=times[indices].copy(),
-                k=k.copy(),
-                call=call,
-                stderr=np.zeros_like(call),
-                total_variance=np.zeros((m, 1)),
-                total_variance_se=np.zeros((m, 1)),
+            zeros = np.zeros((m, 1))
+            return call, np.zeros_like(call), zeros, zeros, times, indices
+        stored = paths.state.get("xi")
+        gate = self.price_filter == "rv" and self.H != 0.5
+        if gate and stored is None:
+            raise ValueError("gate mode reads the stored hybrid curve state['xi']")
+        if stored is None:
+            dW = _forward_driver(paths, self.H)
+            xi = np.full((m, times.size), np.nan)
+            for r, nu in enumerate(nus):
+                built = _regime_forward(self.H, float(nu), v_now, self.xi0, times, dW, clock)
+                mask = labels == r
+                xi[mask] = built[mask]
+        else:
+            stored = np.asarray(stored, dtype=float)
+            expected = (m, times.size, times.size)
+            if stored.shape != expected:
+                raise ValueError(f"state['xi'] shape {stored.shape} does not match {expected}")
+            xi = stored[:, clock, :]
+        seed = _surface_seed(paths, clock, 0)
+        call, stderr, total, total_se = self._priced_calls(
+            xi, labels, nus, times, clock, indices, strikes, seed
+        )
+        return call, stderr, total, total_se, times, indices
+
+    def _priced_calls(self, xi, labels, nus, times, i_t, indices, strikes, seed):
+        """Calls with the forward chain. One regime keeps the constant-nu draws."""
+        if nus.size == 1:
+            if self.H == 0.5:
+                return _half_calls(
+                    float(nus[0]), xi, times, i_t, indices, strikes, seed, self.n_mc, self.rho
+                )
+            return self._rough_calls(float(nus[0]), xi, times, i_t, indices, strikes, seed)
+        last = int(indices[-1])
+        grid = np.asarray(times[i_t : last + 1], dtype=float)
+        regime_seed, work_seed = spawn(seed, 2)
+        start = np.repeat(np.asarray(labels, dtype=int), self.n_mc)
+        nu_step = _future_nu(
+            nus, np.asarray(self.spec.generator, dtype=float), start, grid, generator(regime_seed)
+        )
+        if self.H == 0.5:
+            return _half_calls(
+                0.0,
+                xi,
+                times,
+                i_t,
+                indices,
+                strikes,
+                work_seed,
+                self.n_mc,
+                self.rho,
+                nu_step=nu_step,
             )
-        dW = _forward_driver(paths, self.H)
-        call = np.zeros((m, indices.size, k.size))
-        stderr = np.zeros_like(call)
-        total = np.zeros((m, indices.size))
-        total_se = np.zeros_like(total)
-        for r, nu in enumerate(nus):
-            seed = _surface_seed(paths, clock, r)
-            xi = _regime_forward(self.H, float(nu), v_now, self.xi0, times, dW, clock)
-            column, column_se, vs, vs_se = self._regime_calls(
-                float(nu), xi, times, clock, indices, strikes, seed
-            )
-            weight = probs[:, r]
-            call += weight[:, None, None] * column
-            stderr += (weight[:, None, None] * column_se) ** 2
-            total += weight[:, None] * vs
-            total_se += (weight[:, None] * vs_se) ** 2
-        return SurfaceBatch(
-            T=times[indices].copy(),
-            k=k.copy(),
-            call=call,
-            stderr=np.sqrt(stderr),
-            total_variance=total,
-            total_variance_se=np.sqrt(total_se),
+        return self._rough_calls(
+            0.0, xi, times, i_t, indices, strikes, work_seed, nu_step=nu_step
         )
 
-    def _regime_calls(self, nu, xi, times, i_t, indices, strikes, seed):
-        """Controlled calls for one constant ``nu``.
-
-        Returns call, stderr, log-contract and its standard error.
-        """
-        if self.H == 0.5:
-            return _half_calls(nu, xi, times, i_t, indices, strikes, seed, self.n_mc, self.rho)
-        return self._rough_calls(nu, xi, times, i_t, indices, strikes, seed)
-
-    def _rough_calls(self, nu, xi, times, i_t, indices, strikes, seed):
-        """Restarted hybrid factor on the regime's forward curve ``xi``.
+    def _rough_calls(self, nu, xi, times, i_t, indices, strikes, seed, nu_step=None):
+        """Restarted hybrid factor on the forward curve ``xi``.
 
         The plugin draws the vol child. ``xi`` already holds the path's
-        past, so the factor is a fresh kernel with mean near 1. The grid
-        from the clock to the last expiry has to be equally spaced. A
-        later date on ``xi`` is the closed-form constant-``nu`` curve.
-        The clock entry is ``v_t``. Dividing by the closed-form diagonal
-        would drop the hybrid near field and lift the curve. The curve
-        is still not the conditional curve of a path whose past ``nu``
-        switched: that curve would read the latent regime, and a price
-        does not.
+        past, so the factor is a fresh kernel. The near-field piece has
+        conditional mean 1. The grid from the clock to the last expiry
+        has to be equally spaced. ``nu_step``, when given, is the vol of
+        vol in force on each future step of each copy, shape
+        ``(m * n_mc, n_steps)``. A one-regime book leaves it empty and
+        holds ``nu`` fixed. Dividing by the closed-form diagonal would
+        drop the hybrid near field and lift the curve.
         """
         m = xi.shape[0]
         n_mc = self.n_mc
@@ -428,14 +518,23 @@ class RegimeSwitchingBergomi:
         grid = np.asarray(times[i_t : last + 1], dtype=float)
         _equal_steps(grid)
         grid = grid - float(grid[0])
-        vol_seed, spot_seed = spawn(seed, 2)
-        n_sim = m * n_mc
-        components = self._rough_components(n_sim, grid, vol_seed)
-        nu_step = np.full((n_sim, n_steps), float(nu))
-        factor = hybrid_increment_variance(self.H, nu_step, 1.0, grid, components)
+        if nu_step is None:
+            vol_seed, spot_seed = spawn(seed, 2)
+            nu_used = np.full((m * n_mc, n_steps), float(nu))
+        else:
+            # The regime child was already drawn. This seed is the remainder.
+            vol_seed, spot_seed = spawn(seed, 2)
+            nu_used = np.asarray(nu_step, dtype=float)
+            if nu_used.shape != (m * n_mc, n_steps):
+                raise ValueError(
+                    f"nu_step shape {nu_used.shape} does not match {(m * n_mc, n_steps)}"
+                )
+        components = self._rough_components(m * n_mc, grid, vol_seed)
+        factor = hybrid_increment_variance(self.H, nu_used, 1.0, grid, components)
         level = np.repeat(np.maximum(xi[:, i_t : last + 1], 0.0), n_mc, axis=0)
         variance = level * factor
         rng = generator(spot_seed)
+        n_sim = m * n_mc
         log_z = np.zeros(n_sim)
         log_z_bs = np.zeros(n_sim)
         rho = self.rho
@@ -620,6 +719,36 @@ def _categorical(rng, probs: np.ndarray) -> np.ndarray:
     return np.argmax(u[:, None] < cdf, axis=1).astype(np.int8)
 
 
+def _future_nu(nus, generator_q, start, grid, rng) -> np.ndarray:
+    """Vol of vol on each future step. Shape ``(n_sim, n_steps)``.
+
+    ``start`` has shape ``(n_sim,)`` and is the regime at the clock.
+    ``grid`` has length ``n_steps + 1``. The regime at the left endpoint
+    of a step is the vol of vol on that step, the same rule as
+    :func:`_draw_paths`. Later columns jump with ``expm(Q dt)``.
+    """
+    n_sim = int(np.asarray(start).shape[0])
+    steps = int(np.asarray(grid).size - 1)
+    regime = np.empty((n_sim, steps), dtype=np.int8)
+    if steps < 1:
+        return np.asarray(nus, dtype=float)[regime]
+    regime[:, 0] = np.asarray(start, dtype=int)
+    if steps == 1:
+        return np.asarray(nus, dtype=float)[regime]
+    dts = np.diff(np.asarray(grid, dtype=float))
+    span = max(1.0, float(grid[-1] - grid[0]))
+    constant = float(np.max(np.abs(dts - dts[0]))) <= 1e-10 * span
+    cached = None
+    if constant:
+        cached = _stochastic(expm(np.asarray(generator_q, dtype=float) * float(dts[0])))
+    for i in range(1, steps):
+        step = cached
+        if step is None:
+            step = _stochastic(expm(np.asarray(generator_q, dtype=float) * float(dts[i - 1])))
+        regime[:, i] = _categorical(rng, step[regime[:, i - 1]])
+    return np.asarray(nus, dtype=float)[regime]
+
+
 def _brownian(n_paths: int, times: np.ndarray, seed) -> np.ndarray:
     """Standard Brownian motion. ``Var(Y_t) = t``, which is ``t^{2H} / (2H)`` at ``H = 0.5``."""
     rng = generator(seed)
@@ -767,6 +896,131 @@ def _assemble_driver(nu: np.ndarray, pieces: np.ndarray, weights: np.ndarray) ->
     return driver
 
 
+def hybrid_forward_variance(
+    H: float,
+    nu: float,
+    xi0: float,
+    times: np.ndarray,
+    components: np.ndarray,
+) -> np.ndarray:
+    """Conditional forward variance at one constant ``nu``. Shape ``(m, n, n)``.
+
+    Entry ``(path, clock, tenor)`` is the expectation of variance at that
+    tenor given the components on steps that finish at or before the clock,
+    with this ``nu`` on every step. On the clock the entry equals the
+    simulated variance. Behind the clock the entry is NaN.
+    """
+    grid = np.asarray(times, dtype=float)
+    pieces = np.asarray(components, dtype=float)
+    nu_step = np.full((pieces.shape[0], max(grid.size - 1, 0)), float(nu))
+    return hybrid_path_forward_variance(float(H), nu_step, float(xi0), grid, pieces)
+
+
+def hybrid_tail_mark_bias(
+    H: float, nu: float, n_steps: int, dt: float, kappa: int = 1
+) -> float:
+    """Expected mark change over a flat-``xi0`` life, as a fraction of the quote.
+
+    Lag ``L > kappa`` has factor mean ``mu(L)`` from the power-kernel
+    weight against the continuous kernel piece. That lag sits inside
+    ``n_steps - L`` of the daily rolls. Lag 1 is the near field and
+    contributes 0. The quote is ``xi0 * n_steps * dt``. The fraction does
+    not depend on ``xi0``.
+    """
+    steps = int(n_steps)
+    if steps < 2:
+        return 0.0
+    hurst = float(H)
+    step = float(dt)
+    if step <= 0.0:
+        raise ValueError(f"dt must be positive, got {dt}")
+    weights = _hybrid_tail_weights(hurst, steps, steps * step, int(kappa))
+    two_h = 2.0 * hurst
+    vol = float(nu)
+    total = 0.0
+    for lag in range(int(kappa) + 1, steps):
+        weight = float(weights[lag - 1])
+        piece = (lag * step) ** two_h - ((lag - 1) * step) ** two_h
+        mu = math.exp(0.5 * vol * vol * (two_h * weight * weight * step - piece))
+        total += (steps - lag) / steps * (mu - 1.0)
+    return total
+
+
+def hybrid_path_forward_variance(
+    H: float,
+    nu_step: np.ndarray,
+    xi0: float,
+    times: np.ndarray,
+    components: np.ndarray,
+) -> np.ndarray:
+    """Conditional forward variance of the simulated hybrid path.
+
+    ``nu_step`` has shape ``(m, n_steps)`` and is the vol of vol in force
+    on each step, the same array that builds ``v``. Entry
+    ``(path, clock, tenor)`` keeps only steps that finish at or before the
+    clock. Each such step contributes its hybrid piece, near field at lag
+    ``k`` and the power-kernel tail after that, minus that step's exact
+    compensator. A later step is omitted. At lag 1 the near-field factor
+    has conditional mean 1, so the next tenor is the conditional
+    expectation of the next variance. A tail lag uses the power-kernel
+    weight, whose variance is not the continuous kernel piece, so that
+    factor's mean is not exactly 1. The expected mark bias from those
+    tails is :func:`hybrid_tail_mark_bias`. Behind the clock the entry is
+    NaN. On the clock the entry is the simulated ``v``.
+
+    The exponent is one array. Each lag is written at the clock where its
+    step finishes, and the running sum carries it to later clocks.
+    """
+    grid = np.asarray(times, dtype=float)
+    pieces = np.asarray(components, dtype=float)
+    nu = np.asarray(nu_step, dtype=float)
+    if pieces.ndim != 3:
+        raise ValueError(f"components must have shape (m, n_steps, kappa + 1), got {pieces.shape}")
+    m, n_steps, n_comp = pieces.shape
+    if grid.size != n_steps + 1 or nu.shape != (m, n_steps):
+        raise ValueError(
+            f"nu_step {nu.shape} and times {grid.size} do not match components {pieces.shape}"
+        )
+    if n_comp < 2:
+        raise ValueError("components must include the near field I_1, ..., I_kappa")
+    hurst = float(H)
+    level = float(xi0)
+    scale = math.sqrt(2.0 * hurst)
+    n = n_steps + 1
+    if n_steps == 0:
+        return np.full((m, n, n), level)
+    kappa = n_comp - 1
+    weights = _hybrid_tail_weights(hurst, n_steps, float(grid[-1]), kappa)
+    exponent = np.zeros((m, n, n))
+    steps = np.arange(n_steps)
+    two_h = 2.0 * hurst
+    for lag in range(1, n_steps + 1):
+        length = n_steps - lag + 1
+        if lag <= kappa:
+            values = pieces[:, :length, lag]
+        else:
+            weight = float(weights[lag - 1])
+            if weight == 0.0:
+                continue
+            values = weight * pieces[:, :length, 0]
+        choice = steps[:length]
+        start = grid[choice]
+        stop = grid[choice + 1]
+        tenor = grid[choice + lag]
+        piece = np.maximum(tenor - start, 0.0) ** two_h - np.maximum(tenor - stop, 0.0) ** two_h
+        vol = nu[:, choice]
+        # choice + 1 is the clock at which this step has just finished.
+        exponent[:, choice + 1, choice + lag] = scale * vol * values - 0.5 * vol * vol * piece
+    for clock in range(1, n):
+        exponent[:, clock, :] += exponent[:, clock - 1, :]
+    np.exp(exponent, out=exponent)
+    exponent *= level
+    gap = grid[None, :] - grid[:, None]
+    tol = 1e-12 * max(1.0, float(grid[-1]))
+    exponent[:, gap < -tol] = np.nan
+    return exponent
+
+
 def trader_forward_variance(
     H: float,
     nus: np.ndarray,
@@ -775,15 +1029,17 @@ def trader_forward_variance(
     xi0: float,
     times: np.ndarray,
     dW: np.ndarray,
+    components: np.ndarray | None = None,
 ) -> np.ndarray:
     """Forward variance mixed over ``regime_prob``. Shape ``(m, n, n)``.
 
     The true regime label is not an argument. At ``H = 1/2`` every regime
     has the same conditional expectation, ``v_t`` when ``xi0`` is flat, so
     the mixture does not depend on the weights. At any other ``H`` a later
-    date is the closed-form constant-``nu`` curve for that regime. The
-    diagonal of that closed form is the kernel integral against ``dW``. It
-    drops the hybrid near field, so dividing by it lifts the whole curve.
+    date is the closed form built from ``dW`` when ``components`` is
+    omitted. Passing ``components`` mixes the constant-``nu`` hybrid curves,
+    each of which pretends that regime's ``nu`` was in force on every past
+    step. That is not the switched-path curve ``simulate_market`` stores.
     The diagonal of the mixture is the path's ``v_t``. Behind the clock
     the entry is NaN.
     """
@@ -802,12 +1058,16 @@ def trader_forward_variance(
             f"regime_prob shape {probs.shape} does not match {(m, n, vol_of_vol.size)}"
         )
     mixed = np.zeros((m, n, n))
-    increments = np.asarray(dW, dtype=float)
     finite = np.where(ahead, 1.0, 0.0)
     for r, nu in enumerate(vol_of_vol):
-        component = bergomi_forward_variance(float(H), float(nu), xi0, grid, increments)
+        if components is None:
+            component = bergomi_forward_variance(
+                float(H), float(nu), xi0, grid, np.asarray(dW, dtype=float)
+            )
+        else:
+            component = hybrid_forward_variance(float(H), float(nu), xi0, grid, components)
         # NaN behind the clock must not enter the sum. The diagonal is
-        # overwritten below: that closed-form diagonal drops the near field.
+        # overwritten below with the simulated variance.
         usable = np.where(np.isfinite(component), component, 0.0) * finite[None, :, :]
         mixed += probs[:, :, r][:, :, None] * usable
     diagonal = np.arange(n)
@@ -1092,8 +1352,10 @@ def _draw_paths(model, n_paths: int, times: np.ndarray, seed, state0=None) -> di
         "v": v,
         "Z": Z,
         "dW": dW,
+        "perp": perp,
         "y": _log_realised_variance(Z, grid),
         "y_rv": _windowed_log_realised_variance(log_sub, grid),
+        "components": components,
     }
 
 
@@ -1111,11 +1373,13 @@ def _expiry_indices(n_times: int, i_t: int) -> np.ndarray:
 
 
 def _surface_seed(paths: MarketPaths, i_t: int, regime: int) -> np.random.SeedSequence:
-    """Monte Carlo seed for one regime, shared by every clock.
+    """Monte Carlo seed shared by every clock.
 
     ``i_t`` is not in the key. Two hedge dates then draw the same shocks,
     so a comparison across clocks is not a second Monte Carlo contrast.
-    The regime stays in the key. This is not a simulation child.
+    ``surface_at`` calls this with regime 0. The forward chain is the
+    regime child of that seed. The regime argument stays in the key.
+    This is not a simulation child.
     """
     meta = paths.meta
     if "seed_entropy" not in meta or "spawn_key" not in meta:
@@ -1128,8 +1392,11 @@ def _surface_seed(paths: MarketPaths, i_t: int, regime: int) -> np.random.SeedSe
 
 def _intrinsic_calls(n_paths: int, strikes: np.ndarray) -> np.ndarray:
     """Unit-forward intrinsic value, shape ``(m, 1, n_k)``."""
-    intrinsic = np.maximum(1.0 - strikes, 0.0)
-    return np.broadcast_to(intrinsic, (n_paths, 1, strikes.size)).copy()
+    table = _strike_table(strikes, n_paths)
+    intrinsic = np.maximum(1.0 - table, 0.0)
+    if intrinsic.shape[0] == 1 and n_paths != 1:
+        return np.broadcast_to(intrinsic, (n_paths, 1, intrinsic.shape[-1])).copy()
+    return np.array(intrinsic, dtype=float, copy=True)
 
 
 def _forward_driver(paths: MarketPaths, H: float) -> np.ndarray | None:
@@ -1179,8 +1446,14 @@ def _equal_steps(grid: np.ndarray) -> None:
         )
 
 
-def _half_calls(nu, xi, times, i_t, indices, strikes, seed, n_mc, rho):
-    """Exponential-martingale variance at ``H = 1/2``, with a Black control."""
+def _half_calls(nu, xi, times, i_t, indices, strikes, seed, n_mc, rho, nu_step=None):
+    """Exponential-martingale variance at ``H = 1/2``, with a Black control.
+
+    ``nu_step``, when given, has shape ``(m * n_mc, n_steps)`` and is the
+    vol of vol on each future step. A one-regime book leaves it empty and
+    holds ``nu`` fixed, on the same normal draws. The first step's variance
+    is the curve at the clock. The multiplier is updated after the step.
+    """
     m = int(xi.shape[0])
     rng = generator(seed)
     multiplier = np.ones((m, n_mc))
@@ -1191,6 +1464,10 @@ def _half_calls(nu, xi, times, i_t, indices, strikes, seed, n_mc, rho):
     stored_z: dict[int, np.ndarray] = {}
     stored_bs: dict[int, np.ndarray] = {}
     last = int(indices[-1])
+    vol = None
+    if nu_step is not None:
+        n_steps = last - i_t
+        vol = np.asarray(nu_step, dtype=float).reshape(m, n_mc, n_steps)
     for i in range(i_t + 1, last + 1):
         dt = float(times[i] - times[i - 1])
         scale = math.sqrt(dt)
@@ -1201,17 +1478,41 @@ def _half_calls(nu, xi, times, i_t, indices, strikes, seed, n_mc, rho):
         shock = rho * dW + ortho * dW_perp
         log_z = log_z + np.sqrt(left) * shock - 0.5 * left * dt
         log_z_bs = log_z_bs + np.sqrt(level)[:, None] * shock - 0.5 * level[:, None] * dt
-        multiplier = multiplier * np.exp(nu * dW - 0.5 * nu * nu * dt)
+        if vol is None:
+            multiplier = multiplier * np.exp(nu * dW - 0.5 * nu * nu * dt)
+        else:
+            step_nu = vol[:, :, i - i_t - 1]
+            multiplier = multiplier * np.exp(step_nu * dW - 0.5 * step_nu * step_nu * dt)
         if i in wanted:
             stored_z[i] = log_z.copy()
             stored_bs[i] = log_z_bs.copy()
     return _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs)
 
 
+def _strike_table(strikes, m: int) -> np.ndarray:
+    """Strikes broadcastable to ``(m, n_mc, n_k)``.
+
+    A shared grid has shape ``(1, 1, n_k)``. A per-path grid has shape
+    ``(m, 1, n_k)``.
+    """
+    grid = np.asarray(strikes, dtype=float)
+    if grid.ndim == 1:
+        table = grid.reshape(1, 1, -1)
+    elif grid.ndim == 2 and grid.shape[0] == m:
+        table = grid[:, None, :]
+    else:
+        raise ValueError(f"strikes shape {grid.shape} does not match {m} paths")
+    if np.any(table <= 0.0):
+        raise ValueError("strikes must be positive")
+    return table
+
+
 def _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs):
     """Black control at the left Riemann of ``xi``, one terminal for every strike."""
     m = xi.shape[0]
-    call = np.empty((m, indices.size, strikes.size))
+    table = _strike_table(strikes, m)
+    n_k = table.shape[-1]
+    call = np.empty((m, indices.size, n_k))
     stderr = np.empty_like(call)
     total = np.empty((m, indices.size))
     total_se = np.empty_like(total)
@@ -1222,9 +1523,9 @@ def _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs):
         tau = maturity - clock
         z = stored_z[int(idx)]
         z_bs = stored_bs[int(idx)]
-        y = np.maximum(np.exp(z)[:, :, None] - strikes, 0.0)
-        x = np.maximum(np.exp(z_bs)[:, :, None] - strikes, 0.0)
-        known = _black_calls(integrated, tau, strikes)
+        y = np.maximum(np.exp(z)[:, :, None] - table, 0.0)
+        x = np.maximum(np.exp(z_bs)[:, :, None] - table, 0.0)
+        known = _black_calls(integrated, tau, table)
         call[:, j, :], stderr[:, j, :] = _control_means(y, x, known)
         total[:, j], total_se[:, j] = _controlled_log_contract(z, z_bs, integrated)
     return call, stderr, total, total_se
@@ -1232,11 +1533,18 @@ def _controlled_surface(xi, times, i_t, indices, strikes, stored_z, stored_bs):
 
 def _black_calls(total: np.ndarray, tau: float, strikes: np.ndarray) -> np.ndarray:
     """Unit-forward Black calls. ``total`` is the left Riemann, shape ``(m,)``."""
+    grid = np.asarray(strikes, dtype=float)
+    if grid.ndim == 1:
+        strike_grid = grid[None, :]
+    elif grid.ndim == 2:
+        strike_grid = grid
+    else:
+        strike_grid = grid[:, 0, :]
     if tau <= 0.0:
-        intrinsic = np.maximum(1.0 - strikes, 0.0)
-        return np.broadcast_to(intrinsic, (total.shape[0], strikes.size)).copy()
+        intrinsic = np.maximum(1.0 - strike_grid, 0.0)
+        return np.broadcast_to(intrinsic, (total.shape[0], strike_grid.shape[-1])).copy()
     sigma = np.sqrt(np.maximum(total, 0.0) / tau)
-    return np.asarray(bs.price(1.0, strikes[None, :], tau, sigma[:, None], 1.0), dtype=float)
+    return np.asarray(bs.price(1.0, strike_grid, tau, sigma[:, None], 1.0), dtype=float)
 
 
 def _control_means(y: np.ndarray, x: np.ndarray, known: np.ndarray):

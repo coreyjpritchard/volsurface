@@ -2,7 +2,81 @@
 
 Dated entries, newest first. What was learned, what surprised, open questions.
 
-**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The draft still leaves the hedge rebalancing step, the training path count, the bootstrap resample count and interval type, and the P&L units of `lambda = 1` open. Prices mix the spot filter. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `surface_at` restarts the hybrid factor from the clock. A later date on the forward curve is the closed form, and the diagonal is `v_t`. The curve of a path whose past `nu` switched, and the equally spaced grid, stay open. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda`, the seed counts, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+**Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The draft pre-registration is pinned and is not frozen. A day is `1/252` of a trading year. L1 matures in 21 trading days and L2's life is 30 trading days. The episode starts at `t0 = 0.5`, with the burn-in visible to the filter. P&L is per unit of the liability's time-0 premium at `lambda = 0.1`. The path counts are 100,000 train, 20,000 validation and 20,000 test. Validation is only for early stopping and selection. The bootstrap is hierarchical, paired, percentile, with `B = 10,000`. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The hedger's probability is the spot filter by default; the gate uses rv. Prices do not read that probability. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `state["xi"]` is the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. `surface_at` prices the call on that curve. Each copy runs the regime chain forward from the current true regime. Given the `nu` path so far, the variance swap is a martingale up to a tail-weight bias of about -0.1 percent of the quote. The call is a martingale by construction up to Monte Carlo error, because each copy replicates the simulator's law. The tail-weight bias does not enter the call. The surface grid from the clock to the last expiry is equally spaced. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `Q5 = 2.3 Q`, `Q0.5 = 23 Q`, the ratio grid, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda = 0.1`, the day, the episode start, the path counts, the bootstrap, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that pinned draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
+
+## 2026-10-15 Review: the call is a martingale by construction
+
+The call's model drift is 0 by construction. Each copy replicates the simulator's law. The regime chain steps with `expm(Q dt)`, the control variate is unbiased, and the tower property does the rest. The variance swap's tail-weight bias does not enter the call. The forward-chain entry below attributed that bias to the call. That sentence is withdrawn.
+
+The primary bar is a coupling identity. Fed a path's own future pieces, a copy reproduces the simulated `v` and `log Z`. On 32 paths and a 21-day grid, at the start, the middle and the last step, the largest absolute gap is 8.95e-16, under `1e-12`. The copy's one-step switch rate, eight runs of 4,000 paths from each regime, has largest absolute z 2.07. The simulator's chain, eight runs of 2,000 paths, has largest absolute z 2.39. Both pass the z-rule.
+
+The Monte Carlo call pre-gate cannot detect a 1 percent drift. Its minimum detectable drift is 0.348 of the quote at `H = 0.1` and 0.362 at `H = 1/2`, so that regression is a wiring smoke test.
+
+At gate settings, when `smile_k` is omitted, `surface_at` uses standardised moneyness `z * sqrt(xi0 * tau)`, `z` from -2.5 to 2.5, on the time from the clock to the last expiry. An explicit grid is unchanged. On eight paths, `n_mc` 1024 and a 21-day life, the out-of-the-money exact-zero rate at 21 days is 0 on 80 prices. The same strikes on the one-day node are far out for that maturity: 63 of those 80 prices are exactly zero. The fast suite is 213 passed, 1 skipped, 5 deselected, and its peak resident set is 1399 MiB.
+
+**Hypothesis:** on a fresh 32-path draw the coupling gap stays under `1e-12`. The quantity to report is the largest absolute gap, next to 8.95e-16.
+
+## 2026-10-15 Review: the call copies the forward regime chain
+
+The call sentence below says the variance level carries the hybrid tail bias. That bias does not enter the call. The coupling entry above replaces it.
+
+Holding today's `nu` fixed for the remaining life is not a martingale. Each Monte Carlo copy now starts at the true regime and runs the same generator forward, so `nu` switches inside the copy. The variance-swap bar moved from v1 to v2. v1 asked for an absolute drift under 1 percent of the quote on the pooled point estimate, and the same bar after dropping the largest 1 percent of absolute mark changes. v2 is the exact tail-weight drift under 1 percent of the quote, an untrimmed path-clustered 95 percent interval that contains 0, and a reported minimum detectable drift at 80 percent power. The trimmed regression is a diagnostic.
+
+The call pre-gate is that same Monte Carlo check on a fixed at-the-money contract, payoff `max(Z_T / Z_entry - 1, 0)`, life 21 trading days from `t0`. At `H = 1/2` the model drift is 0, because the variance multiplier is an exponential martingale for every `nu` path. At `H = 0.1` the variance level carries the hybrid tail bias and the call has no separate closed form. Eight runs, 64 copies, `n_pilot` 128. The rough sample is 150 paths: signed drift -0.018 of the quote, standard error 0.124, interval (-0.262, 0.226), minimum detectable drift 0.348, quote 0.01630. `H = 1/2` uses 400 paths: signed drift 0.057, standard error 0.129, interval (-0.196, 0.311), minimum detectable drift 0.362, quote 0.01643. Both intervals contain 0. Both standard errors exceed 1 percent of the quote, so that bar is not applied to the point estimate. The trimmed diagnostics are -0.053 and 0.181.
+
+On four runs of 80 paths the chain price minus the frozen-`nu` price has signed drift -0.0113 of the quote, standard error 0.0037, z -3.04. That is the drift of holding today's `nu` fixed, relative to the chain.
+
+The log contract on the pinned eight-path draw, 4,096 copies, strikes in standardised moneyness from -2.5 to 2.5, has largest absolute z 2.26 on the 48 comparisons past the one-step expiry. The one-step gap is under 1e-12. The path-mean z is 0.039. The flat anchor's mean absolute relative gap is 0.302, which is 4.60 standard errors. The median on this draw is 0.290. The out-of-the-money call zero rate is 0 on 80 prices. In gate mode a missing `state["xi"]` raises. The fast suite is 210 passed, 1 skipped, 5 deselected, and its peak resident set is 1403 MiB.
+
+**Hypothesis:** on a fresh eight runs of 150 paths the rough call's clustered interval still contains 0. The quantity to report is the signed drift, next to -0.018.
+
+## 2026-10-15 Review: both instruments are priced on the true nu path
+
+The call sentence below held the clock regime's `nu` fixed for the remaining life. That price is not the martingale. The forward-chain entry above replaces it. The variance-swap figures here stand.
+
+The call uses the true regime at the clock and the same hybrid curve as the variance swap. `regime_prob` is the hedger's probability, not a pricing weight. Given the true `nu` path, the mark is a martingale up to the hybrid tail-weight bias. That bias is the closed form `hybrid_tail_mark_bias`. At `H = 0.1` and `dt = 1/252` the 21-day fraction is -0.000436 at `nu = 1.5` and -0.001745 at `nu = 3`. The 30-day fraction is -0.000456 and -0.001825. The stationary mixture, `pi_high = 1.5/2.3`, is -0.001290 and -0.001349. Each is under 1 percent of the quote. Lag 1 is exact: `2 H Var(I_1) = dt^{2H}` to `1e-12`. Rebuilding the next variance from the next tenor, to 2e-13 on one draw, is a code-consistency identity.
+
+The Monte Carlo check is the untrimmed path-clustered regression. On eight runs of 1,500 paths the 21-day signed drift is -0.0573 of the quote, standard error 0.0661, 95 percent interval (-0.187, 0.072), minimum detectable drift 0.185. The 30-day signed drift is -0.0849, standard error 0.0565, interval (-0.196, 0.026), minimum detectable drift 0.158. Both intervals contain 0. The trimmed diagnostics are -0.248 and -0.276. At `H = 1/2` the signed drift is 0.0575. With both regimes at `nu = 1.5` it is 0.0037. A trimmed regression is a diagnostic.
+
+On the episode grid, 157 daily times through `t0` plus 30 trading days, eight runs of 2,000 paths, `E[log v_T]` passes the z-rule. Constant `nu` has largest absolute z 1.46 and mean z 0.203. The switching market has largest absolute z 1.04 and mean z 0.032. The forward curve is not stored for that check. The call's log-contract figure in the next sentence was computed with today's `nu` held fixed, and 3.47 does not reproduce. The forward-chain entry above reports the recomputed draw.
+
+One simulate of 1,500 paths on the 30-day episode grid peaks at 484 MiB. The forward-variance array is 282 MiB. Building that array adds about 293 MiB above the inputs. The fast suite is 205 passed, 1 skipped, 5 deselected, and its peak resident set is 1409 MiB.
+
+**Hypothesis:** on a fresh evaluation of `hybrid_tail_mark_bias` at these two vols of vol, the 21-day stationary mixture stays inside 0.002 of zero. The quantity to report is that fraction, next to -0.001290.
+
+## 2026-10-15 Review: the variance-swap roll uses the hybrid curve
+
+The remaining-variance quote is now the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. The next variance equals that quote's next tenor times the near-field factor, to 2e-13 on one draw of 1,500 paths. That figure is a code-consistency identity. The near-field factor has conditional mean 1. The martingale, given the true `nu` path, holds up to the tail-weight bias in the entry above. On eight runs of 1,500 paths the pooled filter drift is 0.057 of the 21-day quote (z -0.87, standard error 0.066) and 0.085 of the 30-day quote (z -1.50, standard error 0.056). The trimmed drifts are 0.248 and 0.276. A Gaussian factor with conditional mean exactly 1, seed 0, 3,000 paths and 19 steps, has trimmed drift 0.53. The closed-form mixture's 30-day roll, low regime, had mean gap 0.032 of the quote, z 3.00. The hybrid curve brings that to 0.009, z 0.96. One simulate of the 30-day grid peaks at 1.3 GiB.
+
+**Hypothesis:** on a fresh eight runs of 1,500 paths the low-regime 30-day roll gap stays inside 0.02 of the quote. The quantity to report is that gap, next to 0.009.
+
+## 2026-10-15 Review: the filter-probability drift of the variance-swap mark
+
+**Superseded** by the hybrid-curve entry above and by the informed-price entry. The slope below was the roll from the closed-form next tenor, and that roll has been replaced. The 1 percent point-estimate bar is not the gate.
+
+The one-step change in the variance-swap mark, on the daily episode at the gate settings, regressed on the hedger's probability of the high regime with path-clustered standard errors, has z equal to -0.73 on the 21-trading-day swap and -1.08 on the 30-trading-day swap. Eight runs of 1,500 paths. The absolute slope times the number of steps is 0.0567 of the 21-day entry quote and 0.0687 of the 30-day quote. The bar is 0.01 of the quote. Dropping the largest 1 percent of absolute daily changes leaves z equal to -8.55 and -8.67, and drifts of 0.160 and 0.171 of the quote. The slope is in the body of the sample. It is the roll from the closed-form next tenor onto the hybrid variance. At `H = 1/2` the trimmed z is 1.06, and with a shared `nu` it is -0.11. The accounting identity holds to 1e-15. It is not an indexing bug. The variance-swap gate is conditional on this drift.
+
+**Hypothesis:** on a fresh eight runs of 1,500 paths the trimmed 21-day drift stays above 0.10 of the quote. The quantity to report is that drift, next to 0.160.
+
+## 2026-10-15 Review: the episode, the day, and the variance-swap mark
+
+A day is `1/252` of a trading year. L1 is 21 trading days. The regime duration, the mean of the two holding times, is `23/24` of a year, so `Q5 = 2.3 Q` and `Q0.5 = 23 Q`. Against L2's 30-trading-day life those scales are 3.5 and 0.35.
+
+The variance-swap mark is left-point model variance plus the remaining integral. On the daily episode at the gate settings, eight runs of 1,500 paths, that mark's terminal gap and its drift regression pass the z-rule for 21 and for 30 trading days. The call surrogate is not in that check.
+
+The hedged 21-trading-day book, Black-Scholes delta, `lambda = 0.1`, puts 0.01368 of the exponential weight in the top 1 percent at `sqrt(v_t)` and 0.01671 at the flat volatility `sqrt(xi0)`. At `t0 = 0.5`, 4,000 pre-registered paths, the windowed Brier skill is 0.9214 on the 2,182 paths that have not switched and 0.4921 on the 1,818 that have.
+
+**Hypothesis:** on a fresh 4,000-path pre-registered draw the windowed skill at `t0` stays above 0.40 on the paths that have switched. The quantity to report is that skill, next to 0.4921.
+
+## 2026-10-15 Review: the open pins, on one shared evaluation seed
+
+P&L for the tail-weight check is the unhedged short 30-day at-the-money call, divided by its time-0 premium. The premium is the mean payoff on 65,536 paths from `run_seed(1, 0)`, equal to 0.02459316 (standard error 0.00014734). The evaluation sample is 20,000 paths from `run_seed(12, 2)`, used for every lambda. Minus the mean of that P&L is 0.004158. At `lambda = 1` the top 1 percent of exponential weights has share 1.000 and the entropic risk is 17.596. At `lambda = 0.1` the share is 0.02277 and the entropic risk is 0.1495. The 10 percent bar holds, so lambda stays 0.1.
+
+`E[log v_T]` at constant `nu`, `H = 0.1`, eight runs of 2,000 paths, matches `log xi0 - nu^2 T^{2H} / 2` inside the z-rule. The largest absolute z is 1.49. The level `E[v] - xi0` at `nu = 3` has largest absolute z 9.21 and fails that rule. The daily spot's terminal mean, and the weighted least-squares intercept and slope of its one-step increment on calendar time, pass the z-rule on eight runs of 2,000 paths. A variance swap held to maturity, entered at the time-0 remaining integral, passes the same rule at `H = 0.1` for constant `nu` of 1.5 and of 3 and for the switching market.
+
+On the daily grid, clock index 10, the pre-registered windowed Brier skill is 0.5863 (600 paths, 21 steps) and 0.5830 (4,000 paths, 21 steps). At 30 steps those skills are 0.5433 and 0.5917. The market-test windowed skills on the same clocks are -0.0075, 0.0011, -0.0117 and -0.0039. That filter's modal prediction is the low regime.
+
+**Hypothesis:** a fresh 20,000-path evaluation of this short call, with the premium held at 0.02459316, keeps the `lambda = 0.1` top-1-percent weight share under 0.10. The quantity to report is that share, next to 0.02277.
 
 ## 2026-10-14 Review: open pins on the draft pre-registration
 
@@ -13,6 +87,8 @@ Four B9 pins stay open beside the duration multiples, the ratio grid, and H5: th
 **Hypothesis:** the same draft, once those four pins have values, keeps the H2 premium at 65,536 copies. The quantity to report is that copy count, next to 65536.
 
 ## 2026-10-14 Review: the forward curve, and the differenced window
+
+**Superseded** in the pricing rule by the 2026-10-15 hybrid-curve and informed-price entries. A later date on the stored curve is the hybrid `nu` path, and the call uses that curve. The numbers below are the closed-form curve.
 
 The forward curve at `H = 0.1` was using the closed-form diagonal as a ratio. That diagonal drops the hybrid near field, so the curve sat above `xi0`. A later date is now the closed form, and the diagonal is `v_t`. Constant `nu`, eight runs of 500 paths, clock index 8. The mean of the curve after the clock, divided by `xi0`, is 1.019 at `nu = 1.5` and 1.031 at `nu = 3`. Both pass the z-rule.
 
