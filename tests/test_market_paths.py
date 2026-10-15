@@ -16,6 +16,7 @@ from volsurface.markets.pricers import ClosedFormPricer, SurrogatePricer, Varian
 from volsurface.markets.regime import (
     RegimeSwitchingBergomi,
     _bridge_log_returns,
+    _draw_paths,
     _kernel_weights,
     _log_variance_increments,
     _stochastic,
@@ -1225,3 +1226,320 @@ def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     assert float(np.median(np.abs(flat - last) / last)) > 0.20
     strip = _otm_variance(batch.call[:, -1, :], batch.k)
     assert np.all(np.abs(strip - last) <= 4.0 * batch.total_variance_se[:, -1])
+
+
+def _constant_nu(nu: float, **kwargs) -> RegimeSwitchingBergomi:
+    spec = RegimeSpec(
+        generator=np.zeros((1, 1)),
+        params=[{"nu": nu}],
+        p0=np.array([1.0]),
+        switch="nu",
+    )
+    values = {"xi0": 0.04, "rho": -0.4, "H": 0.1, "n_mc": 2, "n_sub": 1, "n_pilot": 2}
+    values.update(kwargs)
+    return RegimeSwitchingBergomi(spec, **values)
+
+
+def _prereg_spec() -> RegimeSpec:
+    return RegimeSpec(
+        generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+        params=[{"nu": 1.5}, {"nu": 3.0}],
+        p0=np.array([0.7, 0.3]),
+        switch="nu",
+    )
+
+
+def test_log_variance_mean_matches_the_compensator():
+    """Eight runs, 2,000 paths, H = 0.1, T = 1. The z-rule is the threshold.
+
+    Constant nu. The target is ``log xi0 - nu^2 T^{2H} / 2``, which is
+    ``E[log v_T]`` when the Volterra driver has mean zero. At n = 8 the
+    max-|z| bound is 3.836 and the mean bound is 1.237. On seeds
+    ``run_seed(70 + r, 2)`` the largest absolute log-space z is 1.49, and
+    the two vols of vol share that draw because the driver is linear in
+    nu. The level ``E[v] - xi0`` passes at nu = 1.5 and fails at nu = 3,
+    where the largest absolute z is 9.21.
+    """
+    pytest.importorskip("roughvol")
+    times = np.linspace(0.0, 1.0, 11)
+    for nu in (1.5, 3.0):
+        model = _constant_nu(nu)
+        target = math.log(model.xi0) - 0.5 * nu * nu * float(times[-1]) ** (2.0 * model.H)
+        log_scores = []
+        level_scores = []
+        for replication in range(8):
+            paths = model.simulate_market(2000, times, seed=run_seed(70 + replication, 2))
+            variance = paths.state["v"][:, -1]
+            log_v = np.log(variance)
+            se = log_v.std(ddof=1) / math.sqrt(log_v.size)
+            log_scores.append((log_v.mean() - target) / se)
+            se_v = variance.std(ddof=1) / math.sqrt(variance.size)
+            level_scores.append((variance.mean() - model.xi0) / se_v)
+        assert check_z(np.asarray(log_scores)) is None
+        level = np.asarray(level_scores)
+        if nu == 1.5:
+            assert check_z(level) is None
+        else:
+            assert check_z(level) is not None
+
+
+def test_daily_spot_is_a_martingale_and_has_no_time_slope():
+    """Eight runs, 2,000 paths, 30 daily steps, H = 0.1. The z-rule is the test.
+
+    The terminal z-score is ``(E[Z_T] - 1) / se`` on the paths. The drift
+    regression is weighted least squares of the cross-sectional mean
+    increment ``Z_i - Z_{i-1}`` on a constant and on the left calendar
+    time. Weights are the reciprocal of that date's sample variance.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    times = np.arange(31) / 252.0
+    terminal = []
+    intercept = []
+    slope = []
+    for replication in range(8):
+        paths = model.simulate_market(2000, times, seed=run_seed(40 + replication, 2))
+        total = paths.Z[:, -1] - 1.0
+        se = total.std(ddof=1) / math.sqrt(total.size)
+        terminal.append(total.mean() / se)
+        increment = np.diff(paths.Z, axis=1)
+        means = increment.mean(axis=0)
+        variance = increment.var(axis=0, ddof=1) / increment.shape[0]
+        clock = times[:-1]
+        design = np.column_stack([np.ones(clock.size), clock])
+        weight = 1.0 / variance
+        weighted = design * weight[:, None]
+        coef = np.linalg.solve(design.T @ weighted, design.T @ (weight * means))
+        se_coef = np.sqrt(np.diag(np.linalg.inv(design.T @ weighted)))
+        z_coef = coef / se_coef
+        intercept.append(z_coef[0])
+        slope.append(z_coef[1])
+    assert check_z(np.asarray(terminal)) is None
+    assert check_z(np.asarray(intercept)) is None
+    assert check_z(np.asarray(slope)) is None
+
+
+def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
+    """Eight runs, 1,500 paths, H = 0.1, T = 1. Entered at the time-0 quote.
+
+    The quote is the remaining integral, and at inception the accrued leg
+    is zero. The gap is realised variance minus that quote. Constant nu of
+    1.5 and of 3, and the switching market, each pass the z-rule.
+    """
+    pytest.importorskip("roughvol")
+    pricer = VarianceSwapPricer()
+    times = np.linspace(0.0, 1.0, 11)
+    contract = Contract(Vanilla(0.04), T=1.0)
+    models = [
+        _constant_nu(1.5),
+        _constant_nu(3.0),
+        RegimeSwitchingBergomi(
+            _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+        ),
+    ]
+    dt = np.diff(times)
+    for model in models:
+        scores = []
+        for replication in range(8):
+            paths = model.simulate_market(1500, times, seed=run_seed(40 + replication, 0))
+            quoted = pricer.price_along(paths, [contract])[:, 0, 0]
+            realised = paths.state["v"][:, :-1] @ dt
+            gap = realised - quoted
+            se = gap.std(ddof=1) / math.sqrt(gap.size)
+            scores.append(gap.mean() / se)
+        assert check_z(np.asarray(scores)) is None
+
+
+def test_quotes_do_not_enter_the_filter():
+    """The stored filters match a recompute from y, y_rv, and log v.
+
+    The forward curve is on the path and is not an argument of that
+    recompute. A variance-swap quote and a call mid are not inputs.
+    """
+    pytest.importorskip("roughvol")
+    spec = _prereg_spec()
+    model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=0.1, n_mc=2)
+    times = np.arange(31) / 252.0
+    paths = model.simulate_market(48, times, seed=run_seed(12, 2))
+    nus = np.array([1.5, 3.0])
+    steps = [
+        _stochastic(expm(spec.generator * float(times[i] - times[i - 1])))
+        for i in range(1, times.size)
+    ]
+    means, variances = model._emission(nus)
+    spot = filter_log_realised_variance(paths.state["y"], steps, means, variances, spec.p0)
+    window = filter_differenced_realised_variance(
+        paths.state["y_rv"], steps, paths.meta["rv_means"], paths.meta["rv_vars"], spec.p0
+    )
+    latent = filter_log_realised_variance(
+        _log_variance_increments(paths.state["v"]),
+        steps,
+        paths.meta["latent_means"],
+        paths.meta["latent_vars"],
+        spec.p0,
+    )
+    assert spot == pytest.approx(paths.state["regime_prob_spot"], abs=1e-12)
+    assert window == pytest.approx(paths.state["regime_prob_rv"], abs=1e-12)
+    assert latent == pytest.approx(paths.state["regime_prob_latent"], abs=1e-12)
+    assert "xi" in paths.state
+
+
+def _entropic(pnl: np.ndarray, lam: float) -> float:
+    log_weight = -lam * pnl
+    centre = float(np.max(log_weight))
+    return (centre + math.log(float(np.mean(np.exp(log_weight - centre))))) / lam
+
+
+def _top_weight_share(pnl: np.ndarray, lam: float) -> float:
+    log_weight = -lam * pnl
+    count = int(math.ceil(0.01 * log_weight.size))
+    order = np.argpartition(log_weight, -count)[-count:]
+    centre = float(np.max(log_weight))
+    weight = np.exp(log_weight - centre)
+    return float(weight[order].sum() / weight.sum())
+
+
+def test_short_call_tail_weight_uses_one_evaluation_seed():
+    """65,536 premium paths, 20,000 evaluation paths, one seed for both lambdas.
+
+    The premium seed is ``run_seed(1, 0)``. The evaluation seed is
+    ``run_seed(12, 2)``. Minus the mean is 0.004158 at both lambda = 1 and
+    lambda = 0.1. The top 1 percent weight share is 1.000 at lambda = 1
+    and 0.02277 at lambda = 0.1, so the pin stays at 0.1.
+    """
+    pytest.importorskip("roughvol")
+    model = RegimeSwitchingBergomi(
+        _prereg_spec(), xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_sub=1, n_pilot=2
+    )
+    times = np.arange(31) / 252.0
+    premium_paths = _draw_paths(model, 65536, times, run_seed(1, 0))
+    evaluation = _draw_paths(model, 20000, times, run_seed(12, 2))
+    premium_payoff = np.maximum(premium_paths["Z"][:, -1] - 1.0, 0.0)
+    evaluation_payoff = np.maximum(evaluation["Z"][:, -1] - 1.0, 0.0)
+    premium = float(premium_payoff.mean())
+    premium_se = float(premium_payoff.std(ddof=1) / math.sqrt(premium_payoff.size))
+    pnl = (premium - evaluation_payoff) / premium
+    assert premium == pytest.approx(0.02459316, abs=1e-8)
+    assert premium_se == pytest.approx(0.00014734, abs=1e-8)
+    assert -float(pnl.mean()) == pytest.approx(0.004158, abs=1e-6)
+    assert _top_weight_share(pnl, 1.0) == pytest.approx(1.0, abs=1e-4)
+    assert _entropic(pnl, 1.0) == pytest.approx(17.596, abs=1e-3)
+    share = _top_weight_share(pnl, 0.1)
+    assert share == pytest.approx(0.02277, abs=1e-5)
+    assert share < 0.10
+    assert _entropic(pnl, 0.1) == pytest.approx(0.1495, abs=1e-4)
+
+
+def _calibration_error(predicted_high: np.ndarray, truth_high: np.ndarray) -> float:
+    """Path-weighted mean absolute gap. Five bins. Bins under 40 paths drop out."""
+    edges = np.linspace(0.0, 1.0, 6)
+    weighted = 0.0
+    total = 0
+    for band in range(5):
+        if band < 4:
+            mask = (predicted_high >= edges[band]) & (predicted_high < edges[band + 1])
+        else:
+            mask = (predicted_high >= edges[band]) & (predicted_high <= edges[band + 1])
+        count = int(mask.sum())
+        if count < 40:
+            continue
+        gap = abs(float(truth_high[mask].mean()) - float(predicted_high[mask].mean()))
+        weighted += count * gap
+        total += count
+    return weighted / total
+
+
+def _daily_filter_draw(nus, hurst, n_paths, n_steps):
+    spec = RegimeSpec(
+        generator=np.array([[-1.5, 1.5], [0.8, -0.8]]),
+        params=[{"nu": float(nu)} for nu in nus],
+        p0=np.array([0.7, 0.3]),
+        switch="nu",
+    )
+    model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=hurst, n_mc=2)
+    times = np.arange(n_steps + 1) / 252.0
+    paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2))
+    labels = paths.regime[:, 10]
+    scored = {}
+    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
+        row = regime_scores(paths.state[name][:, 10], labels)
+        row["calibration"] = _calibration_error(
+            paths.state[name][:, 10, 1], (labels == 1).astype(float)
+        )
+        scored[name] = row
+    return np.bincount(labels, minlength=2), scored
+
+
+def test_daily_grid_filter_scores():
+    """Clock index 10, dt = 1/252, seed entropy 12, test split, pilot 1,024.
+
+    Spot and latent scores match across the 21-step and 30-step grids.
+    Windowed scores do not. The integer confusion counts are the pin.
+    """
+    pytest.importorskip("roughvol")
+    spot_600 = ([[364, 32], [189, 15]], 0.4809644680, 0.0784)
+    latent_600 = ([[389, 7], [13, 191]], 0.0667484959, 0.0091)
+    spot_4000 = ([[2438, 200], [1242, 120]], 0.4761432292, 0.0883)
+    latent_4000 = ([[2608, 30], [92, 1270]], 0.0543439271, 0.0055)
+    rough_spot_600 = ([[348, 48], [124, 80]], 0.4174169869, 0.1325)
+    rough_latent_600 = ([[375, 21], [36, 168]], 0.1539068940, 0.0230)
+    rough_spot_4000 = ([[2394, 244], [847, 515]], 0.3956454855, 0.1172)
+    rough_latent_4000 = ([[2523, 115], [251, 1111]], 0.1448836078, 0.0188)
+    expected = {
+        (21, 0.5, 600): {
+            "regime_prob_spot": spot_600,
+            "regime_prob_rv": ([[396, 0], [204, 0]], 0.4521688906, 0.0131),
+            "regime_prob_latent": latent_600,
+        },
+        (21, 0.5, 4000): {
+            "regime_prob_spot": spot_4000,
+            "regime_prob_rv": ([[2638, 0], [1362, 0]], 0.4486474928, 0.0091),
+            "regime_prob_latent": latent_4000,
+        },
+        (30, 0.5, 600): {
+            "regime_prob_spot": spot_600,
+            "regime_prob_rv": ([[393, 3], [202, 2]], 0.4540668308, 0.0264),
+            "regime_prob_latent": latent_600,
+        },
+        (30, 0.5, 4000): {
+            "regime_prob_spot": spot_4000,
+            "regime_prob_rv": ([[2624, 14], [1349, 13]], 0.4508755459, 0.0165),
+            "regime_prob_latent": latent_4000,
+        },
+        (21, 0.1, 600): {
+            "regime_prob_spot": rough_spot_600,
+            "regime_prob_rv": ([[372, 24], [46, 158]], 0.1856481704, 0.0307),
+            "regime_prob_latent": rough_latent_600,
+        },
+        (21, 0.1, 4000): {
+            "regime_prob_spot": rough_spot_4000,
+            "regime_prob_rv": ([[2477, 161], [330, 1032]], 0.1873039228, 0.0255),
+            "regime_prob_latent": rough_latent_4000,
+        },
+        (30, 0.1, 600): {
+            "regime_prob_spot": rough_spot_600,
+            "regime_prob_rv": ([[361, 35], [46, 158]], 0.2049787460, 0.0369),
+            "regime_prob_latent": rough_latent_600,
+        },
+        (30, 0.1, 4000): {
+            "regime_prob_spot": rough_spot_4000,
+            "regime_prob_rv": ([[2484, 154], [321, 1041]], 0.1833731590, 0.0219),
+            "regime_prob_latent": rough_latent_4000,
+        },
+    }
+    labels = {
+        (0.5, 600): [396, 204],
+        (0.1, 600): [396, 204],
+        (0.5, 4000): [2638, 1362],
+        (0.1, 4000): [2638, 1362],
+    }
+    for n_steps, hurst, n_paths in expected:
+        nus = (0.4, 1.1) if hurst == 0.5 else (1.5, 3.0)
+        counts, scored = _daily_filter_draw(nus, hurst, n_paths, n_steps)
+        assert counts.tolist() == labels[(hurst, n_paths)]
+        for name, (confusion, brier, calibration) in expected[(n_steps, hurst, n_paths)].items():
+            assert scored[name]["confusion"].tolist() == confusion
+            assert scored[name]["brier"] == pytest.approx(brier, abs=1e-9)
+            assert scored[name]["calibration"] == pytest.approx(calibration, abs=5e-5)

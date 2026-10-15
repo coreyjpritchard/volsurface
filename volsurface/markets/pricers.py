@@ -5,9 +5,10 @@ is ``Z_t * F0(T)`` and the discount from ``t`` to ``T`` is ``df(T) / df(t)``.
 At and after expiry the entry is the payoff at the first grid time at or
 after the contract expiry, held constant. It is not grown at interest.
 
-``VarianceSwapPricer`` integrates ``state["xi"]`` from ``t`` to the contract
-maturity. The number is a total variance, the unit the realised-variance
-check uses. The integral is a left Riemann sum on ``state["xi_tenor"]``.
+``VarianceSwapPricer`` integrates the remaining forward variance
+``int_t^T xi_t(u) du``. The integral is a left Riemann sum on
+``state["xi_tenor"]``. Accrued realised variance from the contract's
+start up to ``t`` is not added. At inception that accrued leg is zero.
 
 ``SurrogatePricer`` stores its validation error in basis points and raises
 when that error is above the bar it was given.
@@ -110,7 +111,12 @@ class ClosedFormPricer:
 
 
 class VarianceSwapPricer:
-    """Total variance ``int_t^T xi_t(u) du`` from the stored forward curve."""
+    """Remaining total variance ``int_t^T xi_t(u) du`` from the stored curve.
+
+    Accrued realised variance up to ``t`` is not added. A mark of a live
+    swap is that accrued leg, plus this remaining integral, minus the
+    strike times the contractual variance period.
+    """
 
     def supports(self, model, contract) -> bool:
         return True

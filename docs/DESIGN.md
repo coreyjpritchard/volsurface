@@ -1253,8 +1253,8 @@ by the regime market above. There is no daily SPX file in this repository.
 
 The regime experiment itself, including the hedger, lives in
 `deep-hedging`. `experiments/regime/PREREG.md` records hypotheses H1, H2,
-and H3 as drafts. The file says it is to be frozen before the pilot ends.
-The pilot is a CPU run. No GPU is assumed.
+and H3. The file is a pinned draft. It is to be frozen before the pilot
+ends. The pilot is a CPU run. No GPU is assumed.
 
 Phase 3 pull requests, each based on the previous branch:
 
