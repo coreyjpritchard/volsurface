@@ -12,7 +12,7 @@ The call pre-gate is that same Monte Carlo check on a fixed at-the-money contrac
 
 On four runs of 80 paths the chain price minus the frozen-`nu` price has signed drift -0.0113 of the quote, standard error 0.0037, z -3.04. That is the drift of holding today's `nu` fixed, relative to the chain.
 
-The log contract on the pinned eight-path draw, 4,096 copies, strikes in standardised moneyness from -2.5 to 2.5, has largest absolute z 2.26 on the 48 comparisons past the one-step expiry. The one-step gap is under 1e-12. The path-mean z is 0.039. The flat anchor's mean absolute relative gap is 0.302, which is 4.60 standard errors. The median on this draw is 0.290. The out-of-the-money call zero rate is 0 on 80 prices. In gate mode a missing `state["xi"]` raises.
+The log contract on the pinned eight-path draw, 4,096 copies, strikes in standardised moneyness from -2.5 to 2.5, has largest absolute z 2.26 on the 48 comparisons past the one-step expiry. The one-step gap is under 1e-12. The path-mean z is 0.039. The flat anchor's mean absolute relative gap is 0.302, which is 4.60 standard errors. The median on this draw is 0.290. The out-of-the-money call zero rate is 0 on 80 prices. In gate mode a missing `state["xi"]` raises. The fast suite is 210 passed, 1 skipped, 5 deselected, and its peak resident set is 1403 MiB.
 
 **Hypothesis:** on a fresh eight runs of 150 paths the rough call's clustered interval still contains 0. The quantity to report is the signed drift, next to -0.018.
 

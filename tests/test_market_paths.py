@@ -1926,6 +1926,9 @@ def test_call_mark_on_the_daily_episode_passes_the_clustered_interval():
         result = _episode_call_drift(model, 21, n_paths, 8)
         _assert_filter_z(result, f"call H={hurst}")
         assert check_z(result["terminal"]) is None
+
+
+def test_rough_variance_swap_hold_to_maturity_passes_the_z_rule():
     """Eight runs, 1,500 paths, H = 0.1, T = 1. Entered at the time-0 quote.
 
     The quote is the remaining integral, and at inception the left-point
