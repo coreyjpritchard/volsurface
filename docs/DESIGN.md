@@ -1037,59 +1037,54 @@ any other `H` it is the conditional expectation of the simulated hybrid
 variance given the `nu` in force on each step already finished and the
 hybrid components of those steps. That is the `nu` path the scheme used
 to build `v`. A future step is left out. At lag 1 the near-field factor
-has conditional mean 1, so the next tenor is the conditional expectation
-of the next variance, for either regime and for the filter. The clock
-entry is `v_t`.
+has conditional mean 1. A tail lag uses the power-kernel weight, so the
+factor mean is not exactly 1. Given the true `nu` path, the mark is a
+martingale up to that tail-weight bias, about -0.1 percent of the quote
+on the gate grid. The clock entry is `v_t`.
 
-`surface_at` does not read `state["xi"]`. It is a Monte Carlo of the
-call under the filtered mixture `regime_prob`. Each regime holds `nu`
-fixed. The variance level is that regime's restarted curve, and the
-future kernel is drawn again from the clock. At `H = 1/2` the curve is
-flat at `v_t` and the step is the exponential martingale. A Black call
-on the expected variance would be flat in strike and independent of
-`nu`. The plugin is not called at that `H`. Any other `H` reads
-`state["dW"]` and restarts `volterra_components` from the clock. The
-past Volterra integral sits in that restarted curve and is not drawn
-again. A later date is the closed-form constant-`nu` curve for that
-regime, and the clock entry is `v_t`. The closed-form diagonal is the
-kernel integral against `dW`. It drops the hybrid near field, so
-dividing by it lifts the curve. One limit of that restart stays open.
-The call curve is not the conditional curve of a path whose past `nu`
-switched, because that curve would read the latent label, and the call
-does not. The variance-swap curve does read the `nu` path, because
-otherwise the one-day roll is not the simulated variance. The grid from
+`surface_at` prices the call on `state["xi"]` at the clock and on the
+true regime, `paths.regime`. The future factor holds that regime's `nu`
+fixed and the kernel is drawn again from the clock. When `state["xi"]`
+is absent, the variance level is the restarted curve of that same `nu`.
+At `H = 1/2` the curve is flat at `v_t` and the step is the exponential
+martingale. A Black call on the expected variance would be flat in strike
+and independent of `nu`. The plugin is not called at that `H`. Any other
+`H` restarts `volterra_components` from the clock. The past Volterra
+integral sits in the curve and is not drawn again. The call curve is the
+conditional curve of the path whose past `nu` switched, because the
+variance swap uses that curve and the call uses it too. The grid from
 the clock to the last expiry has to be equally spaced. A non-uniform
-grid raises. The fresh factor is a martingale up to the hybrid scheme's
-error. The z-rule bounds `E[v] - xi0`. It is not an identity. The
-weights are `regime_prob` at the clock. The same shocks drive a Black
-path whose variance is the deterministic left forward curve. The control
-is that Black price. The copies are split in half, and the coefficient
-on each half is the other half's `cov / var`, so the residual variance
-is not the in-sample minimum. The known mean is the formula. One
-terminal is used for every strike. `n_mc` defaults to 1024. The seed is
-the path entropy and `spawn_key + (4, regime)`. The clock is not in the
-key, so every hedge date draws the same shocks. `SurfaceBatch.stderr`
-is the residual standard deviation divided by `sqrt(n_mc)`. The absolute
-price still carries that Monte Carlo error. A comparison of two mixtures
-on the same paths uses one seed per regime, so the gap is the gap in the
-weights.
+grid raises. The fresh near-field factor is a martingale. The tail-weight
+bias is the same one the variance swap carries. `regime_prob` is not a
+weight. The same shocks drive a Black path whose variance is the
+deterministic left forward curve. The control is that Black price. The
+copies are split in half, and the coefficient on each half is the other
+half's `cov / var`, so the residual variance is not the in-sample
+minimum. The known mean is the formula. One terminal is used for every
+strike. `n_mc` defaults to 1024. The seed is the path entropy and
+`spawn_key + (4, regime)`. The clock is not in the key, so every hedge
+date draws the same shocks. `SurfaceBatch.stderr` is the residual
+standard deviation divided by `sqrt(n_mc)`. The absolute price still
+carries that Monte Carlo error.
 `total_variance` is the controlled log contract `-2 E[log Z]`, the
-variance-swap strike of those paths. Whether `Z` stays a martingale
-when `nu` switches is a hypothesis. The test is the z-rule. It is not
-a theorem in this file.
+variance-swap strike of those paths. On this curve it matches the
+integral the variance swap prices, up to Monte Carlo error. Whether `Z`
+stays a martingale when `nu` switches is a hypothesis. The test is the
+z-rule. It is not a theorem in this file.
 
-Three Hamilton filters are defined. Prices read the spot filter.
+Three Hamilton filters are defined. The hedger reads one of them. The
+call and the variance swap do not.
 
-`price_filter` defaults to `"spot"`. `regime_prob` is then that filter,
-and `surface_at` mixes it. The variance swap integrates `state["xi"]`.
+`price_filter` defaults to `"spot"`. `regime_prob` is then that filter.
+`surface_at` does not mix it. The variance swap integrates `state["xi"]`.
 At `H = 1/2` that curve is `v` on and after the clock. At any other `H`
 it is the hybrid curve of the `nu` path, and the filter weights are not
-in it. Replacing `regime_prob` after the draw does not rebuild `xi`.
-The windowed filter is observable, so a call is allowed to read it, and
-the default does not. Set `price_filter` to `"rv"` to do that.
-The latent-variance benchmark is not a price in either case. Neither
+in it. Replacing `regime_prob` after the draw does not rebuild `xi` and
+does not move the call. Set `price_filter` to `"rv"` to store the
+windowed filter as the hedger's probability. The latent-variance
+benchmark is not a price in either case. Neither
 `state["regime_prob_rv"]` nor `state["regime_prob_latent"]` is read by
-`surface_at` under the default.
+`surface_at`.
 
 The spot filter reads one-step log realised variance of the simulated
 spot, `log((log Z_i - log Z_{i-1})^2 / dt)`. It does not read a synthetic

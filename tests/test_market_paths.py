@@ -35,6 +35,7 @@ from volsurface.markets.regime import (
     hybrid_forward_variance,
     hybrid_increment_variance,
     hybrid_path_forward_variance,
+    hybrid_tail_mark_bias,
     increment_variance,
     trader_forward_variance,
 )
@@ -446,12 +447,14 @@ def test_a_switch_does_not_rescale_variance_already_accumulated():
 def test_hybrid_forward_diagonal_is_the_simulated_variance():
     """The clock entry is the simulated variance.
 
-    At constant ``nu`` and ``kappa`` 1 the next tenor is built from the
-    tail only, so it matches the closed form. On a path whose ``nu`` has
-    switched, the next tenor uses the ``nu`` in force on each past step.
-    It is not the mixture of the two constant-``nu`` closed forms. The
-    variance one step later equals that tenor times the near-field factor
-    of the step in between.
+    At constant ``nu`` and ``kappa`` 1 the next tenor matches the closed
+    form. On a path whose ``nu`` has switched, the next tenor uses the
+    ``nu`` in force on each past step. It is not the mixture of the two
+    constant-``nu`` closed forms. Rebuilding the next variance as that
+    tenor times the near-field factor is a code-consistency identity.
+    It checks that the curve and ``v`` share one driver. It is not a
+    martingale check. Given the true ``nu`` path, the martingale holds
+    up to the tail-weight bias.
     """
     pytest.importorskip("roughvol")
     nu = 1.5
@@ -595,13 +598,18 @@ def test_trader_curve_follows_the_filter_not_the_label():
     assert curve_mid[0, 2, 4] == pytest.approx(0.5 * (curve_low[0, 2, 4] + curve_high[0, 2, 4]))
 
 
-def test_prices_do_not_depend_on_the_true_regime():
-    """Flipping the latent labels leaves the variance swap and the surface unchanged."""
+def test_call_reads_the_true_regime_and_the_swap_does_not():
+    """The stored variance swap ignores a flipped label. The call does not.
+
+    ``state["xi"]`` was built at simulate time. Flipping ``paths.regime``
+    does not rebuild it. The future factor of the call uses the label at
+    the clock, so the price moves. ``regime_prob`` is not a weight.
+    """
     model = _model()
     times = np.linspace(0.0, 1.0, 11)
     paths = model.simulate_market(32, times, seed=run_seed(8, 0))
     flipped = replace(paths, regime=(1 - paths.regime).astype(np.int8))
-    assert np.array_equal(model.surface_at(paths, 4).call, model.surface_at(flipped, 4).call)
+    assert not np.allclose(model.surface_at(paths, 4).call, model.surface_at(flipped, 4).call)
     pricer = VarianceSwapPricer()
     contract = Contract(Vanilla(model.forward), T=1.0)
     left = pricer.price_along(paths, [contract])
@@ -662,13 +670,13 @@ def test_log_variance_filter_does_not_use_a_later_increment():
     assert not np.allclose(first[0, -1], second[0, -1])
 
 
-def test_prices_read_the_spot_filter_not_the_latent_benchmark():
-    """``surface_at`` reads ``regime_prob``, the spot filter under the default.
+def test_prices_do_not_read_the_filter():
+    """The call reads the true regime. It does not read a probability array.
 
     The windowed filter and the latent-variance benchmark are stored beside
-    it. Replacing the latent array does not move the call. Replacing
-    ``regime_prob`` does. The market does not call the exact half-Brownian
-    likelihood.
+    the spot filter. Replacing those arrays, or reversing ``regime_prob``,
+    leaves the call unchanged. Replacing the latent regime moves it. The
+    market does not call the exact half-Brownian likelihood.
     """
     model = _model(n_mc=16)
     times = np.linspace(0.0, 0.4, 5)
@@ -698,8 +706,10 @@ def test_prices_read_the_spot_filter_not_the_latent_benchmark():
     right = model.surface_at(replace(paths, state=tweaked), 2).call
     assert np.array_equal(left, right)
     flipped = paths.regime_prob[:, :, ::-1].copy()
-    changed = model.surface_at(replace(paths, regime_prob=flipped), 2).call
-    assert not np.allclose(left, changed)
+    unchanged = model.surface_at(replace(paths, regime_prob=flipped), 2).call
+    assert np.array_equal(left, unchanged)
+    relabelled = replace(paths, regime=(1 - paths.regime).astype(np.int8))
+    assert not np.allclose(left, model.surface_at(relabelled, 2).call)
 
 
 def _stochastic_step(model: RegimeSwitchingBergomi, dt: float) -> np.ndarray:
@@ -881,14 +891,16 @@ def _bayes_accuracy(price: np.ndarray, regime: np.ndarray) -> tuple[float, bool]
 def test_regime_cannot_be_read_exactly_from_prices():
     """Six hundred paths, clock index 10, market-test settings.
 
-    The settings are ``H = 1/2`` and ``nu`` of 0.4 and 1.1. The base rate
-    is the larger share of the latent regime at that clock. Eight quantile
-    bins of the call and of the variance swap each contain both regimes.
-    Their modal accuracy beats the base rate by more than 0.05 and by less
-    than 0.35, so the price is not the unconditional law and it is not the
-    label. The spot filter's bar at these settings is the Brier skill
-    against the constant forecast that quotes the sample shares. That skill
-    is not positive: one-step log realised variance has one mean in both
+    The settings are ``H = 1/2`` and ``nu`` of 0.4 and 1.1. The call is
+    the informed price: the true regime's ``nu``, and a variance level
+    flat at ``v_t``. The base rate is the larger share of the latent
+    regime at that clock, 0.5383. Eight quantile bins of the call and of
+    the variance swap each contain both regimes. On this draw both modal
+    accuracies are 0.66, a lift of 0.122 over the base rate, inside
+    (0.05, 0.35). At these settings the informed call is not a readout
+    of the label. The spot filter's bar is the Brier skill against the
+    constant forecast that quotes the sample shares. That skill is not
+    positive: one-step log realised variance has one mean in both
     regimes, and ``pi**2 / 2`` dwarfs the gap in ``nu**2``.
     """
     model = _model()
@@ -910,17 +922,6 @@ def test_regime_cannot_be_read_exactly_from_prices():
     assert spot["accuracy"] <= spot["base_rate"]
 
 
-def _implied_vol_strip(batch, clock: float) -> np.ndarray:
-    """Implied vol on expiries after ``clock``. Shape ``(m, n_exp, n_k)``."""
-    columns = []
-    for j, maturity in enumerate(batch.T):
-        tau = float(maturity - clock)
-        if tau <= 0.0:
-            continue
-        columns.append(bs.implied_vol(batch.call[:, j, :], 1.0, np.exp(batch.k), tau))
-    return np.stack(columns, axis=1)
-
-
 def _filter_draw(nus, H, n_mc):
     """Six hundred paths, 21 times, clock index 10, seed entropy 12, test split."""
     spec = RegimeSpec(
@@ -935,36 +936,14 @@ def _filter_draw(nus, H, n_mc):
     return model, times, paths
 
 
-def _mixture_gaps(model, paths, clock_index):
-    """Call gap, log-contract gap, and implied vol against the true-regime mixture."""
-    labels = paths.regime[:, clock_index]
-    one_hot = np.eye(2)[labels.astype(int)]
-    true_weights = paths.regime_prob.copy()
-    true_weights[:, clock_index, :] = one_hot
-    true = model.surface_at(replace(paths, regime_prob=true_weights), clock_index)
-    clock = float(paths.times[clock_index])
-    iv_true = _implied_vol_strip(true, clock)
-    out = {"true": true, "iv_true": iv_true}
-    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
-        weights = paths.regime_prob.copy()
-        weights[:, clock_index, :] = paths.state[name][:, clock_index, :]
-        batch = model.surface_at(replace(paths, regime_prob=weights), clock_index)
-        out[name] = batch
-        out["iv_" + name] = _implied_vol_strip(batch, clock)
-    finite = np.isfinite(iv_true)
-    for name in ("regime_prob_spot", "regime_prob_rv", "regime_prob_latent"):
-        finite = finite & np.isfinite(out["iv_" + name])
-    out["finite"] = finite
-    return out
-
-
 def test_market_test_filters_are_scored_against_the_base_rate():
     """H = 1/2, nu 0.4 and 1.1. Integer counts are the pin. Floats sit at 1e-9.
 
     The spot filter has no Brier skill. The differenced windowed filter is
     right on 345 of 600 paths. Its Brier skill is 0.0035. The latent
-    benchmark is the pilot table, right on 487 of 600 paths. Prices read
-    the spot filter. The variance swap does not depend on the weights.
+    benchmark is the pilot table, right on 487 of 600 paths. The call
+    reads the true regime, not these probabilities. At ``H = 1/2`` the
+    variance-swap curve does not depend on the weights.
     """
     model, times, paths = _filter_draw((0.4, 1.1), 0.5, 1024)
     assert model.price_filter == "spot"
@@ -988,27 +967,7 @@ def test_market_test_filters_are_scored_against_the_base_rate():
     assert latent["log_score"] == pytest.approx(-0.4411708645577869, abs=1e-9)
     assert spot["base_brier"] == pytest.approx(0.4970611111111111, abs=1e-9)
     assert spot["base_log_score"] == pytest.approx(-0.6902054058581284, abs=1e-9)
-
-    gaps = _mixture_gaps(model, paths, 10)
-    assert int(gaps["finite"].sum()) == 35032
-    clock = float(times[10])
-    assert clock == pytest.approx(0.5)
-    for name, call_gap, variance_gap, iv_error in (
-        ("regime_prob_spot", 0.0002897885217583061, 0.00045257763306333343, 0.005348033582997692),
-        ("regime_prob_rv", 0.0002834313623806424, 0.0004396162668406603, 0.005232047160575295),
-        ("regime_prob_latent", 0.00015488813465253245, 0.00024342840743678254, 0.00391528681479051),
-    ):
-        batch = gaps[name]
-        iv = gaps["iv_" + name]
-        finite = gaps["finite"]
-        assert float(np.mean(np.abs(batch.call - gaps["true"].call))) == pytest.approx(
-            call_gap, abs=1e-9
-        )
-        assert float(np.mean(np.abs(batch.total_variance - gaps["true"].total_variance))) == (
-            pytest.approx(variance_gap, abs=1e-9)
-        )
-        got = float(np.sqrt(np.mean((iv[finite] - gaps["iv_true"][finite]) ** 2)))
-        assert got == pytest.approx(iv_error, abs=1e-9)
+    assert float(times[10]) == pytest.approx(0.5)
     nus = np.array([0.4, 1.1])
     v = paths.state["v"]
     dW = paths.state["dW"]
@@ -1021,9 +980,9 @@ def test_preregistered_filters_are_scored_against_the_base_rate(monkeypatch):
     """H = 0.1, nu 1.5 and 3. The spot hit rate is 410 of 600.
 
     That is the measured rate at these settings. The windowed filter and
-    the latent benchmark both beat the base-rate forecast. The benchmark
+    the latent benchmark both beat the base-rate forecast.     The benchmark
     is the pilot table: the market does not call the half-Brownian
-    likelihood. Prices still read the spot filter.
+    likelihood. The call reads the true regime, not the spot filter.
     """
     pytest.importorskip("roughvol")
 
@@ -1049,22 +1008,6 @@ def test_preregistered_filters_are_scored_against_the_base_rate(monkeypatch):
     assert spot["log_score"] == pytest.approx(-0.6156778597945741, abs=1e-9)
     assert window["log_score"] == pytest.approx(-0.540600014719739, abs=1e-9)
     assert latent["log_score"] == pytest.approx(-0.5098968565249987, abs=1e-9)
-
-    gaps = _mixture_gaps(model, paths, 10)
-    assert int(gaps["finite"].sum()) == 31684
-    for name, call_gap, iv_error in (
-        ("regime_prob_spot", 0.0016502145362395097, 0.020694890419512047),
-        ("regime_prob_rv", 0.001452224971440912, 0.01906455429095802),
-        ("regime_prob_latent", 0.0013103675485724878, 0.018047992510532688),
-    ):
-        batch = gaps[name]
-        iv = gaps["iv_" + name]
-        finite = gaps["finite"]
-        assert float(np.mean(np.abs(batch.call - gaps["true"].call))) == pytest.approx(
-            call_gap, abs=1e-9
-        )
-        got = float(np.sqrt(np.mean((iv[finite] - gaps["iv_true"][finite]) ** 2)))
-        assert got == pytest.approx(iv_error, abs=1e-9)
 
 
 def test_four_thousand_path_filter_scores():
@@ -1147,22 +1090,27 @@ def _last_smile(model: RegimeSwitchingBergomi, paths: MarketPaths) -> np.ndarray
     return bs.implied_vol(batch.call[0, -1], 1.0, np.exp(batch.k), tau)
 
 
-def test_surface_mixes_the_filter_and_repeats():
-    """A convex combination of regime probabilities is the same combination of prices."""
-    low = _model(n_mc=32)
+def test_surface_reads_the_regime_and_repeats():
+    """Replacing the filter leaves the call unchanged. The label moves it.
+
+    A second call on the same paths matches the first. Forcing every path
+    into regime 0 prices a different book from forcing regime 1.
+    """
+    model = _model(n_mc=32)
     times = np.linspace(0.0, 0.25, 5)
-    paths = low.simulate_market(4, times, seed=run_seed(9, 2))
-    pure = []
-    for regime in (0, 1):
-        weights = np.zeros_like(paths.regime_prob)
-        weights[:, :, regime] = 1.0
-        pure.append(low.surface_at(replace(paths, regime_prob=weights), 2).call)
-    mixed_weights = 0.25 * np.ones_like(paths.regime_prob)
+    paths = model.simulate_market(4, times, seed=run_seed(9, 2))
+    first = model.surface_at(paths, 2).call
+    mixed_weights = np.zeros_like(paths.regime_prob)
     mixed_weights[:, :, 0] = 0.25
     mixed_weights[:, :, 1] = 0.75
-    mixed = low.surface_at(replace(paths, regime_prob=mixed_weights), 2).call
-    assert mixed == pytest.approx(0.25 * pure[0] + 0.75 * pure[1], rel=0, abs=1e-12)
-    assert np.array_equal(mixed, low.surface_at(replace(paths, regime_prob=mixed_weights), 2).call)
+    mixed = model.surface_at(replace(paths, regime_prob=mixed_weights), 2).call
+    assert np.array_equal(first, mixed)
+    assert np.array_equal(first, model.surface_at(paths, 2).call)
+    low = np.zeros_like(paths.regime)
+    high = np.ones_like(paths.regime)
+    priced_low = model.surface_at(replace(paths, regime=low), 2).call
+    priced_high = model.surface_at(replace(paths, regime=high), 2).call
+    assert not np.allclose(priced_low, priced_high)
 
 
 def test_surface_seed_is_common_across_hedge_dates():
@@ -1206,20 +1154,27 @@ def test_half_surface_does_not_call_the_plugin(monkeypatch):
     assert np.isfinite(batch.call).all()
 
 
-def test_rough_surface_ignores_the_label_and_responds_to_nu():
-    """H = 0.1 restarts the hybrid factor on xi_t(u). 16 copies, 4 steps."""
+def test_rough_surface_reads_the_label_and_responds_to_nu():
+    """H = 0.1. The future factor uses the label. A larger nu moves the smile.
+
+    One regime in the spec cannot take a label of 1. That raises. With
+    two regimes, the same path priced at label 0 and at label 1 differs.
+    """
     pytest.importorskip("roughvol")
     paths = _quoted_paths(0.04, 4, np.array([1.0]), entropy=11)
     calm = _single_regime(0.2, 16, H=0.1).surface_at(paths, 0)
     moved = _single_regime(1.5, 16, H=0.1).surface_at(paths, 0)
     flipped = replace(paths, regime=np.ones_like(paths.regime))
-    assert np.array_equal(calm.call, _single_regime(0.2, 16, H=0.1).surface_at(flipped, 0).call)
+    with pytest.raises(ValueError, match="regime"):
+        _single_regime(0.2, 16, H=0.1).surface_at(flipped, 0)
+    two = _model(H=0.1, n_mc=16)
     assert np.isfinite(calm.call).all()
     assert not np.allclose(calm.call, moved.call)
+    assert not np.allclose(two.surface_at(paths, 0).call, two.surface_at(flipped, 0).call)
 
 
 def test_rough_surface_requires_the_forward_driver():
-    """Without ``dW`` the rough surface would anchor on flat ``v_t`` and drop ``xi_t(u)``."""
+    """Without ``dW`` and without ``state["xi"]`` the restarted curve cannot be built."""
     pytest.importorskip("roughvol")
     paths = _quoted_paths(0.04, 4, np.array([1.0]))
     state = dict(paths.state)
@@ -1268,17 +1223,16 @@ def _otm_variance(call: np.ndarray, k: np.ndarray) -> np.ndarray:
 def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     """H = 0.1, eight paths, clock 0.5, maturity 1, 4,096 copies.
 
-    The surface log contract ``-2 E[log Z]`` is the call's restarted
-    mixture, not ``state["xi"]``. That mixture's integral is the reference.
-    The flat anchor ``v_t (T - t)`` misses it by a median relative gap of
-    0.281 on the last expiry. The log contract stays inside 4 standard
-    errors of it on every expiry, with an extra ``1e-8`` for the one-step
-    expiry, whose control residual is numerical noise. The largest absolute
-    z-score on a later expiry is 1.80. The out-of-the-money strip, on
+    The call is priced on the true regime and on ``state["xi"]``. The
+    surface log contract ``-2 E[log Z]`` is that curve's integral, up to
+    Monte Carlo error. The reference is the variance-swap integral of the
+    same curve. The flat anchor ``v_t (T - t)`` misses it: on this draw
+    the median relative gap on the last expiry is above 0.20. The log
+    contract stays inside 4 standard errors of the integral on every
+    expiry, with an extra ``1e-8`` for the one-step expiry, whose control
+    residual is numerical noise. The out-of-the-money strip, on
     log-moneyness from -0.8 to 0.8, stays inside 4 standard errors of the
-    same integral on the last expiry. Its largest absolute z-score is 1.56.
-    ``state["xi"]`` is the hybrid path curve. On this draw the last expiry
-    differs from the restarted mixture by up to 0.263 relative.
+    same integral on the last expiry.
     """
     pytest.importorskip("roughvol")
     smile = np.linspace(-0.8, 0.8, 161)
@@ -1287,29 +1241,15 @@ def test_rough_surface_variance_swap_matches_i2_within_mc_error():
     paths = model.simulate_market(8, times, seed=run_seed(21, 2))
     clock = 8
     batch = model.surface_at(paths, clock)
-    nus = np.array([item["nu"] for item in _spec().params], dtype=float)
-    mixture = trader_forward_variance(
-        0.1, nus, paths.state["v"], paths.regime_prob, model.xi0, times, paths.state["dW"]
-    )
-    restart = np.column_stack(
-        [
-            integrate_forward_variance(
-                mixture[:, clock, :], times, float(times[clock]), float(expiry)
-            )
-            for expiry in batch.T
-        ]
-    )
-    gap = np.abs(batch.total_variance - restart)
+    contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
+    swap = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
+    gap = np.abs(batch.total_variance - swap)
     assert np.all(gap <= 4.0 * batch.total_variance_se + 1e-8)
-    last = restart[:, -1]
+    last = swap[:, -1]
     flat = paths.state["v"][:, clock] * (float(batch.T[-1]) - float(times[clock]))
-    assert float(np.median(np.abs(flat - last) / last)) > 0.20
+    assert float(np.median(np.abs(flat - last) / np.maximum(np.abs(last), 1e-8))) > 0.20
     strip = _otm_variance(batch.call[:, -1, :], batch.k)
     assert np.all(np.abs(strip - last) <= 4.0 * batch.total_variance_se[:, -1])
-    contracts = [Contract(Vanilla(model.forward), T=float(expiry)) for expiry in batch.T]
-    path_curve = VarianceSwapPricer().price_along(paths, contracts)[:, clock, :]
-    relative = np.abs(path_curve - restart) / np.maximum(np.abs(restart), 1e-8)
-    assert float(np.max(relative)) > 0.15
 
 
 def _constant_nu(nu: float, **kwargs) -> RegimeSwitchingBergomi:
@@ -1499,13 +1439,20 @@ def _drift_z(increment, times_left):
     return coef / se_coef
 
 
+# Two-sided 5 percent normal quantile, and the one-sided 80 percent power quantile.
+_Z95 = 1.959963984540054
+_Z80 = 0.8416212335729143
+
+
 def _episode_mark_drift(model, n_days):
     """Terminal z-scores and the filter-probability drift of the mark.
 
-    Eight runs of 1,500 paths. The drift is the absolute slope of the
+    Eight runs of 1,500 paths. The drift is the signed slope of the
     one-step mark change on the probability of the high regime, times the
-    number of steps, divided by the mean entry quote. The trimmed figures
-    drop the largest 1 percent of absolute daily changes.
+    number of steps, divided by the mean entry quote. ``se`` is the
+    path-clustered standard error of that fraction. The trimmed figures
+    drop the largest 1 percent of absolute daily changes. They are a
+    diagnostic, and the sign is kept.
     """
     end = 126 + n_days
     times = np.arange(end + 1) / 252.0
@@ -1540,34 +1487,90 @@ def _episode_mark_drift(model, n_days):
     quote = float(np.concatenate(quotes).mean())
     beta, z_score = _clustered_slope(panel, probability)
     steps = panel.shape[1]
-    drift = abs(float(beta[1])) * steps / quote
+    z = float(z_score[1])
+    drift = float(beta[1]) * steps / quote
+    se = float(drift / z) if z != 0.0 else float("inf")
     trimmed_beta, trimmed_z = _clustered_slope(panel, probability, _drop_largest(panel, 0.01))
-    trimmed_drift = abs(float(trimmed_beta[1])) * steps / quote
+    trimmed_drift = float(trimmed_beta[1]) * steps / quote
     return {
         "terminal": np.asarray(terminal),
         "intercept": np.asarray(intercept),
         "slope": np.asarray(slope),
         "drift": drift,
-        "z": float(z_score[1]),
+        "se": se,
+        "z": z,
+        "quote": quote,
         "trimmed_drift": trimmed_drift,
         "trimmed_z": float(trimmed_z[1]),
         "replication_z": np.asarray(replication_z),
+        "mdd": (_Z95 + _Z80) * se,
     }
 
 
 def _assert_filter_z(result, label):
-    """The eight replication slopes pass the z-rule.
+    """Untrimmed 95 percent interval contains 0, and the replications pass.
 
-    The pooled point estimate of the drift is kept in the failure text.
-    Its standard error on this sample is wider than the 1 percent bar, so
-    the bar is not the assertion.
+    The minimum detectable drift at 80 percent power is ``(z_95 + z_80)``
+    times the clustered standard error. The trimmed regression is reported
+    in the failure text and is not a bar.
     """
+    half = _Z95 * result["se"]
+    low = result["drift"] - half
+    high = result["drift"] + half
+    text = (
+        f"{label} drift {result['drift']:.4f} se {result['se']:.4f} "
+        f"ci ({low:.4f}, {high:.4f}) mdd {result['mdd']:.4f} "
+        f"z {result['z']:.2f} trimmed {result['trimmed_drift']:.4f} "
+        f"z {result['trimmed_z']:.2f} quote {result['quote']:.6e}"
+    )
+    if not (low <= 0.0 <= high):
+        raise AssertionError(text)
     failed = check_z(result["replication_z"])
     if failed is not None:
-        raise AssertionError(
-            f"{label} {failed}; drift {result['drift']:.4f} z {result['z']:.2f} "
-            f"trimmed {result['trimmed_drift']:.4f} z {result['trimmed_z']:.2f}"
-        )
+        raise AssertionError(f"{text}; {failed}")
+
+
+def test_near_field_variance_equals_the_compensator_piece():
+    """Lag 1 has conditional mean 1. This is an identity, not a sample.
+
+    ``2 H Var(I_1) = dt^{2H}`` at ``H = 0.1`` and ``dt = 1/252``, to
+    ``1e-12``. The factor ``exp(sqrt(2H) nu I_1 - 0.5 nu^2 dt^{2H})``
+    then has conditional mean 1 for every ``nu``.
+    """
+    pytest.importorskip("roughvol")
+    from roughvol.volterra import block_covariance
+
+    hurst = 0.1
+    dt = 1.0 / 252.0
+    variance = float(block_covariance(hurst, 1, dt)[1, 1])
+    piece = dt ** (2.0 * hurst)
+    assert abs(2.0 * hurst * variance - piece) < 1e-12
+
+
+def test_hybrid_tail_mark_bias_is_under_one_percent_of_the_quote():
+    """Closed form from the power-kernel tail. Lag 1 contributes nothing.
+
+    21 trading days: -4.364e-4 at ``nu = 1.5`` and -1.745e-3 at ``nu = 3``.
+    30 trading days: -4.563e-4 and -1.825e-3. The stationary mixture, with
+    ``pi_high = 1.5/2.3``, is -1.290e-3 and -1.349e-3. The bar is 0.01 of
+    the quote.
+    """
+    pytest.importorskip("roughvol")
+    dt = 1.0 / 252.0
+    pi_high = 1.5 / 2.3
+    expected = (
+        (21, -4.36427467e-4, -1.74500639e-3),
+        (30, -4.56312949e-4, -1.82452522e-3),
+    )
+    for n_days, low, high in expected:
+        got_low = hybrid_tail_mark_bias(0.1, 1.5, n_days, dt)
+        got_high = hybrid_tail_mark_bias(0.1, 3.0, n_days, dt)
+        assert got_low == pytest.approx(low, rel=1e-6, abs=1e-12)
+        assert got_high == pytest.approx(high, rel=1e-6, abs=1e-12)
+        assert abs(got_low) < 0.01
+        assert abs(got_high) < 0.01
+        mixed = (1.0 - pi_high) * got_low + pi_high * got_high
+        assert abs(mixed) < 0.01
 
 
 def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
@@ -1575,23 +1578,21 @@ def test_variance_swap_mark_on_the_daily_episode_passes_the_z_rule():
 
     The mark is the left-point model variance accrued since the episode
     start, plus the remaining integral of the hybrid forward curve. That
-    curve uses the ``nu`` in force on each finished step. The next tenor
-    times the near-field factor of the step in between equals the next
-    variance. Maturities are 21 and 30 trading days. The last step's mark
-    change is numerical noise and is left out of both drift regressions.
+    curve uses the ``nu`` in force on each finished step. Rebuilding the
+    next variance from the next tenor is a code-consistency identity, not
+    the martingale check. Maturities are 21 and 30 trading days. The last
+    step's mark change is numerical noise and is left out of the drift
+    regression.
 
-    The conditional regression is the one-step mark change on the hedger's
-    probability of the high regime, with path-clustered standard errors.
-    One z-score per replication passes the z-rule, at the gate and at the
-    ``H = 1/2`` and equal-``nu`` controls. The pooled drift, the absolute
-    slope times the number of steps divided by the mean entry quote, has a
-    standard error wider than 1 percent of the quote. On this draw it is
-    0.057 of the 21-day quote (z -0.87, standard error 0.066) and 0.085 of
-    the 30-day quote (z -1.50, standard error 0.056). Dropping the largest
-    1 percent of absolute changes leaves 0.248 and 0.276. That trim cuts
-    the right tail of the near-field factor. The same controls are 0.057
-    and 0.050 at ``H = 1/2``, and 0.0037 and 0.059 when both regimes share
-    ``nu = 1.5``.
+    The primary bar is :func:`hybrid_tail_mark_bias`, under 1 percent of
+    the quote. The Monte Carlo check is the untrimmed regression of the
+    one-step mark change on the hedger's probability of the high regime,
+    with path-clustered standard errors. The 95 percent interval contains
+    0. The minimum detectable drift at 80 percent power is reported beside
+    it. One z-score per replication passes the z-rule, at the gate and at
+    the ``H = 1/2`` and equal-``nu`` controls. Dropping the largest 1
+    percent of absolute changes is a diagnostic. It cuts the right tail of
+    the near-field factor and is not a bar.
     """
     pytest.importorskip("roughvol")
     model = RegimeSwitchingBergomi(

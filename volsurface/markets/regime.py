@@ -58,20 +58,23 @@ hybrid variance given the ``nu`` in force on each step already finished
 and the hybrid components of those steps. That is the ``nu`` path the
 scheme used to build ``v``, not a mixture of constant-``nu`` closed
 forms. A future step is left out of the quote. Its near-field factor
-has conditional mean 1 for either regime, so the next tenor is a
-martingale given that ``nu`` path and therefore given the filter. The
-clock entry is ``v_t``. ``surface_at`` does not read this curve. It
-prices the call by Monte Carlo under the filtered mixture. Each regime
-holds ``nu`` fixed and restarts from the clock: at ``H = 1/2`` the
-curve is flat at ``v_t``, and at any other ``H`` a later date is the
-closed-form constant-``nu`` curve and the clock entry is ``v_t``. The
-future noise is a fresh kernel, independent of the past given that
-curve. The past Volterra integral sits in that restarted curve and is
-not drawn again. Weights are ``regime_prob`` at the clock. The true
-label is not an argument of the call. At ``H = 1/2`` the variance step
-is the exponential martingale and the plugin is not called. Any other
-``H`` reads ``state["dW"]`` and restarts ``volterra_components`` from
-the clock.
+has conditional mean 1. A tail lag uses the power-kernel weight, so
+that factor's mean is not exactly 1. Given the true ``nu`` path, the
+mark is a martingale up to that tail-weight bias, about -0.1 percent
+of the quote on the gate grid. The clock entry is ``v_t``.
+
+``surface_at`` prices the call on that same curve and on the true
+regime at the clock. The future factor holds that regime's ``nu``
+fixed. Both instruments are then martingales on the simulation
+filtration, up to the tail-weight bias and Monte Carlo error. The
+filter is the hedger's probability. It is not a pricing weight, so
+H1 and H2 measure the gap between that probability and this informed
+price. When ``state["xi"]`` is absent, the variance level is the
+restarted curve of the true regime's ``nu``. At ``H = 1/2`` the
+variance step is the exponential martingale and the plugin is not
+called. Any other ``H`` restarts ``volterra_components`` from the
+clock. The past Volterra integral sits in the curve and is not drawn
+again.
 
 The same shocks drive a Black path whose variance is the deterministic
 left forward curve. The control is that Black price. Its mean is the
@@ -111,8 +114,9 @@ variance and not ``nu``. The variance in regime ``j`` is
 ``pi^2 / 2 + nu_j^2``. ``pi^2 / 2`` is about 4.93. For ``nu`` of 0.4 and
 1.1 the extra term is 0.16 and 1.21, so the two emissions are close.
 ``state["regime_prob_spot"]`` holds this filter. ``price_filter``
-defaults to ``"spot"``, and ``regime_prob`` is then this filter. Prices
-read ``regime_prob``. They do not read the other two filters.
+defaults to ``"spot"``, and ``regime_prob`` is then this filter. The
+hedger reads ``regime_prob``. The call and the variance swap do not.
+The call reads ``paths.regime`` and, when it is stored, ``state["xi"]``.
 
 The windowed realised-variance filter is observable. Inside each clock
 step the spot's Brownian increment is refined to ``n_sub`` sub-steps,
@@ -141,8 +145,9 @@ market seed. The pilot statistic is the change in ``y``. It does not
 read ``v``. A sample variance below ``1e-8`` is floored there so the
 Gaussian likelihood stays finite. The probabilities sit in
 ``state["regime_prob_rv"]``. ``price_filter="rv"`` makes ``regime_prob``
-this filter. The default does not, because the spot filter is the one
-the prices were built on. Both are observable. The latent benchmark is
+this filter. The default stays ``"spot"``. Prices do not read either
+array. The gate sets ``"rv"`` so the hedger's probability is the
+windowed filter. Both filters are observable. The latent benchmark is
 not.
 
 The latent-variance benchmark reads ``log v_i - log v_{i-1}``. Its
@@ -361,35 +366,32 @@ class RegimeSwitchingBergomi:
         )
 
     def surface_at(self, paths: MarketPaths, i_t: int) -> SurfaceBatch:
-        """Monte Carlo calls mixed over the filtered regime probabilities.
+        """Monte Carlo calls on the true regime and on ``state["xi"]``.
 
-        Each regime is simulated with that regime's ``nu`` held fixed.
-        The variance level is the regime-conditional forward curve
-        ``xi_t(u)``, and the future kernel is restarted from the clock.
-        The draws do not read ``paths.regime``. Weights are ``regime_prob``
-        at the clock. That array is the spot filter unless
-        ``price_filter`` is ``"rv"``. ``state["regime_prob_latent"]`` and,
-        under the default, ``state["regime_prob_rv"]`` are not read. Two
+        The future factor holds the ``nu`` of ``paths.regime`` at the clock.
+        Every path is priced once under each regime's seed, and the path
+        keeps the column of its own label, so a one-regime book draws the
+        same shocks as before. ``regime_prob`` is not a weight. When
+        ``state["xi"]`` is stored, that curve is the variance level, the
+        same curve the variance swap integrates. When it is absent, the
+        level is the restarted curve of the true regime's ``nu``. Two
         calls on the same paths use the same seed, so the prices match.
-        The gap between two mixtures on those shared seeds is the gap in
-        the weights. It is not a second Monte Carlo error.
         """
-        if paths.regime_prob is None:
-            raise ValueError("surface_at mixes filtered regime probabilities")
+        if paths.regime is None:
+            raise ValueError("surface_at prices the call on paths.regime")
         clock = int(i_t)
         times = np.asarray(paths.times, dtype=float)
         indices = _expiry_indices(times.size, clock)
         v_now = np.asarray(paths.state["v"][:, clock], dtype=float)
         nus = np.array([float(item["nu"]) for item in self.spec.params], dtype=float)
-        probs = np.asarray(paths.regime_prob[:, clock, :], dtype=float)
-        if probs.shape != (v_now.shape[0], nus.size):
-            raise ValueError(
-                f"regime_prob shape {probs.shape} does not match "
-                f"{(v_now.shape[0], nus.size)} paths and regimes"
-            )
+        m = v_now.shape[0]
+        labels = np.asarray(paths.regime[:, clock], dtype=int)
+        if labels.shape != (m,):
+            raise ValueError(f"regime column has shape {labels.shape}, expected {(m,)}")
+        if np.any((labels < 0) | (labels >= nus.size)):
+            raise ValueError(f"regime index must lie in 0..{nus.size - 1} for this spec")
         k = np.asarray(self.smile_k, dtype=float)
         strikes = np.exp(k)
-        m = v_now.shape[0]
         if int(indices[-1]) == clock:
             call = _intrinsic_calls(m, strikes)
             return SurfaceBatch(
@@ -400,29 +402,40 @@ class RegimeSwitchingBergomi:
                 total_variance=np.zeros((m, 1)),
                 total_variance_se=np.zeros((m, 1)),
             )
-        dW = _forward_driver(paths, self.H)
+        stored = paths.state.get("xi")
+        dW = None
+        if stored is None:
+            dW = _forward_driver(paths, self.H)
+        else:
+            stored = np.asarray(stored, dtype=float)
+            expected = (m, times.size, times.size)
+            if stored.shape != expected:
+                raise ValueError(f"state['xi'] shape {stored.shape} does not match {expected}")
         call = np.zeros((m, indices.size, k.size))
         stderr = np.zeros_like(call)
         total = np.zeros((m, indices.size))
         total_se = np.zeros_like(total)
         for r, nu in enumerate(nus):
             seed = _surface_seed(paths, clock, r)
-            xi = _regime_forward(self.H, float(nu), v_now, self.xi0, times, dW, clock)
+            if stored is None:
+                xi = _regime_forward(self.H, float(nu), v_now, self.xi0, times, dW, clock)
+            else:
+                xi = stored[:, clock, :]
             column, column_se, vs, vs_se = self._regime_calls(
                 float(nu), xi, times, clock, indices, strikes, seed
             )
-            weight = probs[:, r]
-            call += weight[:, None, None] * column
-            stderr += (weight[:, None, None] * column_se) ** 2
-            total += weight[:, None] * vs
-            total_se += (weight[:, None] * vs_se) ** 2
+            mask = labels == r
+            call[mask] = column[mask]
+            stderr[mask] = column_se[mask]
+            total[mask] = vs[mask]
+            total_se[mask] = vs_se[mask]
         return SurfaceBatch(
             T=times[indices].copy(),
             k=k.copy(),
             call=call,
-            stderr=np.sqrt(stderr),
+            stderr=stderr,
             total_variance=total,
-            total_variance_se=np.sqrt(total_se),
+            total_variance_se=total_se,
         )
 
     def _regime_calls(self, nu, xi, times, i_t, indices, strikes, seed):
@@ -435,17 +448,17 @@ class RegimeSwitchingBergomi:
         return self._rough_calls(nu, xi, times, i_t, indices, strikes, seed)
 
     def _rough_calls(self, nu, xi, times, i_t, indices, strikes, seed):
-        """Restarted hybrid factor on the regime's forward curve ``xi``.
+        """Restarted hybrid factor on the forward curve ``xi``.
 
         The plugin draws the vol child. ``xi`` already holds the path's
-        past, so the factor is a fresh kernel with mean near 1. The grid
-        from the clock to the last expiry has to be equally spaced. A
-        later date on ``xi`` is the closed-form constant-``nu`` curve.
-        The clock entry is ``v_t``. Dividing by the closed-form diagonal
-        would drop the hybrid near field and lift the curve. The curve
-        is still not the conditional curve of a path whose past ``nu``
-        switched: that curve would read the latent regime, and a price
-        does not.
+        past, so the factor is a fresh kernel. The near-field piece has
+        conditional mean 1. The grid from the clock to the last expiry
+        has to be equally spaced. When ``xi`` is ``state["xi"]`` at the
+        clock, a later date is the hybrid curve of the ``nu`` path. When
+        that curve was not stored, a later date is the restarted
+        constant-``nu`` curve and the clock entry is ``v_t``. Dividing
+        by the closed-form diagonal would drop the hybrid near field
+        and lift the curve.
         """
         m = xi.shape[0]
         n_mc = self.n_mc
@@ -813,6 +826,36 @@ def hybrid_forward_variance(
     return hybrid_path_forward_variance(float(H), nu_step, float(xi0), grid, pieces)
 
 
+def hybrid_tail_mark_bias(
+    H: float, nu: float, n_steps: int, dt: float, kappa: int = 1
+) -> float:
+    """Expected mark change over a flat-``xi0`` life, as a fraction of the quote.
+
+    Lag ``L > kappa`` has factor mean ``mu(L)`` from the power-kernel
+    weight against the continuous kernel piece. That lag sits inside
+    ``n_steps - L`` of the daily rolls. Lag 1 is the near field and
+    contributes 0. The quote is ``xi0 * n_steps * dt``. The fraction does
+    not depend on ``xi0``.
+    """
+    steps = int(n_steps)
+    if steps < 2:
+        return 0.0
+    hurst = float(H)
+    step = float(dt)
+    if step <= 0.0:
+        raise ValueError(f"dt must be positive, got {dt}")
+    weights = _hybrid_tail_weights(hurst, steps, steps * step, int(kappa))
+    two_h = 2.0 * hurst
+    vol = float(nu)
+    total = 0.0
+    for lag in range(int(kappa) + 1, steps):
+        weight = float(weights[lag - 1])
+        piece = (lag * step) ** two_h - ((lag - 1) * step) ** two_h
+        mu = math.exp(0.5 * vol * vol * (two_h * weight * weight * step - piece))
+        total += (steps - lag) / steps * (mu - 1.0)
+    return total
+
+
 def hybrid_path_forward_variance(
     H: float,
     nu_step: np.ndarray,
@@ -831,8 +874,12 @@ def hybrid_path_forward_variance(
     has conditional mean 1, so the next tenor is the conditional
     expectation of the next variance. A tail lag uses the power-kernel
     weight, whose variance is not the continuous kernel piece, so that
-    factor's mean is not exactly 1. Behind the clock the entry is NaN.
-    On the clock the entry is the simulated ``v``.
+    factor's mean is not exactly 1. The expected mark bias from those
+    tails is :func:`hybrid_tail_mark_bias`. Behind the clock the entry is
+    NaN. On the clock the entry is the simulated ``v``.
+
+    The exponent is one array. Each lag is written at the clock where its
+    step finishes, and the running sum carries it to later clocks.
     """
     grid = np.asarray(times, dtype=float)
     pieces = np.asarray(components, dtype=float)
@@ -854,7 +901,7 @@ def hybrid_path_forward_variance(
         return np.full((m, n, n), level)
     kappa = n_comp - 1
     weights = _hybrid_tail_weights(hurst, n_steps, float(grid[-1]), kappa)
-    landed = np.zeros((m, n_steps, n))
+    exponent = np.zeros((m, n, n))
     steps = np.arange(n_steps)
     two_h = 2.0 * hurst
     for lag in range(1, n_steps + 1):
@@ -872,13 +919,16 @@ def hybrid_path_forward_variance(
         tenor = grid[choice + lag]
         piece = np.maximum(tenor - start, 0.0) ** two_h - np.maximum(tenor - stop, 0.0) ** two_h
         vol = nu[:, choice]
-        landed[:, choice, choice + lag] = scale * vol * values - 0.5 * vol * vol * piece
-    exponent = np.zeros((m, n, n))
-    exponent[:, 1:, :] = np.cumsum(landed, axis=1)
-    xi = level * np.exp(exponent)
+        # choice + 1 is the clock at which this step has just finished.
+        exponent[:, choice + 1, choice + lag] = scale * vol * values - 0.5 * vol * vol * piece
+    for clock in range(1, n):
+        exponent[:, clock, :] += exponent[:, clock - 1, :]
+    np.exp(exponent, out=exponent)
+    exponent *= level
     gap = grid[None, :] - grid[:, None]
     tol = 1e-12 * max(1.0, float(grid[-1]))
-    return np.where(gap[None, :, :] >= -tol, xi, np.nan)
+    exponent[:, gap < -tol] = np.nan
+    return exponent
 
 
 def trader_forward_variance(

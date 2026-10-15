@@ -174,22 +174,28 @@ is the conditional expectation of the simulated hybrid variance given
 the `nu` in force on each step already finished. It uses that `nu` path
 because the scheme did. It is not a mixture of constant-`nu` closed
 forms. The next tenor times the near-field factor of the step in
-between equals the next variance, and that factor has conditional mean
-1 for either regime. The one-day roll is a martingale given the `nu`
-path, and so given the filter. `surface_at` does not read this curve.
-The call is still the filtered mixture. Each regime holds `nu` fixed.
-At `H` other than `1/2` a later date on that call curve is the
-closed-form constant-`nu` curve, and the clock entry is `v_t`.
+between equals the next variance. That reconstruction is a
+code-consistency identity. The near-field factor has conditional mean 1.
+A tail lag's factor mean is not exactly 1. Given the true `nu` path, the
+mark is a martingale up to that tail-weight bias, about -0.1 percent of
+the quote.
+
+`surface_at` prices the call on the same curve and on the true regime
+at the clock. The future factor holds that regime's `nu` fixed. The
+filter is not a pricing weight. Both instruments are martingales on the
+simulation filtration, up to the tail-weight bias and the call's Monte
+Carlo error. H1 and H2 measure the hedger's information gap: the filter
+against this informed price.
 
 The gate uses `price_filter="rv"`. That filter reads the change in
 windowed log realised variance, timed to the regime two steps back.
 The library default stays `"spot"`. This draft does not use the default
-for H3 or H4. `n_mc` is 1024. The error bar on a price is
-`SurfaceBatch.stderr`, the residual standard deviation divided by
-`sqrt(n_mc)`. A price that enters the gate is the Monte Carlo mean, and
-the standard error is reported beside it. The surface seed is
+for the hedger's probability in H3 or H4. `n_mc` is 1024. The error bar
+on a price is `SurfaceBatch.stderr`, the residual standard deviation
+divided by `sqrt(n_mc)`. A price that enters the gate is the Monte Carlo
+mean, and the standard error is reported beside it. The surface seed is
 `spawn_key + (4, regime)`. The clock is not in the key, so hedge dates
-share shocks. A gap across hedge dates is the gap in the weights.
+share shocks.
 
 The gate contrast is the L1 reduction: `Gap` with I1 minus `Gap` with I2,
 for L1, above 0. The variance swap hedges the level of variance. The bar
@@ -199,11 +205,16 @@ under its bar. That L2 sentence is reported when I3 is eligible. It is
 not a fourth member of the family.
 
 The variance-swap gate is read with the limit in the instrument-martingale
-pre-gate. The mark is the hybrid curve above, and the one-day roll matches
-the simulated variance. The pre-stated 1 percent bar on the pooled and
-trimmed point estimates is not met. The standard error of the pooled drift
-is wider than that bar, and the trimmed slope is the right tail of the
-near-field factor. The eight replication z-scores pass the z-rule.
+pre-gate. The primary bar is the exact model drift from the hybrid tail
+weights, under 1 percent of the quote. On a daily step the 21-day life
+gives -0.000436 at `nu = 1.5` and -0.001745 at `nu = 3`. The 30-day life
+gives -0.000456 and -0.001825. The stationary mixture, `pi_high = 1.5/2.3`,
+is -0.001290 and -0.001349. The Monte Carlo check is an untrimmed
+regression of the one-step mark change on the hedger's probability of the
+high regime, with a path-clustered standard error. The 95 percent interval
+contains 0, and the minimum detectable drift at 80 percent power is
+reported. A trimmed regression is a diagnostic. It is not the bar. The
+eight replication z-scores pass the z-rule.
 
 ## Sample size
 
@@ -292,10 +303,11 @@ Prices enter the P&L only. They are not policy inputs. The three filters
 are functions of the observation series: one-step log realised variance
 `y`, the change in windowed log realised variance `y_rv`, and the latent
 increment of `log v`. `regime_prob` is an output of those filters. The
-variance-swap quote and `surface_at` read `regime_prob` and the forward
-curve. They do not write a price back into the filter. The audit
-recomputes the three probability arrays from `y`, `y_rv` and `log v` and
-matches the arrays stored on the path.
+variance-swap quote and `surface_at` read the true `nu` path. The swap
+integrates `state["xi"]`. The call uses that curve and the regime at the
+clock. Neither reads `regime_prob`, and neither writes a price back into
+the filter. The audit recomputes the three probability arrays from `y`,
+`y_rv` and `log v` and matches the arrays stored on the path.
 
 ### Variance-swap left-point leg
 
@@ -359,39 +371,37 @@ The intercept z-scores and the slope z-scores pass for both maturities.
 The same mark changes are regressed on the hedger's probability of the
 high regime at the left of the step. The standard error is clustered by
 path, with scale `G / (G - 1) * (N - 1) / (N - 2)`. The drift is the
-absolute slope times the number of steps, divided by the mean entry
-quote. The bar, stated before this draw, is an absolute drift under 1
-percent of that quote, on the full sample and after the largest 1 percent
-of absolute daily changes are removed.
+signed slope times the number of steps, divided by the mean entry quote.
 
-The quote in that regression is the hybrid curve: the `nu` in force on
-each finished step, the same pieces that build `v`. The next variance
-equals that curve's next tenor times the near-field factor of the step
-in between. On one draw of 1,500 paths the identity holds to 2e-13. The
-factor is Gaussian with conditional mean 1. A tail lag uses the
-power-kernel weight. On a daily step at `H = 0.1` and `nu = 3` the mean
-of the first tail factor is 0.9986, and later lags are closer to 1.
+The primary bar is the exact model drift, the closed form
+`hybrid_tail_mark_bias`. Each lag `L > 1` contributes `(mu(L) - 1)` on
+the `(n - L)` rolls that still contain it, divided by `n`. At `H = 0.1`
+and `dt = 1/252` the 21-day fraction is -0.000436 at `nu = 1.5` and
+-0.001745 at `nu = 3`. The 30-day fraction is -0.000456 and -0.001825.
+The stationary mixture, `pi_high = 1.5/2.3`, is -0.001290 and -0.001349.
+Each of these is under 1 percent of the quote. Lag 1 does not enter:
+`2 H Var(I_1) = dt^{2H}`, so that factor has conditional mean 1.
 
-On the same eight runs the 21-trading-day pooled drift is 0.057 of the
-quote, clustered z -0.87, standard error 0.066 of the quote. The entry
-quote averages 0.003204. The 30-trading-day drift is 0.085, z -1.50,
-standard error 0.056, on an entry quote of 0.004607. Both point estimates
-sit above the 1 percent bar and inside about one standard error of zero.
-The eight replication z-scores pass the z-rule. The largest absolute
-replication z is 2.20 on the 21-day swap and 2.36 on the 30-day swap.
+The quote in the regression is the hybrid curve: the `nu` in force on
+each finished step, the same pieces that build `v`. Rebuilding the next
+variance as that curve's next tenor times the near-field factor is a
+code-consistency identity. On one draw of 1,500 paths it holds to 2e-13.
+It is not a martingale check. The martingale, given the true `nu` path,
+holds up to the tail-weight bias above. A tail lag uses the power-kernel
+weight. On a daily step at `H = 0.1` and `nu = 3` the mean of the first
+tail factor is 0.9986, and later lags are closer to 1.
 
-Dropping the largest 1 percent of absolute daily changes leaves a drift
-of 0.248, z -13.8, on the 21-day swap, and 0.276, z -14.5, on the 30-day
-swap. The trim deletes the right tail that balances the near-field
-factor. One draw of that factor from a normal innovation with conditional
-mean exactly 1, `nu` switching between 1.5 and 3, 3,000 paths, 19 steps,
-seed 0, has trimmed drift 0.53 and z -41. At `H = 1/2`, eight runs, the
-drift is 0.057 and the trimmed drift is 0.050. With both regimes at
-`nu = 1.5` the drift is 0.0037 and the trimmed drift is 0.059. The 1
-percent bar on these point estimates is not met. The closed-form mixture
-had a separate bias: on the 30-day roll, paths in the low regime had mean
-gap 0.032 of the quote, z 3.00. The hybrid curve brings that to 0.009,
-z 0.96. The trimmed slope that remains is the shape of the factor.
+The Monte Carlo check is the untrimmed regression. Its 95 percent
+interval has to contain 0. The minimum detectable drift at 80 percent
+power is `(1.960 + 0.842)` times the clustered standard error of the
+drift fraction. A regression that drops the largest 1 percent of
+absolute daily changes is a diagnostic. The trim deletes the right tail
+that balances the near-field factor. One draw of that factor from a
+normal innovation with conditional mean exactly 1, `nu` switching
+between 1.5 and 3, 3,000 paths, 19 steps, seed 0, has trimmed drift
+-0.53 and z -41. The closed-form mixture had a separate roll bias: on
+the 30-day roll, paths in the low regime had mean gap 0.032 of the
+quote, z 3.00. The hybrid curve brings that to 0.009, z 0.96.
 
 I3, the call priced by `SurrogatePricer`, is the third instrument. It
 stays untested until that surrogate exists.
@@ -463,11 +473,12 @@ near 0.54 on those paths.
 
 H4 is exploratory. Three Hamilton filters are defined. For this gate,
 `pi_filt` is the differenced windowed filter, `price_filter="rv"`.
-Prices, including the I2 variance swap and `surface_at`, read that
-filter. The spot filter is stored and is not the gate price. The
-library default remains `"spot"`. The latent-variance benchmark is not
-a deployable policy and it is not `pi_oracle`. `pi_oracle` still sees
-the latent regime label.
+That array is the hedger's probability. The variance swap and
+`surface_at` price the true `nu` path, so H1 and H2 measure the gap
+between this probability and the informed price. The spot filter is
+stored and is not the gate probability. The library default remains
+`"spot"`. The latent-variance benchmark is not a deployable policy and
+it is not `pi_oracle`. `pi_oracle` still sees the latent regime label.
 
 The spot filter reads one-step log realised variance,
 `log((d log Z)^2 / dt)`. It is not run on a synthetic observation drawn
