@@ -1,6 +1,6 @@
 # volsurface: instructions for builders
 
-Public repository, part of Corey's PhD preparation. The package is `volsurface`. Apps in
+Public repository, a personal research project of Corey's. The package is `volsurface`. Apps in
 `sessions/` and tests in `tests/` import from it and hold no logic of their own. Current
 state and next session are at the top of `LOG.md`.
 
