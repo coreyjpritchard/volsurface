@@ -79,7 +79,8 @@ python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the com
   2 days, towards Heston's short-maturity limit $\rho\xi / (4\sqrt{v_0}) = 2.76$, while the
   market's keeps rising. An earlier version of this script reported $\rho = -0.533$ and a
   front skew of 1.87; that number came from a loss with a discontinuity (see the script's
-  docstring) and did not reproduce.
+  docstring); [docs/notes/heston_fit_old_vs_new.md](docs/notes/heston_fit_old_vs_new.md)
+  reproduces it and explains the difference.
 
 ## Licence
 

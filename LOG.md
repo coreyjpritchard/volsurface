@@ -31,6 +31,15 @@ Under the smooth loss the old README parameters cost 0.8379 and the
 `rho = -0.6995` rerun costs 0.7604. Two runs of the script give identical
 output.
 
+The 14 October fit reproduces on the old loss: parameters inside the LOG's
+printed precision give cost 0.7454 and skews 1.866, 1.785, 1.181 and 0.180,
+on the low side of a jump. On the smooth loss the same point costs 0.8375 and
+is not a stationary point; one run from it reaches cost 0.5288,
+`rho = -0.5515`. Script, data, starts, box, optimiser and loss weights were
+unchanged; only the dependency versions differed, and those were not recorded
+on 14 October. Detail: `docs/notes/heston_fit_old_vs_new.md`,
+`scripts/heston_fit_old_vs_new.py`.
+
 ## 2026-10-19 Review: path-bootstrap intervals for the gate filter skills
 
 The three gate filter skills on the 4,000-path draw, clock index 10, are spot 0.1178, windowed 0.2071 and latent 0.2849. A path bootstrap of 10,000 resamples gives 95 percent intervals [0.0915, 0.1439], [0.1794, 0.2339] and [0.2556, 0.3137]. Windowed minus spot is 0.0893, interval [0.0604, 0.1190]. Latent minus windowed is 0.0778, interval [0.0616, 0.0943]. Hit rates are 0.6608, 0.7048 and 0.7438, with intervals [0.6463, 0.6755], [0.6905, 0.7188] and [0.7300, 0.7573].
