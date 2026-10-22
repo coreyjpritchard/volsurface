@@ -174,21 +174,47 @@ def main() -> None:
     print(f"iv_finite_fraction: {float(np.isfinite(history).mean()):.4f}")
     _forward_ratios()
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.4))
+    # One panel. The regime check has a single loading per expiry and a share of
+    # 1 to four decimals, so it is reported as text rather than drawn.
     grid = loading_d.reshape(maturities.size, log_k.size)
-    for j in (0, maturities.size // 2, maturities.size - 1):
-        axes[0].plot(log_k, grid[j], lw=1.2, label=f"{int(round(maturities[j] * 252))}d")
-    axes[0].set_xlabel("log-moneyness")
-    axes[0].set_ylabel("first component")
-    axes[0].set_title(f"Minimal DYSANOS IV changes, share {share_d:.2f}.")
-    axes[0].legend(frameon=False, fontsize=8)
-    axes[1].plot(maturities * 252, loading_r, "o-", lw=1.2, ms=4)
-    axes[1].set_xlabel("expiry, business days")
-    axes[1].set_ylabel("first component")
-    axes[1].set_title(f"Regime variance-swap IV, share {share_r:.2f}.")
-    for axis in axes:
-        axis.grid(True, alpha=0.3)
-    fig.tight_layout()
+    # The sign of a principal component is arbitrary. It is flipped for the plot
+    # only, so the CSV keeps the solver's sign.
+    shown = -grid if np.mean(grid) < 0.0 else grid
+    fig, ax = plt.subplots(figsize=(7.4, 5.0))
+    markers = ("o", "s", "^")
+    for marker, j in zip(markers, (0, maturities.size // 2, maturities.size - 1), strict=True):
+        ax.plot(
+            log_k,
+            shown[j],
+            marker=marker,
+            ms=4,
+            lw=1.2,
+            label=f"expiry {int(round(maturities[j] * 252))} business days",
+        )
+    ax.set_xlabel("log-moneyness k = log(K / F)")
+    ax.set_ylabel("first principal component loading\n(unit vector, sign fixed positive)")
+    span = float(shown.max() - shown.min())
+    ax.set_ylim(float(shown.min()) - 0.1 * span, float(shown.max()) + 0.25 * span)
+    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.grid(True, alpha=0.3)
+    fig.suptitle(
+        f"In minimal DYSANOS, one component explains {100 * share_d:.2f}% of implied-vol "
+        "changes,\nand it is close to a level shift: every loading lies between "
+        f"{shown.min():.3f} and {shown.max():.3f},\na little higher at the money "
+        f"(regime variance-swap check: {100 * share_r:.2f}%)",
+        fontsize=10.5,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        f"Synthetic: 4 latent factors, a 40-step path (seed 5), {log_k.size} strikes from "
+        f"$-0.15$ to 0.15, {maturities.size} expiries.\nPCA of step-on-step implied-vol changes "
+        "across all expiries and strikes together.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.subplots_adjust(top=0.84)
     fig.savefig(FIG / "p3g_pca.png", dpi=140)
     plt.close(fig)
 

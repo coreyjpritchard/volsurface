@@ -172,21 +172,63 @@ def main() -> None:
     for key, value in summary.items():
         print(f"{key}: {value}")
 
-    fig, axes = plt.subplots(3, 1, figsize=(6.6, 6.2), sharex=True)
+    prob = paths.regime_prob[:, :, 1]
+    high = paths.regime == 1
+    in_high = float(prob[high].mean()) if high.any() else float("nan")
+    in_low = float(prob[~high].mean()) if (~high).any() else float("nan")
+    print(f"figure: mean P(regime 1) in regime 1 {in_high:.4f}, in regime 0 {in_low:.4f}")
+
+    # Illustrative settings (market-test nu of 0.4 and 1.1 with H = 1/2), not the
+    # pre-registered nu of 1.5 and 3. Regimes are drawn as one strip per path so
+    # the four step functions do not sit on top of each other.
+    fig, axes = plt.subplots(
+        3, 1, figsize=(7.6, 7.0), sharex=True, gridspec_kw={"height_ratios": [3, 1.6, 3]}
+    )
     for i in range(4):
-        axes[0].plot(times, paths.state["v"][i], lw=1.0, label=f"path {i + 1}")
-        axes[1].step(times, paths.regime[i], where="post", lw=1.0)
-        axes[2].plot(times, paths.regime_prob[i, :, 1], lw=1.0)
-    axes[0].set_ylabel("variance")
-    axes[0].set_title("Four paths. nu is 0.4 or 1.1. The filter probability is causal.")
-    axes[0].legend(frameon=False, fontsize=8, ncol=4)
-    axes[1].set_ylabel("regime")
-    axes[1].set_yticks([0, 1])
-    axes[2].set_ylabel("P(regime = 1)")
-    axes[2].set_xlabel("time")
+        colour = f"C{i}"
+        axes[0].plot(times, paths.state["v"][i], lw=1.0, color=colour, label=f"path {i + 1}")
+        spans = []
+        start = None
+        for t in range(times.size):
+            if paths.regime[i, t] == 1 and start is None:
+                start = times[t]
+            if start is not None and (t == times.size - 1 or paths.regime[i, t + 1] == 0):
+                end = times[t + 1] if t + 1 < times.size else times[-1]
+                spans.append((start, end - start))
+                start = None
+        axes[1].broken_barh(spans, (i - 0.35, 0.7), color=colour)
+        axes[2].plot(times, prob[i], lw=1.0, color=colour)
+    axes[0].set_ylabel("instantaneous variance\n(per year)")
+    axes[0].set_ylim(0.0, 1.25 * float(paths.state["v"].max()))
+    axes[0].legend(frameon=False, fontsize=8, ncol=4, loc="upper right")
+    axes[1].set_yticks(range(4), [f"path {i + 1}" for i in range(4)], fontsize=8)
+    axes[1].set_ylim(3.6, -0.6)
+    axes[1].set_ylabel("in regime 1\n(nu = 1.1)")
+    axes[2].axhline(0.5, color="0.5", ls=":", lw=0.8)
+    axes[2].set_ylim(0.0, 1.0)
+    axes[2].set_ylabel("filter P(regime 1)\nfrom spot only")
+    axes[2].set_xlabel("time (years)")
+    axes[0].set_xlim(times[0], times[-1])
     for axis in axes:
         axis.grid(True, alpha=0.3)
-    fig.tight_layout()
+    fig.suptitle(
+        "Illustrative regime-switching Bergomi paths: the regime moves the vol of vol\n"
+        "from 0.4 to 1.1, and a causal filter that sees only spot separates the regimes "
+        f"weakly\n(mean P(regime 1) is {in_high:.2f} while in regime 1 and {in_low:.2f} "
+        "while in regime 0)",
+        fontsize=10.5,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "Simulation: xi0 = 0.04, rho = $-0.4$, H = 1/2, switching rates 1.5 and 0.8 per year, "
+        "start (0.7, 0.3), 52 weekly steps, seed run_seed(9, 0).\nIllustrative nu of 0.4 and "
+        "1.1; the pre-registered settings use 1.5 and 3.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.045, 1, 1))
+    fig.subplots_adjust(top=0.87)
     fig.savefig(FIG / "p3f_paths.png", dpi=140)
     plt.close(fig)
 

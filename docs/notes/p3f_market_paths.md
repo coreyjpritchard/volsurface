@@ -191,6 +191,18 @@ skill 0.1178, calibration error 0.0527. Windowed hit rate 0.7048, skill
 calibration error 0.0338. The windowed skill at clocks 5, 10 and 20 is
 0.2079, 0.2071 and 0.2089.
 
+How to read `p3f_paths.png`. The figure does not use the pre-registered
+settings above. It shows four illustrative paths at the market-test
+settings, `H = 1/2` and `nu` of 0.4 and 1.1, on 52 weekly steps over one
+year. The top panel is the instantaneous variance of each path. The
+middle panel marks the stretch each path spends in regime 1, the high
+vol-of-vol regime. The bottom panel is the spot filter's probability of
+regime 1, which uses only information up to each date. Across these four
+paths that probability averages 0.53 while a path is in regime 1 and 0.41
+while it is in regime 0. The filter leans the right way but separates the
+regimes only weakly, in line with the spot-filter Brier skill near zero
+reported above for the market-test settings.
+
 Constant `nu`, eight runs of 500 paths, clock index 8. The mean forward
 curve after the clock, divided by `xi0`, is 1.019 at `nu = 1.5` and
 1.031 at `nu = 3`. Both pass the z-rule.
