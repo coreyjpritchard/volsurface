@@ -1,8 +1,8 @@
 n_steps,39.0
 n_strikes,37.0
 sigma_min,0.0
-sigma_median,0.2833289202014162
-sigma_max,212.2921868889565
-second_diff_rms,15.701142161596279
-fit_objective,6.302398664355566e-05
+sigma_median,0.2836765991272649
+sigma_max,254.29196303386587
+second_diff_rms,19.025691659218996
+fit_objective,9.267446252472784e-05
 fit_in_spread,1.0

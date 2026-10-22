@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -80,31 +81,52 @@ def snapshot_panels(data) -> dict:
     frame = pd.DataFrame(rows)
     frame.to_csv(FIG / "p2d_snapshot_localvol.csv", index=False)
 
-    fig, axes = plt.subplots(1, 3, figsize=(9.6, 3.8), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(11.0, 4.4))
+    peaks = {}
     for ax, name in zip(axes, ("linear", "spline", "svi"), strict=True):
         block = frame[frame["surface"] == name]
         quoted = block[~block["extrapolated"]]
         wing = block[block["extrapolated"]]
-        ax.plot(quoted["k"], quoted["variance"], color="C0", lw=1.2, label="inside quotes")
+        ax.axvspan(k[0], k_lo, color="0.92")
+        ax.axvspan(k_hi, k[-1], color="0.92", label="past this expiry's quoted strikes")
+        ax.plot(
+            quoted["k"], quoted["variance"], color="C0", lw=1.2,
+            label="inside the surface's domain",
+        )
         if len(wing):
             ax.plot(
-                wing["k"], wing["variance"], color="C0", lw=1.0, ls="--", label="extrapolated"
+                wing["k"], wing["variance"], color="C0", lw=1.0, ls="--",
+                label="outside the surface's domain",
             )
         ax.axhline(0.0, color="k", lw=0.6)
-        ax.axvline(k_lo, color="0.5", lw=0.5)
-        ax.axvline(k_hi, color="0.5", lw=0.5)
         ax.set_yscale("symlog", linthresh=0.05)
+        _symlog_ticks(ax, block["variance"].to_numpy(dtype=float))
         peak = _max_abs_frame(block)
-        ax.set_title(f"{name}\nmax |var| = {peak:.3g}")
-        ax.set_xlabel("k")
+        peaks[name] = peak
+        ax.set_title(f"{name}: largest |local variance| {_sci(peak)}", fontsize=10)
+        ax.set_xlabel("log-moneyness k = log(K / F)")
+        ax.set_xlim(k[0], k[-1])
         ax.grid(True, alpha=0.3)
-    axes[0].set_ylabel("local variance")
-    axes[0].legend(frameon=False, fontsize=7)
+    axes[0].set_ylabel("local variance (per year, symmetric log scale)")
+    axes[2].legend(frameon=False, fontsize=7.5, loc="lower left")
     fig.suptitle(
-        f"SPX at T = {target:.3f}. Grey lines are this expiry's quoted k. "
-        "Dashed is each surface's extrapolated mask."
+        "Dupire local variance needs a smooth, convex surface. On SPX at "
+        f"{365 * target:.0f} days it reaches\n{_sci(peaks['linear'])} in size from linear "
+        f"interpolation and {_sci(peaks['spline'])} from a cubic spline; raw SVI peaks at "
+        f"{_sci(peaks['svi'])}\nbut turns negative past the last strike, and negative "
+        "local variance has no local vol",
+        fontsize=10.5,
     )
-    fig.tight_layout()
+    fig.text(
+        0.01,
+        0.005,
+        f"SPXW mids, CBOE delayed, 14 Oct 2026; expiry nearest 23 days (T = {target:.3f}). "
+        "Local variance from the Dupire formula in total variance, quoted domain not masked.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.78)
     fig.savefig(FIG / "p2d_snapshot_localvol.png", dpi=140)
     plt.close(fig)
 
@@ -128,24 +150,51 @@ def snapshot_panels(data) -> dict:
                     "variance": float(report.variance[i, 0]),
                 }
             )
-    fig, axes = plt.subplots(2, 1, figsize=(6.8, 5.6), sharex=True)
-    _step(axes[0], expiries, cal["svi"], "C0")
-    _step(axes[1], expiries, cal["spline"], "C1")
+    days = 365.0 * expiries
+    fig, axes = plt.subplots(2, 1, figsize=(7.6, 6.4), sharex=True)
+    _step(axes[0], days, cal["svi"], "C0", "raw SVI, one slice per expiry")
+    _step(axes[1], days, cal["spline"], "C1", "cubic spline of implied vol")
     for ax in axes:
-        for expiry in expiries:
-            ax.axvline(float(expiry), color="k", lw=0.3, alpha=0.35)
+        for expiry in days:
+            ax.axvline(float(expiry), color="k", lw=0.3, alpha=0.3)
+        ax.axhline(0.0, color="k", lw=0.6)
+        ax.set_xscale("log")
+        ax.set_xticks([0.5, 1, 2, 5, 10, 30, 100, 350])
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%g"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
         ax.grid(True, alpha=0.3)
-    axes[0].set_ylabel("SVI local variance")
-    axes[1].set_ylabel("spline local variance")
-    axes[1].set_xlabel("maturity T")
+        ax.set_ylabel("ATM local variance (per year)")
+    axes[0].plot([], [], color="k", lw=0.3, alpha=0.5, label="quoted expiry")
+    axes[0].legend(frameon=False, fontsize=8, loc="upper left")
+    axes[1].legend(frameon=False, fontsize=8, loc="upper left")
+    axes[1].set_xlabel("time to expiry (days, log scale)")
+    axes[1].set_xlim(days[0], days[-1])
     svi_jump = _largest_step(cal["svi"])
     spline_jump = _largest_step(cal["spline"])
-    axes[0].set_title(
-        "k = 0. Total variance is linear in T, so local variance is "
-        f"constant between expiries. Largest SVI jump: {svi_jump:.4f}."
+    negative = np.flatnonzero(cal["spline"] < 0.0)
+    axes[0].set_title(f"Raw SVI: largest jump at an expiry {svi_jump:.4f}", fontsize=10)
+    neg_text = (
+        f", negative from {days[negative[0]]:.0f} to {days[negative[-1] + 1]:.0f} days"
+        if negative.size
+        else ""
     )
-    axes[1].set_title(f"Same slice, spline of implied vol. Largest jump: {spline_jump:.3f}.")
-    fig.tight_layout()
+    axes[1].set_title(f"Spline: largest jump {spline_jump:.3f}{neg_text}", fontsize=10)
+    fig.suptitle(
+        "At the money, local variance is constant between expiries and jumps at each one,\n"
+        "because total variance is linear in T between slices; the spline's noisy strike\n"
+        "derivatives make it jump further and go negative",
+        fontsize=10.5,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "SPXW mids, CBOE delayed, 14 Oct 2026; k = 0, one sample in each gap between "
+        "quoted expiries.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.84)
     fig.savefig(FIG / "p2d_calendar_jumps.png", dpi=140)
     plt.close(fig)
     pd.DataFrame(cal_rows).to_csv(FIG / "p2d_calendar_jumps.csv", index=False)
@@ -202,11 +251,42 @@ def _max_abs_frame(block: pd.DataFrame) -> float:
     return float(np.max(np.abs(values)))
 
 
-def _step(ax, expiries: np.ndarray, levels: np.ndarray, color: str) -> None:
+def _step(ax, expiries: np.ndarray, levels: np.ndarray, color: str, label: str) -> None:
     """Draw a level that is constant on each ``[expiries[i], expiries[i+1]]``."""
     edges = np.repeat(expiries, 2)[1:-1]
     heights = np.repeat(levels, 2)
-    ax.plot(edges, heights, color=color, lw=1.1)
+    ax.plot(edges, heights, color=color, lw=1.1, label=label)
+
+
+def _sci(x: float) -> str:
+    """A magnitude for a title: plain below 1,000, otherwise mathtext powers of ten."""
+    if not np.isfinite(x):
+        return "nan"
+    if abs(x) < 1000:
+        return f"{x:.3g}"
+    exponent = int(np.floor(np.log10(abs(x))))
+    return f"${x / 10**exponent:.1f} \\times 10^{{{exponent}}}$"
+
+
+def _symlog_ticks(ax, values: np.ndarray) -> None:
+    """Powers of ten every other decade on a symlog axis, and one zero.
+
+    The default locator labels every decade on both sides, and the labels
+    either side of zero collide.
+    """
+    finite = values[np.isfinite(values)]
+    top = max(float(finite.max()), 0.1)
+    bottom = min(float(finite.min()), 0.0)
+    up = int(np.ceil(np.log10(top)))
+    ticks = [0.0]
+    step = 1 if up <= 2 else 2
+    ticks += [10.0**e for e in range(up, -2, -step) if 10.0**e >= 0.1]
+    if bottom < -0.1:
+        down = int(np.ceil(np.log10(-bottom)))
+        step = 1 if down <= 2 else 2
+        ticks += [-(10.0**e) for e in range(down, -2, -step) if 10.0**e >= 0.1]
+    ax.set_yticks(sorted(ticks))
+    ax.set_ylim(1.3 * bottom if bottom < 0 else -0.05, 1.3 * top)
 
 
 def _largest_step(values: np.ndarray) -> float:
