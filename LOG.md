@@ -4,6 +4,33 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The draft pre-registration is pinned and is not frozen. A day is `1/252` of a trading year. L1 matures in 21 trading days and L2's life is 30 trading days. The episode starts at `t0 = 0.5`, with the burn-in visible to the filter. P&L is per unit of the liability's time-0 premium at `lambda = 0.1`. The path counts are 100,000 train, 20,000 validation and 20,000 test. Validation is only for early stopping and selection. The bootstrap is hierarchical, paired, percentile, with `B = 10,000`. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The hedger's probability is the spot filter by default; the gate uses rv. Prices do not read that probability. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `state["xi"]` is the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. `surface_at` prices the call on that curve. Each copy runs the regime chain forward from the current true regime. Given the `nu` path so far, the variance swap is a martingale up to a tail-weight bias of about -0.1 percent of the quote. The call is a martingale by construction up to Monte Carlo error, because each copy replicates the simulator's law. The tail-weight bias does not enter the call. The surface grid from the clock to the last expiry is equally spaced. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `Q5 = 2.3 Q`, `Q0.5 = 23 Q`, the ratio grid, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda = 0.1`, the day, the episode start, the path counts, the bootstrap, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that pinned draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
+## 2026-10-22 Session 00 Heston fit: a discontinuous loss, and a reproducible refit
+
+The README fit (`rho = -0.5334`, cost 0.7454, entry below) did not reproduce:
+the same script on numpy 2.4.6 and scipy 1.17.1 stopped at `rho = -0.6995`,
+cost 0.6472. The cause is the loss, not the optimiser. At the 10-hour expiry
+the outer call strike of the `skew_window` grid prices near `4e-7` of the
+forward. `bs.implied_vol` at its default `tol = 1e-12` meets the tolerance on
+some parameter sets and returns NaN on neighbouring ones. The strike leaves the
+quadratic fit and the front skew jumps by about 0.13 under a relative change of
+`2e-4` in `rho`. Each start then stopped on `xtol` wherever it met a jump.
+
+`smile.model_term_structure` takes `iv_tol`; at `1e-8` every strike inverts and
+the loss is smooth (largest second difference along each axis about `2e-6`,
+against 0.5 before). `docs/figure_00.py` now uses it with the three old starts
+plus 32 scrambled Sobol starts (seed 0). Result: cost 0.5288, `v0 = 0.0100`
+and `xi = 2.000` on the box edge, `rho = -0.5515`, Feller ratio 0.17. Of 35
+starts, 27 end within 1% of the best cost; across those, `rho` spans -0.553 to
+-0.551 while `kappa` spans 2.0 to 7.1 and `theta` 0.05 to 0.15, so the level
+of mean reversion is not identified by this loss. Model skew against the
+market: -2.115 against -2.965 at the front, -2.101 against -1.989 at 1.42
+days, -1.236 against -1.057 at 7.42 days, -0.241 against -0.282 at 351 days.
+The T to 0 limit `rho xi / (4 sqrt(v0))` is -2.757. Below about 1.6 days the
+local log-log slope of the model skew falls under half the market's 0.333.
+Under the smooth loss the old README parameters cost 0.8379 and the
+`rho = -0.6995` rerun costs 0.7604. Two runs of the script give identical
+output.
+
 ## 2026-10-19 Review: path-bootstrap intervals for the gate filter skills
 
 The three gate filter skills on the 4,000-path draw, clock index 10, are spot 0.1178, windowed 0.2071 and latent 0.2849. A path bootstrap of 10,000 resamples gives 95 percent intervals [0.0915, 0.1439], [0.1794, 0.2339] and [0.2556, 0.3137]. Windowed minus spot is 0.0893, interval [0.0604, 0.1190]. Latent minus windowed is 0.0778, interval [0.0616, 0.0943]. Hit rates are 0.6608, 0.7048 and 0.7438, with intervals [0.6463, 0.6755], [0.6905, 0.7188] and [0.7300, 0.7573].
