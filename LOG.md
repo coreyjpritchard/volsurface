@@ -40,6 +40,27 @@ unchanged; only the dependency versions differed, and those were not recorded
 on 14 October. Detail: `docs/notes/heston_fit_old_vs_new.md`,
 `scripts/heston_fit_old_vs_new.py`.
 
+Later the same day: the fit above ends on two edges of the session box
+(`v0 >= 0.01`, `xi <= 2`), so its flat short end was set by the box. In a
+wider box (`v0` in [1e-4, 0.15], `kappa` in [0.1, 50], `theta` in [0.001,
+0.3], `xi` in [0.05, 5]), same loss and same seeded design (34 of 35 starts
+have finite residuals; the other is skipped), the cost falls from 0.5288 to
+0.0658: `v0 = 0.00292`, `kappa = 10.15`, `theta = 0.0563`, `xi = 5.000` on
+the new edge, `rho = -0.6218`, Feller ratio 0.046. The model skew now follows
+the market: -2.782 against -2.965 at the front, -2.128 against -1.989 at 1.42
+days, -1.076 against -1.057 at 7.42 days, -0.290 against -0.282 at 351 days.
+The price is the at-the-money level: 0.056 against 0.151 at the front and
+0.048 against 0.120 at 1.42 days (`sqrt(v0) = 0.054`; the narrow-box fit had 0.099 at the
+front), rmse 0.0365 against
+0.0158 in the narrow box. The T to 0 limit is -14.39. With `xi <= 10`
+(`XI_MAX=10`) `xi` again ends on the edge: cost 0.0197, `v0 = 0.00553`,
+`kappa = 20.76`, `rho = -0.5584`, Feller ratio 0.028, front skew -2.930 and
+front level 0.070. So on this loss Heston has no interior optimum in `xi`:
+it buys the short-end skew with vol-of-vol and a low `v0`, and pays in the
+short-dated level. "Heston goes flat below about 2 days" was a statement
+about the box and is withdrawn. `docs/figure_00.py` now uses the `xi <= 5`
+box and says so in its caption.
+
 ## 2026-10-19 Review: path-bootstrap intervals for the gate filter skills
 
 The three gate filter skills on the 4,000-path draw, clock index 10, are spot 0.1178, windowed 0.2071 and latent 0.2849. A path bootstrap of 10,000 resamples gives 95 percent intervals [0.0915, 0.1439], [0.1794, 0.2339] and [0.2556, 0.3137]. Windowed minus spot is 0.0893, interval [0.0604, 0.1190]. Latent minus windowed is 0.0778, interval [0.0616, 0.0943]. Hit rates are 0.6608, 0.7048 and 0.7438, with intervals [0.6463, 0.6755], [0.6905, 0.7188] and [0.7300, 0.7573].

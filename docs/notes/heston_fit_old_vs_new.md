@@ -76,3 +76,31 @@ same basin as the current fit.
   `rho` between -0.553 and -0.551. `v0` and `xi` end on the edge of the box,
   and `kappa` and `theta` are not identified (kappa from 2.0 to 7.1 across
   those starts), so only `rho`, the skews and the cost should be quoted.
+
+## Update, later on 22 October: the box was binding
+
+The 22 October fit above ends with `v0` and `xi` on the edge of the session
+box, so its flat short end was a property of the box. `docs/figure_00.py`
+now uses a wider box, `v0` in [1e-4, 0.15], `kappa` in [0.1, 50], `theta` in
+[0.001, 0.3], `xi` in [0.05, 5], with the same loss and seeded design. One of
+the 35 starts has non-finite residuals in this box and is skipped.
+
+| | session box (`xi <= 2`) | `xi <= 5` (current figure) | `xi <= 10` (`XI_MAX=10`) |
+|---|---|---|---|
+| cost | 0.5288 | 0.0658 | 0.0197 |
+| v0, kappa, theta | 0.0100, 4.11, 0.0806 | 0.00292, 10.15, 0.0563 | 0.00553, 20.76, 0.0670 |
+| xi, rho | 2.000, -0.5515 | 5.000, -0.6218 | 10.000, -0.5584 |
+| on the bound | v0, xi | xi | xi |
+| Feller ratio | 0.17 | 0.046 | 0.028 |
+| front skew (market 2.965) | 2.115 | 2.782 | 2.930 |
+| skew at 351 days (market 0.282) | 0.241 | 0.290 | 0.263 |
+| front ATM vol (market 0.151) | 0.099 | 0.056 | 0.070 |
+| ATM rmse over 40 expiries | 0.0158 | 0.0365 | 0.0240 |
+
+The cost keeps falling as the `xi` bound rises, so this loss has no interior
+optimum in `xi`. Heston buys the short-end skew with a large vol-of-vol and a
+small `v0` (the T to 0 skew limit is `rho xi / (4 sqrt(v0))`), and pays for it
+in the short-dated at-the-money level, which tends to `sqrt(v0)`. The earlier
+README sentence that calibrated Heston "goes flat below about 2 days" was a
+property of the session box and is withdrawn. The power law and the 14 and
+22 October explanations above are unaffected.

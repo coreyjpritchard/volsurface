@@ -3,9 +3,15 @@
 
 The Heston parameters are refit here. The loss is the at-the-money level and
 skew at every expiry, unweighted, in one residual vector, minimised with scipy
-``least_squares`` (``trf``). The box is the session slider box with kappa
-allowed up to 20: v0 in [0.01, 0.15], kappa in [0.1, 20], theta in
-[0.01, 0.15], xi in [0.05, 2], rho in [-0.99, 0.99].
+``least_squares`` (``trf``). The box is v0 in [1e-4, 0.15], kappa in [0.1, 50],
+theta in [0.001, 0.3], xi in [0.05, 5], rho in [-0.99, 0.99]. ``XI_MAX=10``
+raises the xi bound and writes ``docs/00_the_smile_xi10.png`` instead.
+
+Earlier versions used the session slider box (v0 >= 0.01, xi <= 2). The fit
+ended on both of those edges, so its flat short end was set by the box and not
+by the data. In the wider box v0 moves inside and only xi stays on its edge.
+Starts whose residuals are not finite are skipped (one of 35), and a residual
+that turns non-finite during a fit is replaced by 10.
 
 The fit is a seeded multi-start: the three hand-picked starts used before,
 plus 32 points of a scrambled Sobol sequence (seed 0) spread over the box.
@@ -20,6 +26,7 @@ discontinuous. Earlier versions of this figure fitted that discontinuous loss,
 which is why their result depended on the optimiser's path.
 """
 
+import os
 from pathlib import Path
 
 import matplotlib
@@ -34,9 +41,11 @@ from scipy.stats import qmc  # noqa: E402
 
 from volsurface import chains, models, smile  # noqa: E402
 
-# Slider box from sessions/00_the_smile.py, with the kappa upper used in LOG.md.
-LO = np.array([0.01, 0.1, 0.01, 0.05, -0.99])
-HI = np.array([0.15, 20.0, 0.15, 2.0, 0.99])
+# Wide enough that only xi, the parameter the short-end skew needs, can bind.
+LO = np.array([1e-4, 0.1, 0.001, 0.05, -0.99])
+# XI_MAX=10 python docs/figure_00.py reruns the fit with a wider xi bound (README).
+XI_MAX = float(os.environ.get("XI_MAX", "5"))
+HI = np.array([0.15, 50.0, 0.3, XI_MAX, 0.99])
 NAMES = ("v0", "kappa", "theta", "xi", "rho")
 HAND_STARTS = (
     np.array([0.011, 3.0, 0.04, 0.4, -0.9]),
@@ -71,7 +80,15 @@ def _residuals(x: np.ndarray) -> np.ndarray:
 
 
 # %% Fit
-results = [least_squares(_residuals, x0, bounds=(LO, HI), method="trf") for x0 in starts()]
+def _safe(x: np.ndarray) -> np.ndarray:
+    r = _residuals(x)
+    return np.where(np.isfinite(r), r, 10.0)
+
+
+all_starts = starts()
+finite_starts = [x0 for x0 in all_starts if np.all(np.isfinite(_residuals(x0)))]
+print(f"starts with finite residuals: {len(finite_starts)} of {len(all_starts)}")
+results = [least_squares(_safe, x0, bounds=(LO, HI), method="trf") for x0 in finite_starts]
 order = sorted(range(len(results)), key=lambda i: (round(float(results[i].cost), 10), i))
 best = results[order[0]]
 n_hit = sum(abs(r.cost - best.cost) <= 1e-6 * best.cost for r in results)
@@ -160,7 +177,7 @@ handles += [
 ax.set(
     xlabel="log-moneyness k = log(K/F)",
     ylabel="implied volatility",
-    ylim=(0.05, 0.56),
+    ylim=(0.0, 0.6),
     title="Smiles: market quotes against one Heston fit",
 )
 ax.grid(True, alpha=0.3)
@@ -170,7 +187,7 @@ ax = fig.add_subplot(1, 2, 2)
 ax.loglog(365 * maturities, -market_skew, "o", ms=4, color="#d62728",
           label="SPX ATM skew, one dot per expiry")
 ax.loglog(365 * T_line, A * T_line**-alpha, ":", color="#d62728",
-          label=f"power law {A:.3f} T^-{alpha:.3f} (T in years), H = {H:.2f}")
+          label=f"power law ${A:.3f}\\,T^{{-{alpha:.3f}}}$ (T in years), H = {H:.2f}")
 ax.loglog(365 * T_line, model_line, color="#1f77b4", label="Heston, calibrated")
 xt = [0.5, 1, 2, 7, 30, 91, 365]
 ax.xaxis.set_major_locator(FixedLocator(xt))
@@ -187,21 +204,26 @@ ax.set(
 )
 ax.grid(True, which="major", alpha=0.3)
 ax.legend(fontsize=8, loc="lower left")
+feller = 2 * fit.kappa * fit.theta / fit.xi**2
+xi_text = f"xi on its bound of {HI[3]:g}" if "xi" in at_bound else f"xi = {fit.xi:.2f}"
 fig.suptitle(
-    f"SPX ATM skew follows the $T^{{-1/3}}$ power law (H \u2248 {H:.2f}); "
-    f"calibrated Heston goes flat below about {flat_days:.0f} days",
+    f"SPX ATM skew follows the $T^{{-1/3}}$ power law (H \u2248 {H:.2f}). Heston can follow it "
+    f"only with {xi_text},\nand then its short-dated ATM vol is far too low "
+    f"({100 * pred[0, 0]:.1f}% against {100 * market_atm[0]:.1f}% at 10 hours)",
     fontsize=12,
 )
 fig.text(
     0.5,
     0.012,
     f"{SOURCE}. {len(ts)} expiries, 10 hours to 351 days. Heston is fitted to the ATM "
-    f"level and skew of every expiry; the fit ends on the box edge ({bound_text}).",
+    f"level and skew of every expiry with xi <= {HI[3]:g} and v0 >= {LO[0]:g}; "
+    f"on the bound: {bound_text or 'none'}. Feller ratio {feller:.2f}.",
     ha="center",
     fontsize=8,
     color="0.3",
 )
-fig.tight_layout(rect=(0, 0.03, 1, 0.96))
-out = Path(__file__).with_name("00_the_smile.png")
+fig.tight_layout(rect=(0, 0.03, 1, 0.93))
+suffix = "" if XI_MAX == 5.0 else f"_xi{XI_MAX:g}"
+out = Path(__file__).with_name(f"00_the_smile{suffix}.png")
 fig.savefig(out, dpi=110)
 print(out)
