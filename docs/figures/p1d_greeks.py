@@ -88,31 +88,35 @@ def main() -> None:
     counts = [1_000, 4_000, 16_000, 64_000]
     seeds = range(6)
     engines = [
-        ("pathwise", Pathwise(F, df), "C0"),
-        ("autodiff", Autodiff(F, df), "C1"),
-        ("likelihood ratio", LikelihoodRatio(F, df), "C3"),
+        ("pathwise", Pathwise(F, df), "C0", "o", 7),
+        ("autodiff (same derivative, lies on pathwise)", Autodiff(F, df), "C1", "x", 6),
+        ("likelihood ratio", LikelihoodRatio(F, df), "C3", "s", 4),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(12.4, 4.3))
+    fig, axes = plt.subplots(1, 3, figsize=(15.0, 4.9))
     ax = axes[0]
     pathwise_start = None
-    for label, engine, colour in engines:
+    for label, engine, colour, marker, size in engines:
         xs, ys = [], []
         for n in counts:
             error, n_evals = _rmse(engine, model, contracts, truth, n, seeds)
             xs.append(n_evals)
             ys.append(error)
-        ax.loglog(xs, ys, marker="o", color=colour, label=label)
+        ax.loglog(xs, ys, marker=marker, ms=size, color=colour, label=label,
+                  mfc="none" if marker == "o" else colour)
         if pathwise_start is None:
             pathwise_start = (xs[0], ys[0])
     # Slope -1/2: four times the paths, half the error. Anchored on pathwise.
     guide_x = np.array([pathwise_start[0], counts[-1]])
     guide_y = pathwise_start[1] * np.sqrt(pathwise_start[0] / guide_x)
-    ax.loglog(guide_x, guide_y, color="0.4", lw=0.8, label="slope -1/2")
-    ax.set_xlabel("evaluations (paths)")
-    ax.set_ylabel("RMSE of the forward delta")
-    ax.set_title("Likelihood ratio sits above. Six seeds, shared strikes.")
-    ax.legend(frameon=False, fontsize=8)
+    ax.loglog(
+        guide_x, guide_y, color="0.4", lw=0.8,
+        label="slope $-1/2$ (error halves when paths quadruple)",
+    )
+    ax.set_xlabel("Monte Carlo paths")
+    ax.set_ylabel("RMSE of the delta (9 strikes, 6 seeds)")
+    ax.set_title("Monte Carlo delta: error against paths", fontsize=10)
+    ax.legend(frameon=False, fontsize=7, loc="upper right")
     ax.grid(True, which="both", alpha=0.3)
 
     ax = axes[1]
@@ -127,10 +131,14 @@ def main() -> None:
         error[i] = abs(float(got.value[0, 0]) - atm_truth)
     ax.loglog(bumps, error, color="C2", marker="o", ms=3.5)
     valley = int(np.argmin(error))
-    ax.plot(bumps[valley], error[valley], "o", color="k", ms=6, label="smallest error")
-    ax.set_xlabel("bump in the forward")
+    ax.plot(
+        bumps[valley], error[valley], "o", color="k", ms=6,
+        label=f"smallest error, bump {bumps[valley]:.1e}",
+    )
+    ax.loglog([], [], color="C2", marker="o", ms=3.5, label="closed-form delta, central difference")
+    ax.set_xlabel("bump h in the forward (forward = 100)")
     ax.set_ylabel("absolute error of the delta")
-    ax.set_title("Closed form. Too large truncates, too small rounds.")
+    ax.set_title("Bumping the formula: truncation right, rounding left", fontsize=10)
     ax.legend(frameon=False, fontsize=8)
     ax.grid(True, which="both", alpha=0.3)
 
@@ -159,18 +167,36 @@ def main() -> None:
         printed.append((label, float(mc_bumps[best]), float(rmse[best]), rmse))
     # Central-difference truncation. Delta bias is h² |f'''| / 6. Gamma bias is h² |f''''| / 12.
     ax.loglog(
-        mc_bumps, mc_bumps**2 * abs(third) / 6.0, color="k", lw=0.9, label="delta bias",
+        mc_bumps, mc_bumps**2 * abs(third) / 6.0, color="k", lw=0.9,
+        label="delta truncation bias, $h^2|f^{(3)}|/6$",
     )
     ax.loglog(
-        mc_bumps, mc_bumps**2 * abs(fourth) / 12.0, color="k", lw=0.9, ls=":", label="gamma bias",
+        mc_bumps, mc_bumps**2 * abs(fourth) / 12.0, color="k", lw=0.9, ls=":",
+        label="gamma truncation bias, $h^2|f^{(4)}|/12$",
     )
-    ax.set_xlabel("bump in the forward")
-    ax.set_ylabel("RMSE at 4,000 paths")
-    ax.set_title("4,000 paths. Shared delta stays flat; bias is below.")
-    ax.legend(frameon=False, fontsize=7)
+    ax.set_xlabel("bump h in the forward (forward = 100)")
+    ax.set_ylabel("RMSE at 4,000 paths, 8 seeds")
+    ax.set_title("Bumping a Monte Carlo price", fontsize=10)
+    ax.legend(frameon=False, fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1.0))
     ax.grid(True, which="both", alpha=0.3)
 
-    fig.tight_layout()
+    fig.suptitle(
+        "Pathwise and autodiff deltas beat the likelihood ratio at every path count. Bumping works "
+        "on the formula\n(best bump near 3e-4), but on a Monte Carlo price only shared paths keep "
+        "the delta usable at small bumps",
+        fontsize=11,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "Simulation: Black-Scholes, at-the-money call on a forward of 100, volatility 20%, "
+        "expiry 1 year, exact GBM in one step. Left: 9 strikes, log-moneyness "
+        "$-0.2$ to 0.2, seeds 0 to 5. Right: seeds 0 to 7.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.84)
     fig.savefig(OUT, dpi=140)
     print(f"wrote {OUT}")
     print(f"valley bump={bumps[valley]:.3e} error={error[valley]:.3e}")

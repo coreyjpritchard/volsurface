@@ -1,5 +1,19 @@
 # P1b: three ways to join the dots, and two ways to say "arbitrage"
 
+## How to read this
+
+The top panel is one SPX expiry's smile drawn three ways; the middle panel is
+the risk-neutral density each curve implies; the bottom panel is Durrleman's
+`g`, which is negative exactly where an SVI slice implies a negative density.
+The takeaway is that passing through every quote is not the same as being
+arbitrage-free. A cubic spline in implied vol bends freely between noisy
+mids, and since the density is the second strike derivative of the call price,
+every wiggle turns into a spike or a negative patch. Past the last strike
+nothing anchors it at all. Raw SVI is smooth and passes on this expiry, but a
+least-squares fit does not impose `g >= 0`, and 24 of the 40 slices fail. The
+caveat: the expiry was picked by the script as the worst spline wing in the
+file, so it shows the spline at its worst, not a typical slice.
+
 ## What to watch
 
 The figure `docs/figures/p1b_surfaces.png` uses the saved SPX chain. The dots
@@ -10,8 +24,8 @@ The top two panels are 30 October 2026, T = 0.044975, 466 strikes, log-moneyness
 from -0.555 to 0.099. The script picks this expiry because the natural cubic,
 continued 0.12 in log-moneyness past each end of the quotes, reaches the lowest
 implied vol in the file. On this slice that minimum is -24.95. The same grid's
-maximum is 1.53. The panel's axis runs from -100% to 80%, so both ends leave
-the frame. The last expiry in the file, 30 September 2027, does not do this:
+maximum is 1.53. The panel's axis runs from -10% to just above the highest
+quote, so the right wing leaves through the bottom, and an arrow marks where. The last expiry in the file, 30 September 2027, does not do this:
 its extrapolated minimum is about 0.040.
 
 Inside the quoted strikes the cubic spline passes through every dot. Raw SVI

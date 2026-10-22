@@ -1,5 +1,18 @@
 # P1c: one set of paths, a whole surface
 
+## How to read this
+
+The top panel is the implied vol recovered from Monte Carlo prices of
+out-of-the-money options under a model whose true implied vol is a flat 20%;
+the bottom panel is the same error in vol points. The takeaway is that one
+set of 8,000 paths prices a whole surface to within about 0.6 vol points at 3
+months and a year. The 1-week put wing is the exception. There a strike 3 or
+more standard deviations out is reached by only a handful of paths, so the
+price estimate is noisy, and a tiny vega turns a small price error into a
+large vol error. At the two outermost 1-week strikes no path arrives at all
+and there is nothing to invert. The caveat: this is one seed, and the shift
+of the one-year curve is sampling noise of that seed, not a bias.
+
 ## What to watch
 
 The figure `docs/figures/p1c_gbm.png` is geometric Brownian motion with
