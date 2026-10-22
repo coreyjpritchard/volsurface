@@ -51,7 +51,7 @@ Bergomi plugin. It is not the SPX skew-route value 0.167.
 
 The low-regime vol of vol is `nu_L = 1.5`, the same plugin's default
 `nu`. The primary ratio `nu_H / nu_L` is 2, so `nu_H = 3`. H1, H2 and H3
-use this one specification. The proposal's symbol for this vol of vol is
+use this one specification. The rough Bergomi literature writes this vol of vol as
 `eta`. In this repository the parameter is `nu`.
 
 The primary risk is entropic risk of P&L per unit of the liability's

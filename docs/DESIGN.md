@@ -647,7 +647,7 @@ Rules:
   `needs-corey`. `blocked-on-data` and `cut-list` are for later phases.
 - Two pull requests do not edit the same module. `core/protocols.py`
   changes only in a design pull request.
-- A number reaches the site, the research statement, or the question bank
+- A number reaches the README or any write-up
   only after the pull request that produced it has been merged and written
   into `LOG.md`.
 
