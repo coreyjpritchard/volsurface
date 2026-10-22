@@ -166,3 +166,7 @@ correction. It is a draft and is not frozen, and there are no results yet.
 ## Licence
 
 MIT.
+
+---
+
+<sub>Built with the help of AI coding tools; all results are reproducible from the scripts in this repo.</sub>
