@@ -20,6 +20,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
+from matplotlib.ticker import NullLocator
 
 from volsurface import bs, chains
 from volsurface.core.market import market_data_from_snapshot
@@ -32,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "docs" / "figures"
 FO = dict(v0=0.0175, kappa=1.5768, theta=0.0398, xi=0.5751, rho=-0.5711)
 FO_CALL = 5.785155450
+SOURCE = "SPXW mids, CBOE delayed, 14 Oct 2026"
 
 
 def cos_error_against_n() -> pd.DataFrame:
@@ -60,14 +63,23 @@ def cos_error_against_n() -> pd.DataFrame:
         frame["N"],
         np.abs(frame["cos_minus_reference"]),
         marker="o",
-        label="COS minus reference",
+        label="|COS minus reference|",
     )
     ax.axhline(abs(lewis - FO_CALL), color="k", lw=0.8, label="|Lewis minus reference|")
-    ax.axvline(COS_N, color="0.5", lw=0.8, ls="--", label=f"N = {COS_N}")
-    ax.set_xlabel("number of cosine terms N")
-    ax.set_ylabel("absolute error in the cash call")
-    ax.set_title("Fang and Oosterlee, T = 1, K = F = 100, L = 10")
-    ax.grid(True, which="both", alpha=0.3)
+    ax.axvline(COS_N, color="0.5", lw=0.8, ls="--", label=f"default N = {COS_N}")
+    ax.set_xticks(frame["N"], [str(n) for n in frame["N"]])
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.set_yticks([1e-8, 1e-6, 1e-4, 1e-2, 1])
+    ax.yaxis.set_minor_locator(NullLocator())
+    ax.set_xlabel("number of cosine terms N (log scale)")
+    ax.set_ylabel("absolute error in the call, cash units (F = 100)")
+    at_default = float(np.abs(frame.loc[frame["N"] == COS_N, "cos_minus_reference"].iloc[0]))
+    ax.set_title(
+        f"COS error falls fast in N: {at_default:.0e} at the default N = {COS_N}\n"
+        "Fang and Oosterlee (2008) Heston test case, T = 1, K = F = 100, L = 10",
+        fontsize=9,
+    )
+    ax.grid(True, which="major", alpha=0.3)
     ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
     fig.savefig(FIG / "p2c_cos_error.png", dpi=140)
@@ -94,19 +106,26 @@ def lewis_minus_cos() -> pd.DataFrame:
     frame.to_csv(FIG / "p2c_lewis_minus_cos.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(6.8, 4.4))
-    image = ax.imshow(
-        gap,
-        origin="lower",
-        aspect="auto",
-        extent=[log_k[0], log_k[-1], 0, maturities.size - 1],
-        cmap="coolwarm",
+    names = ["7 days", "1 month", "3 months", "6 months", "1 year", "2 years"]
+    for i, name in enumerate(names):
+        ax.plot(log_k, 1e8 * gap[i], marker="o", ms=3, lw=1, label=name)
+    ax.axhline(0.0, color="k", lw=0.6)
+    ax.set_xlabel("log-moneyness k = log(K/F)")
+    ax.set_ylabel("Lewis minus COS, cash price (units of 1e-8, F = 100)")
+    ax.set_title(
+        f"Lewis and COS agree to {np.abs(gap).max():.0e} in cash (F = 100) on the whole grid\n"
+        "Fang and Oosterlee (2008) Heston parameters, COS with N = 256, L = 10",
+        fontsize=9,
     )
-    ax.set_yticks(range(maturities.size))
-    ax.set_yticklabels([f"{t:.3f}" for t in maturities])
-    ax.set_xlabel("log-moneyness k")
-    ax.set_ylabel("maturity T (year fraction)")
-    ax.set_title("Lewis minus COS, cash price, N = 256, L = 10")
-    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="cash price")
+    ax.grid(True, alpha=0.3)
+    ax.legend(
+        title="maturity",
+        frameon=False,
+        fontsize=8,
+        ncol=3,
+        loc="center",
+        bbox_to_anchor=(0.5, 0.58),
+    )
     fig.tight_layout()
     fig.savefig(FIG / "p2c_lewis_minus_cos.png", dpi=140)
     plt.close(fig)
@@ -173,7 +192,8 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
             chosen.append(label)
 
     smile_rows = []
-    fig, ax = plt.subplots(figsize=(6.8, 4.4))
+    fig, ax = plt.subplots(figsize=(7.4, 5.0))
+    handles = []
     for label in chosen:
         group = data.quotes[data.quotes["expiry"] == label].sort_values("k")
         maturity = float(group["T"].iloc[0])
@@ -183,20 +203,12 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         kind = group["kind"].to_numpy()
         model_price = model.price(forward, strike, maturity, discount, kind)
         model_iv = bs.implied_vol(model_price, forward, strike, maturity, discount, kind)
-        (market_line,) = ax.plot(
-            group["k"],
-            100 * group["iv"],
-            marker="o",
-            ms=3.5,
-            lw=0,
-            label=f"market T={maturity:.3f}",
-        )
-        ax.plot(
-            group["k"],
-            100 * model_iv,
-            lw=1.2,
-            color=market_line.get_color(),
-            label=f"Heston T={maturity:.3f}",
+        (market_line,) = ax.plot(group["k"], 100 * group["iv"], marker="o", ms=3.5, lw=0)
+        ax.plot(group["k"], 100 * model_iv, lw=1.2, color=market_line.get_color())
+        n_days = 365.0 * maturity
+        name = f"{n_days:.0f} days" if n_days >= 1.5 else f"{24 * n_days:.0f} hours"
+        handles.append(
+            Line2D([], [], color=market_line.get_color(), marker="o", ms=3.5, label=name)
         )
         for k, market_iv, fitted_iv in zip(group["k"], group["iv"], model_iv, strict=True):
             smile_rows.append(
@@ -207,12 +219,28 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
                     "model_iv": float(fitted_iv),
                 }
             )
-    ax.set_xlabel("log-moneyness k")
+    handles += [
+        Line2D([], [], color="0.3", marker="o", ms=3.5, lw=0, label="dots: SPXW mid quotes"),
+        Line2D([], [], color="0.3", lw=1.2, label="lines: Heston, full-price fit"),
+    ]
+    ax.set_xlabel("log-moneyness k = log(K/F)")
     ax.set_ylabel("implied volatility (%)")
-    ax.set_title("Heston fit against SPX mids, 14 Oct 2026")
+    ax.set_title(
+        f"One Heston fit to all 40 expiries (prices, vega weighted) needs xi = {model.xi:.2f}\n"
+        f"and a Feller ratio of {model.feller_ratio():.2f}; shown at four expiries",
+        fontsize=9,
+    )
     ax.grid(True, alpha=0.3)
-    ax.legend(frameon=False, fontsize=7)
-    fig.tight_layout()
+    ax.legend(handles=handles, title="expiry", frameon=False, fontsize=8)
+    fig.text(
+        0.5,
+        0.01,
+        f"{SOURCE}. Up to 11 strikes per expiry with |k| <= 0.4.",
+        ha="center",
+        fontsize=7,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(FIG / "p2c_spx_smiles.png", dpi=140)
     plt.close(fig)
     smiles = pd.DataFrame(smile_rows)
@@ -247,22 +275,50 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
 
     finite = skew[np.isfinite(skew["market_skew"]) & np.isfinite(skew["model_skew"])]
     short = finite.iloc[0]
-    long = finite.iloc[-1]
-    fig, ax = plt.subplots(figsize=(6.8, 4.4))
-    ax.plot(finite["T"], finite["market_skew"], marker="o", ms=3.5, label="SPX mids")
-    ax.plot(finite["T"], finite["model_skew"], marker="s", ms=3.5, label="fitted Heston")
-    ax.axhline(0.0, color="k", lw=0.6)
-    ax.set_xlabel("maturity T (year fraction)")
-    ax.set_ylabel("ATM skew d iv / d k")
+    over = finite[np.abs(finite["model_skew"]) > np.abs(finite["market_skew"]) * 1.05]
+    fig, ax = plt.subplots(figsize=(7.4, 5.0))
+    days = 365.0 * finite["T"]
+    ax.loglog(
+        days, np.abs(finite["market_skew"]), "o", ms=4.5, color="k", label="SPX, one dot per expiry"
+    )
+    ax.loglog(
+        days,
+        np.abs(finite["model_skew"]),
+        "s-",
+        ms=3.5,
+        mfc="none",
+        color="C1",
+        lw=1,
+        label=f"Heston, full-price fit: xi = {model.xi:.2f}, kappa = {model.kappa:.1f}, "
+        f"Feller ratio {model.feller_ratio():.2f}",
+    )
+    xt = [0.5, 1, 2, 7, 30, 91, 365]
+    ax.set_xticks(xt, [f"{x:g}" for x in xt])
+    ax.xaxis.set_minor_locator(NullLocator())
+    yt = [0.2, 0.3, 0.5, 1, 2, 3]
+    ax.set_yticks(yt, [f"{y:g}" for y in yt])
+    ax.yaxis.set_minor_locator(NullLocator())
+    ax.set_xlabel("maturity (calendar days, log scale)")
+    ax.set_ylabel("ATM skew |d(iv)/dk| at k = 0 (log scale)")
     ax.set_title(
-        f"T={short['T']:.4f}: market {short['market_skew']:.2f}, "
-        f"model {short['model_skew']:.2f}. "
-        f"T={long['T']:.3f}: market {long['market_skew']:.2f}, "
-        f"model {long['model_skew']:.2f}."
+        f"Fitting prices, Heston matches the 10-hour skew ({abs(short['model_skew']):.2f} "
+        f"against {abs(short['market_skew']):.2f})\nonly with a Feller-violating "
+        f"xi = {model.xi:.2f}, and then overshoots from "
+        f"{365 * over['T'].min():.0f} to {365 * over['T'].max():.0f} days",
+        fontsize=9,
     )
     ax.grid(True, alpha=0.3)
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
+    ax.legend(frameon=False, fontsize=8, loc="lower left")
+    fig.text(
+        0.5,
+        0.01,
+        f"{SOURCE}. Skew: quadratic fit for |k| <= max(0.15 sqrt(T), 0.01).\n"
+        "The headline figure fits ATM level and skew directly, with xi capped at 2.",
+        ha="center",
+        fontsize=7,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(FIG / "p2c_spx_skew.png", dpi=140)
     plt.close(fig)
     return smiles, skew, model
@@ -316,6 +372,11 @@ def main() -> None:
     )
     print(f"skew T={long['T']:.4f} market {long['market_skew']:.3f} model {long['model_skew']:.3f}")
     print(json.loads((FIG / "p2c_spx_fit.json").read_text()))
+    over = finite[np.abs(finite["model_skew"]) > 1.05 * np.abs(finite["market_skew"])]
+    print(
+        f"heston skew above market by >5%: {365 * over['T'].min():.2f} to "
+        f"{365 * over['T'].max():.2f} days, {len(over)} expiries"
+    )
 
 
 if __name__ == "__main__":
