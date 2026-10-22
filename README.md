@@ -20,15 +20,27 @@ for the ladder and [LOG.md](LOG.md) for what each session found.
 
 ## Run it
 
-Python 3.11 or later.
+Python 3.11. Dependencies are pinned in `uv.lock` ([uv](https://docs.astral.sh/uv/)); torch
+comes from the CPU wheel index. One command rebuilds the environment, runs the fast tests
+and redraws the README figure:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,data]"                 # once
-marimo run sessions/00_the_smile.py          # the app: sliders, surface, smile
-marimo edit sessions/00_the_smile.py         # the same, with the code
-pytest -m "not slow"                         # tests; add --impl exercises for your own code
+make reproduce
+# the same by hand:
+uv sync --locked --extra dev --extra autodiff
+uv run pytest -m "not slow"
+uv run python docs/figure_00.py
 ```
+
+The interactive app:
+
+```bash
+uv run marimo run sessions/00_the_smile.py   # sliders, surface, smile
+uv run marimo edit sessions/00_the_smile.py  # the same, with the code
+```
+
+Plain pip also works (`pip install -e ".[dev]"`, then `pytest -m "not slow"`). Without the
+`autodiff` extra the torch tests are skipped rather than failing at collection.
 
 Without Python, open the static export: [docs/00_the_smile.html](docs/00_the_smile.html).
 

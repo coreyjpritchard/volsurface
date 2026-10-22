@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-import torch
 
 from volsurface.arbitrage import check_surface
 from volsurface.core.types import ArbTol, Curves, Domain
@@ -60,6 +59,7 @@ def test_round_trip_reproduces_arbitrage_free_calls():
 
 
 def test_torch_matches_numpy_in_float64():
+    torch = pytest.importorskip("torch")
     strikes = _strikes()
     sigma = _sigma(4)
     numpy_q = transition_matrix(strikes, sigma, 0.15)
