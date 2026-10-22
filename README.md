@@ -141,8 +141,8 @@ correction. It is a draft and is not frozen, and there are no results yet.
 - Calibrations are local least squares from seeded starts, not global optimisation. The
   headline Heston fit ends on its $\xi$ bound, and $\kappa$ is poorly identified (8.0 to
   10.8 across the starts that end within 1% of the best cost).
-- Raw SVI fitted slice by slice is not free of static arbitrage on this chain: 2,244
-  violations on the check grid, against 0 for SANOS (`LOG.md`, 14 October).
+- Raw SVI fitted slice by slice is not free of static arbitrage on this chain: 2,246
+  violations on the check grid, against 0 for SANOS (`docs/figures/p3c_shootout.csv`).
 - The yfinance fetcher has no test, and the IBKR test needs a live gateway.
 
 ## References

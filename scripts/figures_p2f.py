@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -272,21 +273,66 @@ def spx_fit() -> dict:
     report = fitted.slice_report
     report.to_csv(FIG / "p2f_spx_sabr.csv", index=False)
 
-    fig, axes = plt.subplots(2, 1, figsize=(6.8, 6.0), sharex=True)
-    axes[0].plot(report["T"], report["alpha"], marker="o", ms=3, label="alpha")
-    axes[0].plot(report["T"], report["nu"], marker="o", ms=3, label="nu")
-    axes[0].plot(report["T"], report["rho"], marker="o", ms=3, label="rho")
-    axes[0].axhline(4.0, color="C1", ls="--", lw=0.8, label="nu = 4")
-    axes[0].axhline(-0.999, color="C2", ls="--", lw=0.8, label="rho = -0.999")
-    axes[0].set_ylabel("parameter")
-    axes[0].legend(frameon=False, fontsize=8)
-    axes[0].grid(True, alpha=0.3)
-    axes[0].set_title("SABR on SPX mids, one expiry at a time, beta = 1")
-    axes[1].plot(report["T"], report["rmse_price"], marker="o", ms=3, color="0.2")
-    axes[1].set_xlabel("maturity T (year fraction)")
-    axes[1].set_ylabel("price RMSE (index points)")
-    axes[1].grid(True, alpha=0.3)
-    fig.tight_layout()
+    days = 365.0 * report["T"].to_numpy()
+    nu_cap = 4.0
+    rho_floor = -0.999
+    at_nu = np.isclose(report["nu"].to_numpy(), nu_cap, atol=1e-6)
+    at_rho = np.isclose(report["rho"].to_numpy(), rho_floor, atol=1e-6)
+    print(
+        f"nu at cap on {int(at_nu.sum())} expiries, last at {days[at_nu].max():.1f} days; "
+        f"rho at floor on {int(at_rho.sum())} expiries, last at {days[at_rho].max():.1f} days",
+        flush=True,
+    )
+    fig, axes = plt.subplots(2, 2, figsize=(10.4, 6.4), sharex=True)
+    panels = (
+        (axes[0, 0], 100.0 * report["alpha"], "alpha: vol level (%, annualised)", None, None),
+        (axes[0, 1], report["rho"], "rho: spot-vol correlation", rho_floor, at_rho),
+        (axes[1, 0], report["nu"], "nu: vol of vol (annualised)", nu_cap, at_nu),
+        (axes[1, 1], report["rmse_price"], "price RMSE (index points)", None, None),
+    )
+    for ax, values, label, bound, hit in panels:
+        values = np.asarray(values, dtype=float)
+        ax.plot(days, values, "-o", ms=3, lw=1.0, color="C0", label="fitted value")
+        if bound is not None:
+            ax.axhline(bound, color="C3", ls="--", lw=0.8, label=f"bound ${bound:g}$")
+            ax.plot(
+                days[hit],
+                values[hit],
+                "o",
+                ms=6,
+                mfc="none",
+                color="C3",
+                label=f"at the bound ({int(hit.sum())} expiries)",
+            )
+            ax.legend(frameon=False, fontsize=7.5, loc="best")
+        ax.set_ylabel(label)
+        ax.grid(True, alpha=0.3)
+    for ax in axes[1]:
+        ax.set_xscale("log")
+        ax.set_xticks([0.5, 1, 2, 5, 10, 30, 100, 350])
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%g"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        ax.set_xlabel("time to expiry (days, log scale)")
+    median = float(report["rmse_price"].median())
+    fig.suptitle(
+        f"SABR fitted one SPX expiry at a time has a median price RMSE of {median:.2f} index "
+        f"points, but the short end is bound-limited:\n"
+        f"nu sits at its cap of {nu_cap:g} up to {days[at_nu].max():.0f} days and rho at "
+        f"${rho_floor:g}$ on the first {int(at_rho.sum())} expiries, so read those values "
+        "as limits, not estimates",
+        fontsize=10.5,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        f"SPXW mids, CBOE delayed, 14 Oct 2026. beta = 1, Hagan lognormal formula, vega-weighted "
+        f"price loss, 4 starts; up to 11 strikes per expiry with |k| <= 0.4 "
+        f"({len(data.quotes)} quotes, {len(report)} expiries).",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.88)
     fig.savefig(FIG / "p2f_spx_sabr.png", dpi=140)
     plt.close(fig)
 

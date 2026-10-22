@@ -251,18 +251,85 @@ def main() -> None:
     fig.savefig(FIG / "p3c_sanos_smiles.png", dpi=140)
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6.2, 3.4))
+    # One axis. The in-spread fraction and violation count go in the point labels,
+    # because they barely move and a second axis would only show a flat line.
+    fig, ax = plt.subplots(figsize=(7.6, 4.8))
     guaranteed = sweep[sweep["omega"] == 0.0]
-    ax.plot(guaranteed["eta"], guaranteed["objective"], "-o", label="objective, omega=0")
-    ax.set_xlabel("eta")
-    ax.set_ylabel("objective")
-    ax.grid(True, alpha=0.3)
-    twin = ax.twinx()
-    twin.plot(guaranteed["eta"], guaranteed["in_spread"], "--s", color="C1", label="in spread")
-    twin.set_ylabel("in-spread fraction")
-    twin.set_ylim(0.5, 1.05)
-    ax.set_title("Eta sweep on SPX, omega = 0, PCHIP in time.")
-    fig.tight_layout()
+    ax.plot(
+        guaranteed["eta"],
+        guaranteed["objective"],
+        "-o",
+        color="C0",
+        label="omega = 0 (calendar arbitrage ruled out by construction)",
+    )
+    for _, row in guaranteed.iterrows():
+        ax.annotate(
+            f"in spread {row['in_spread']:.3f}\n{int(row['n_violations'])} violations",
+            (row["eta"], row["objective"]),
+            textcoords="offset points",
+            xytext=(5, 6),
+            ha="left",
+            fontsize=7.5,
+        )
+    loose = sweep[(sweep["omega"] == 1.0) & np.isfinite(sweep["objective"])]
+    if not loose.empty:
+        row = loose.iloc[0]
+        ax.plot(
+            [row["eta"]],
+            [row["objective"]],
+            "s",
+            mfc="none",
+            color="C3",
+            label="omega = 1 (not guaranteed)",
+        )
+        ax.annotate(
+            f"in spread {row['in_spread']:.3f}\n{int(row['n_violations'])} violations",
+            (row["eta"], row["objective"]),
+            textcoords="offset points",
+            xytext=(-8, -4),
+            ha="right",
+            fontsize=7.5,
+        )
+    ax.set_yscale("log")
+    shown = sweep["objective"][np.isfinite(sweep["objective"])]
+    ax.set_ylim(float(shown.min()) / 1.5, float(shown.max()) * 2.0)
+    ax.set_xlim(-0.02, 0.31)
+    ax.set_xlabel("smoothing parameter eta (dimensionless)")
+    ax.set_ylabel("LP objective (rescaled, dimensionless, log scale)")
+    ax.grid(True, alpha=0.3, which="both")
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    top = guaranteed.iloc[-1]
+    labels = [f"{value:g}" for value in guaranteed["eta"]]
+    etas = ", ".join(labels[:-1]) + " and " + labels[-1]
+    objectives = guaranteed["objective"].to_numpy()
+    rising = bool(np.all(np.diff(objectives) > 0.0))
+    clean = bool(np.all(guaranteed["n_violations"] == 0) and np.all(guaranteed["in_spread"] == 1.0))
+    peak_exp = int(np.floor(np.log10(objectives.max())))
+    peak = f"${objectives.max() / 10**peak_exp:.1f} \\times 10^{{{peak_exp}}}$"
+    trend = "rises with eta" if rising else "does not rise steadily with eta"
+    status = (
+        "keeps every SPX quote inside its spread\nwith no static-arbitrage violations"
+        if clean
+        else "does not keep every quote inside its spread with zero violations"
+    )
+    extra = ""
+    if not loose.empty:
+        extra = f" (omega = 1 fails {int(loose.iloc[0]['n_violations'])} checks)"
+    fig.suptitle(
+        f"With omega = 0, each of eta = {etas} {status}; the LP objective stays\n"
+        f"at or below {peak} and {trend}{extra}",
+        fontsize=10.5,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "SPXW mids, CBOE delayed, 14 Oct 2026. HiGHS interior point, PCHIP in time; "
+        f"violations checked on {int(top['n_checked'])} points at tolerance 1e-9.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.84)
     fig.savefig(FIG / "p3c_eta_sweep.png", dpi=140)
     plt.close(fig)
 
