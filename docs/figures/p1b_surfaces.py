@@ -100,7 +100,6 @@ def main() -> None:
 
     this_g = float(np.nanmin(np.asarray(raw.g(k_band), dtype=float)))
     this_passes = this_g >= 0.0
-    n_pass = n_slices - n_fail
 
     wing_min, wide = _wing_min(spline, T, k_obs)
     inside = (wide >= k_obs[0]) & (wide <= k_obs[-1])
@@ -120,42 +119,59 @@ def main() -> None:
     inside_neg = int(np.sum((density_spline < 0.0) & inside & np.isfinite(density_spline)))
     inside_n = int(np.sum(inside & np.isfinite(density_spline)))
 
-    fig, axes = plt.subplots(3, 1, figsize=(7.4, 10.2), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(7.6, 10.6), sharex=True)
 
+    def m(x: float, fmt: str) -> str:
+        """A number in mathtext, so a negative sign is a true minus."""
+        return f"${format(x, fmt)}$"
+
+    # The cubic wing falls far below zero. The axis keeps the range of the data
+    # and the two well-behaved curves, and the wing leaves through the bottom.
+    shown = np.concatenate([iv_obs, iv_svi[np.isfinite(iv_svi)], iv_linear[np.isfinite(iv_linear)]])
+    top = 100 * float(np.nanmax(shown)) * 1.05
+    bottom = -10.0
     ax = axes[0]
-    ax.axvspan(wide[0], k_obs[0], color="0.85", label="past the quotes")
-    ax.axvspan(k_obs[-1], wide[-1], color="0.85")
-    ax.plot(wide, 100 * iv_linear, color="C1", label="linear call, then inverted")
+    ax.axvspan(wide[0], k_obs[0], color="0.88", label="past the quoted strikes")
+    ax.axvspan(k_obs[-1], wide[-1], color="0.88")
+    ax.plot(wide, 100 * iv_linear, color="C1", label="linear in the call price, then inverted")
     ax.plot(wide, 100 * iv_spline, color="C0", label="cubic spline of implied vol")
-    ax.plot(wide, 100 * iv_svi, color="C2", label="raw SVI, least squares")
-    ax.plot(k_obs, 100 * iv_obs, "o", color="k", ms=3.5, label="SPX mid")
-    # Butterfly nodes, drawn on the spline. Marks are clipped to the axes so a
-    # cubic that has left the frame still shows where the check fired.
+    ax.plot(wide, 100 * iv_svi, color="C2", label="raw SVI, weighted least squares")
+    ax.plot(k_obs, 100 * iv_obs, "o", color="k", ms=2.5, label="SPXW mid quote")
     ax.plot(
         wide[butterfly],
-        np.clip(100 * iv_spline[butterfly], -100, 80),
+        np.clip(100 * iv_spline[butterfly], bottom, top),
         "x",
         color="C3",
         ms=4,
-        label="butterfly on the spline",
+        label="spline fails the butterfly check (marks clipped to the frame)",
+    )
+    k_wing = float(wide[np.nanargmin(np.where(extrapolated, iv_spline, np.inf))])
+    below = np.flatnonzero((wide > k_obs[0]) & (100 * iv_spline < bottom))
+    k_exit = float(wide[below[0]]) if below.size else float(wide[-1])
+    ax.annotate(
+        "the cubic leaves the frame here and\n"
+        f"reaches {m(100 * wing_min, '.0f')}% at k = {m(k_wing, '.2f')}",
+        xy=(k_exit, bottom),
+        xytext=(-0.42, 2.0),
+        fontsize=8,
+        color="C0",
+        arrowprops={"arrowstyle": "->", "color": "C0", "lw": 0.8},
     )
     ax.axhline(0.0, color="0.4", lw=0.6)
-    ax.set_ylim(-100, 80)
+    ax.set_ylim(bottom, top)
     ax.set_ylabel("implied volatility (%)")
-    ax.set_title(
-        f"{expiry.date()}, T = {T:.3f}y. Cubic wing min {100 * wing_min:.0f}%. "
-        "Lowest such wing in the file. Mids, European."
-    )
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_title(f"Implied vol, expiry {expiry.date()} (T = {365 * T:.1f} days)", fontsize=10)
+    ax.legend(frameon=False, fontsize=7.5, loc="upper right")
     ax.grid(True, alpha=0.3)
 
     ax = axes[1]
-    ax.axvspan(wide[0], k_obs[0], color="0.85")
-    ax.axvspan(k_obs[-1], wide[-1], color="0.85")
+    ax.axvspan(wide[0], k_obs[0], color="0.88")
+    ax.axvspan(k_obs[-1], wide[-1], color="0.88")
     # The spline density spikes between noisy mids. The panel keeps the scale
     # of a probability density and lets those spikes leave the frame.
     lo, hi = -2.0, 8.0
-    ax.plot(wide, np.clip(density_spline, lo, hi), color="C0", label="spline density, clipped")
+    ax.plot(wide, np.clip(density_spline, lo, hi), color="C0", lw=0.9,
+            label=f"spline density (clipped to {m(lo, '.0f')} and {m(hi, '.0f')})")
     ax.plot(wide, density_svi, color="C2", label="SVI density")
     ax.fill_between(
         wide,
@@ -164,41 +180,61 @@ def main() -> None:
         where=density_spline < 0.0,
         color="C3",
         alpha=0.35,
-        label="spline density below zero",
+        label=f"spline density below zero ({inside_neg} of {inside_n} points inside the quotes)",
     )
     ax.axhline(0.0, color="0.4", lw=0.6)
     ax.set_ylim(lo, hi)
-    ax.set_xlabel("log-moneyness k = log(K / F)")
-    ax.set_ylabel("density of log(F_T / F)")
-    if this_passes:
-        svi_line = (
-            f"SVI: g<0 on {n_fail}/{n_slices} slices for k in [-0.5, 0.5]; "
-            f"this is one of the {n_pass} that pass."
-        )
-    else:
-        svi_line = (
-            f"SVI: g<0 on {n_fail}/{n_slices} slices for k in [-0.5, 0.5]; "
-            "this plotted expiry fails too."
-        )
-    ax.set_title(svi_line + f" In-sample knot RMS {100 * knot_gap:.2f} vol points.")
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_ylabel("density of log(F_T / F), per unit k")
+    ax.set_title("Risk-neutral density implied by each interpolant, same expiry", fontsize=10)
+    ax.legend(frameon=False, fontsize=7.5, loc="upper left", bbox_to_anchor=(0.1, 1.0))
     ax.grid(True, alpha=0.3)
 
     ax = axes[2]
     g_min, worst_T, g_band = worst
     ax.axhline(0.0, color="0.4", lw=0.6)
-    ax.plot(k_band, g_band, color="C3", label="worst fitted slice")
-    ax.plot(k_band, raw.g(k_band), color="C2", label="expiry in the panels above")
+    ax.plot(k_band, g_band, color="C3",
+            label=f"worst SVI slice, T = {365 * worst_T:.0f} days (min g = {m(g_min, '.3f')})")
+    ax.plot(k_band, raw.g(k_band), color="C2",
+            label=f"SVI slice in the panels above (min g = {m(this_g, '.3f')})")
+    # The plotted slice's g rises steeply on the right; the axis is sized so the
+    # worst slice's dip below zero is visible, and the green curve is labelled.
+    this_band = np.asarray(raw.g(k_band), dtype=float)
+    g_top = 1.25 * float(np.nanmax(g_band))
+    ax.set_ylim(min(-0.25, 2.5 * g_min), g_top)
+    if np.nanmax(this_band) > g_top:
+        j = int(np.flatnonzero(this_band > g_top)[0])
+        ax.annotate(
+            f"rises to {np.nanmax(this_band):.1f} at k = 0.5",
+            xy=(k_band[j], g_top),
+            xytext=(k_band[j] - 0.33, 0.85 * g_top),
+            fontsize=8,
+            color="C2",
+            arrowprops={"arrowstyle": "->", "color": "C2", "lw": 0.8},
+        )
     ax.set_xlabel("log-moneyness k = log(K / F)")
-    ax.set_ylabel("Durrleman g")
-    ax.set_title(
-        f"Worst slice on this grid: T = {worst_T:.4f}y, min g = {g_min:.3f}. "
-        "The fit does not penalise g."
-    )
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_ylabel("Durrleman g (dimensionless)")
+    ax.set_title("Durrleman's condition: g < 0 means a negative density", fontsize=10)
+    ax.legend(frameon=False, fontsize=7.5, loc="upper left")
     ax.grid(True, alpha=0.3)
 
-    fig.tight_layout()
+    verdict = "passes" if this_passes else "fails"
+    fig.suptitle(
+        "A cubic spline through SPX mids gives a negative density and a wing at "
+        f"{m(100 * wing_min, '.0f')}%.\nRaw SVI {verdict} on this expiry, but g < 0 on "
+        f"{n_fail} of {n_slices} slices for k in [{m(-0.5, '.1f')}, 0.5]",
+        fontsize=11,
+        y=0.995,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "SPXW mids, CBOE delayed, 14 Oct 2026. The expiry is chosen by the script: the lowest\n"
+        f"extrapolated cubic in the file. SVI in-sample knot RMS {100 * knot_gap:.2f} vol points.",
+        fontsize=7.5,
+        color="0.3",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.subplots_adjust(top=0.925)
     fig.savefig(OUT, dpi=140)
     print(f"wrote {OUT}")
     print(

@@ -1,5 +1,20 @@
 # P1d: five ways to differentiate the same call
 
+## How to read this
+
+Each panel is an error against the Black-Scholes delta (or gamma) on log-log
+axes, so a power law is a straight line. Left: Monte Carlo estimators against
+path count. Middle: a central difference of the closed form against the bump.
+Right: a central difference of a Monte Carlo price against the bump. The
+takeaway is that pathwise differentiation is the cheapest accurate delta, and
+that bumping only works when the noise cannot blow up. On the formula the
+error is truncation (falling like h²) until rounding takes over (rising like
+1/h), so there is a best bump. On a Monte Carlo price with independent paths
+the price noise is divided by h, so the delta error grows like 1/h and the
+gamma error like 1/h². Shared paths cancel most of that noise. The caveat:
+this is one at-the-money call under Black-Scholes, and the ranking can change
+for digitals or barriers, where pathwise needs smoothing.
+
 ## What to watch
 
 The figure `docs/figures/p1d_greeks.png` has three panels. The contract is an
