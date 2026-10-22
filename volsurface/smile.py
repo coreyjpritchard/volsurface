@@ -55,18 +55,36 @@ def market_term_structure(market: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).dropna().reset_index(drop=True)
 
 
-def model_term_structure(model, maturities: ArrayLike, n: int = 9) -> np.ndarray:
+def model_term_structure(
+    model, maturities: ArrayLike, n: int = 9, *, iv_tol: float | None = None
+) -> np.ndarray:
     """ATM vol and skew of a model, measured exactly as for the market.
 
     Prices ``n`` strikes across :func:`skew_window` at each maturity, inverts them and
     applies :func:`atm_fit`. Returns shape ``(len(maturities), 2)``: columns atm, skew.
+
+    ``iv_tol`` is passed to :func:`volsurface.bs.implied_vol` as its relative tolerance.
+    The default inverts through :func:`volsurface.models.implied_surface` (``tol=1e-12``).
+    At the shortest expiries the outer strikes of the window price near ``1e-7`` of the
+    forward, where a ``1e-12`` relative tolerance is met on some parameter sets and not on
+    neighbouring ones. The strike then drops out of the quadratic fit and the skew jumps,
+    which makes a calibration loss discontinuous. A looser ``iv_tol`` such as ``1e-8``
+    keeps every strike, and a maturity with any non-finite vol returns NaN.
     """
+    from volsurface import bs
     from volsurface.models import implied_surface
 
     out = []
     for T in np.atleast_1d(maturities):
         h = skew_window(T)
         k = np.linspace(-h, h, n)
-        iv = implied_surface(model, 1.0, np.exp(k), [T])[0]
-        out.append(atm_fit(k, iv, h))
+        if iv_tol is None:
+            iv = implied_surface(model, 1.0, np.exp(k), [T])[0]
+            out.append(atm_fit(k, iv, h))
+            continue
+        K = np.exp(k)
+        kind = np.where(K < 1.0, "put", "call")
+        price = model.price(1.0, K, float(T), 1.0, kind)
+        iv = bs.implied_vol(price, 1.0, K, float(T), 1.0, kind, tol=iv_tol)
+        out.append(atm_fit(k, iv, h) if np.all(np.isfinite(iv)) else (np.nan, np.nan))
     return np.array(out)

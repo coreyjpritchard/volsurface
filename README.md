@@ -5,12 +5,12 @@ Black-Scholes, Heston, SABR and rough Bergomi through one interface.
 
 ![SPX smiles against one Heston fit, and the at-the-money skew term structure](docs/00_the_smile.png)
 
-The left panel shows SPX implied vols on 14 October 2026 (points) and the best of three
-Heston starts fitted to their at-the-money levels and skews (lines). The right panel is
-the reason this repository exists: the market's at-the-money skew grows like a power of
-$1/T$ as expiry shrinks, while Heston's flattens to a constant. Rough volatility models
-predict the power law. The sessions below work towards pricing them. The chain is SPX,
-not SPY: see [docs/notes/spx_not_spy.md](docs/notes/spx_not_spy.md).
+The left panel shows SPXW mid quotes on 14 October 2026 (dots) and one calibrated Heston
+model (lines), fitted to the at-the-money level and skew of all 40 expiries. The right panel
+is the reason this repository exists: the market's at-the-money skew grows like
+$T^{-1/3}$ as expiry shrinks, while the calibrated Heston skew stops growing below about
+2 days. Rough volatility models predict the power law. The chain is SPX, not SPY: see
+[docs/notes/spx_not_spy.md](docs/notes/spx_not_spy.md).
 
 ## Why
 
@@ -71,10 +71,15 @@ python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the com
 ## Found so far
 
 - **Session 00.** On the 14 October 2026 SPXW mids, the at-the-money skew follows
-  $|\psi(T)| \approx 0.305\, T^{-0.333}$ from about 10 hours to 351 days. The best of three
-  Heston starts in the slider box has $\rho = -0.533$, inside $[-0.99, 0.99]$. The front
-  skew is 1.87 in the fit against the market's 2.96. At 351 days the fit is 0.18 against
-  the market's 0.28.
+  $|\psi(T)| \approx 0.305\, T^{-0.333}$ from about 10 hours to 351 days. The Heston fit
+  in `docs/figure_00.py` (35 seeded starts in the session box, $\xi \le 2$) has
+  $\rho = -0.551$, with $v_0$ and $\xi$ on the edge of the box. The front skew is 2.12 in
+  the fit against the market's 2.96. At 351 days the fit is 0.24 against the market's 0.28.
+  The fit trades the front against the rest of the curve: its skew stops rising below about
+  2 days, towards Heston's short-maturity limit $\rho\xi / (4\sqrt{v_0}) = 2.76$, while the
+  market's keeps rising. An earlier version of this script reported $\rho = -0.533$ and a
+  front skew of 1.87; that number came from a loss with a discontinuity (see the script's
+  docstring) and did not reproduce.
 
 ## Licence
 
