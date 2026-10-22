@@ -14,7 +14,7 @@ not SPY: see [docs/notes/spx_not_spy.md](docs/notes/spx_not_spy.md).
 
 ## Why
 
-Part of my preparation for a DPhil in mathematical finance. Each session asks one question,
+A personal research project in mathematical finance. Each session asks one question,
 answers it with an interactive figure, and builds on the last. See [ROADMAP.md](ROADMAP.md)
 for the ladder and [LOG.md](LOG.md) for what each session found.
 
