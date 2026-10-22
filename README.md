@@ -8,8 +8,9 @@ Black-Scholes, Heston, SABR and rough Bergomi through one interface.
 The left panel shows SPXW mid quotes on 14 October 2026 (dots) and one calibrated Heston
 model (lines), fitted to the at-the-money level and skew of all 40 expiries. The right panel
 is the reason this repository exists: the market's at-the-money skew grows like
-$T^{-1/3}$ as expiry shrinks, while the calibrated Heston skew stops growing below about
-2 days. Rough volatility models predict the power law. The chain is SPX, not SPY: see
+$T^{-1/3}$ as expiry shrinks. Rough volatility models predict the power law. Heston follows
+it only with its vol-of-vol on the upper bound of the fit ($\xi = 5$), and then its
+short-dated at-the-money vol is far too low (5.6% against 15.1% at 10 hours). The chain is SPX, not SPY: see
 [docs/notes/spx_not_spy.md](docs/notes/spx_not_spy.md).
 
 ## Why
@@ -72,15 +73,15 @@ python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the com
 
 - **Session 00.** On the 14 October 2026 SPXW mids, the at-the-money skew follows
   $|\psi(T)| \approx 0.305\, T^{-0.333}$ from about 10 hours to 351 days. The Heston fit
-  in `docs/figure_00.py` (35 seeded starts in the session box, $\xi \le 2$) has
-  $\rho = -0.551$, with $v_0$ and $\xi$ on the edge of the box. The front skew is 2.12 in
-  the fit against the market's 2.96. At 351 days the fit is 0.24 against the market's 0.28.
-  The fit trades the front against the rest of the curve: its skew stops rising below about
-  2 days, towards Heston's short-maturity limit $\rho\xi / (4\sqrt{v_0}) = 2.76$, while the
-  market's keeps rising. An earlier version of this script reported $\rho = -0.533$ and a
-  front skew of 1.87; that number came from a loss with a discontinuity (see the script's
-  docstring); [docs/notes/heston_fit_old_vs_new.md](docs/notes/heston_fit_old_vs_new.md)
-  reproduces it and explains the difference.
+  in `docs/figure_00.py` (35 seeded starts, $v_0 \ge 10^{-4}$, $\xi \le 5$) has
+  $\rho = -0.622$ with $\xi$ on its bound and a Feller ratio of 0.05. Its skew follows the
+  market (2.78 against 2.96 at the front, 0.29 against 0.28 at 351 days), but its
+  at-the-money vol at 10 hours is 5.6% against 15.1%. With $\xi \le 10$ the fit moves to
+  that bound too, so the result is bound-limited: on this loss Heston trades short-dated
+  level for short-dated skew. Earlier versions, in a box with $\xi \le 2$, reported
+  $\rho = -0.533$ and then $-0.551$ and a skew that went flat below about 2 days;
+  [docs/notes/heston_fit_old_vs_new.md](docs/notes/heston_fit_old_vs_new.md) reproduces
+  each version and explains the differences.
 
 ## Licence
 
