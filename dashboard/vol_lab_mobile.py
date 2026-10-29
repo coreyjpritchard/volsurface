@@ -766,7 +766,7 @@ def _(REPO_URL, fits, mo):
         {
             "About the data (Fitted mode)": mo.md(f"""
     - **Underlying:** {_d["underlying"]}.
-    - **Snapshot:** {_d["source"]}, {_d["quote_time_utc"][:16]} UTC on 14 October 2026
+    - **Snapshot:** {_d["source"]}, taken at {_d["quote_time_utc"][:16]} UTC
       (06:01 in New York, before the cash open). One day, not refreshed.
     - **Quotes:** {_d["n_quotes"]:,} out-of-the-money mids, {_d["n_expiries"]} expiries from
       {_d["T_min"] * 365 * 24:.0f} hours to {_d["T_max"] * 365:.0f} days.
