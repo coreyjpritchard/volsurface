@@ -79,6 +79,7 @@ reproduces each version and explains why they differ.
 | `volsurface/core/`, `docs/DESIGN.md` | Shared types and protocols; the design document |
 | `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed |
 | `sessions/` | marimo apps, one per session |
+| `dashboard/`, `volsurface/environments.py` | The volatility environment lab and the library code behind it |
 | `data/snapshots/` | The committed SPX chain (parquet) |
 
 Rough Bergomi itself (the hybrid scheme of Bennedsen, Lunde and Pakkanen 2017) lives in
@@ -121,6 +122,52 @@ Fetch a new snapshot:
 python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the committed chain
 python -m volsurface.chains yfinance SPX     # writes data/snapshots/SPX_<date>.parquet
 ```
+
+## Volatility environment lab
+
+```bash
+make dashboard        # = uv run --locked --extra dev marimo run dashboard/vol_lab.py
+```
+
+A marimo app for playing with volatility environments. Pick one of seven: Black-Scholes
+(one flat vol), Heston, SABR, a raw SVI surface, rough Bergomi (Monte Carlo, through the
+plug-in), and the raw SVI and SANOS fits to the 14 October 2026 SPXW chain. Each has
+sliders and a few presets, including ones built to break: SVI with calendar arbitrage,
+SVI and SABR with butterfly arbitrage, and the README's bound-limited Heston fit. Every
+panel is computed live by the library; the app holds no pricing code
+(`volsurface/environments.py` does the work). The SPX fits are read from
+`data/presets/spx_fits.npz`, which `scripts/build_dashboard_presets.py` rebuilds in about
+three minutes.
+
+![The dashboard: Heston controls, implied volatility surface and one smile](docs/figures/dashboard_surface.png)
+
+**How to read this.** Left: the environment, its parameters and the arbitrage status.
+Middle: Black implied vol over strike and expiry (log-moneyness $k = \log(K/F)$, ten
+expiries from 7 days to 2 years, each spanning the same number of standard deviations).
+Right: the smile at one expiry, with the other expiries in grey. Below these (not shown)
+are the at-the-money vol and the at-the-money skew against expiry on log-log axes, with
+the fitted slope. The takeaway is that each parameter has a fingerprint: in Heston,
+$\rho$ tilts the smile, $\xi$ bends it, and $\kappa$ sets where the skew stops being
+flat and starts decaying like $1/T$, so the log-log skew line bends; in rough Bergomi it
+stays straight with slope $H - 1/2$. Red markers appear where `check_surface` finds a
+call-spread, butterfly or calendar violation. What it does not show: the checks are
+pointwise on the grid, so a pass says nothing between nodes, and the rough Bergomi
+surface is a Monte Carlo estimate (4,000 paths) with no error bars.
+
+![The dashboard: a vanna surface and all six Greeks at one expiry](docs/figures/dashboard_greeks.png)
+
+**How to read this.** Left: one Greek as a surface over strike and expiry (here vanna,
+the change in delta per vol point). Right: delta, gamma, vega, vanna, volga and theta per
+day at the chosen expiry. All are Black Greeks at each option's own implied vol, per 100
+of forward, with zero rates. Gamma and theta are the same surface with opposite sign
+($\Theta = -\tfrac12\sigma^2F^2\Gamma$, checked live in the app), gamma piles up at the
+money and at short expiries, vega grows like $\sqrt T$, vanna changes sign across the
+money and volga is positive in the wings. The delta panel has two lines: the
+sticky-strike Black delta, and the delta when the smile moves with the forward, which is
+the model's own delta for Heston and the alpha-fixed Hagan delta for SABR. What it does
+not show: these are not minimum-variance hedge ratios, and for the Monte Carlo environment they are Black Greeks
+of the Monte Carlo smile, not pathwise model Greeks. `tests/test_environments.py` checks
+the Greeks against finite differences and closed forms.
 
 ## Next: the regime experiment (draft pre-registration, no results)
 

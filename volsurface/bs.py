@@ -5,8 +5,10 @@ instead of spot, rate and dividend yield. With spot ``S``, rate ``r`` and yield 
 ``F = S * exp((r - q) T)`` and ``df = exp(-r T)``.
 
 ``kind`` is ``"call"`` or ``"put"``, or an array of those strings broadcastable with the
-other arguments. Greeks are derivatives with respect to the forward ``F`` (delta, gamma)
-and the volatility ``sigma`` (vega).
+other arguments. Greeks are derivatives with respect to the forward ``F`` (delta, gamma),
+the volatility ``sigma`` (vega, volga), both (vanna), and the expiry ``T`` (theta). Theta
+holds ``F`` and ``df`` fixed, so it is the pure time decay of the forward price; with
+nonzero rates the carry terms are left out.
 """
 
 from __future__ import annotations
@@ -78,6 +80,31 @@ def vega(F, K, T, sigma, df=1.0) -> np.ndarray:
     F, K, T, sigma, df = (np.asarray(a, dtype=float) for a in (F, K, T, sigma, df))
     d1, _ = _d1_d2(F, K, T, sigma)
     return df * F * _pdf(d1) * np.sqrt(T)
+
+
+def vanna(F, K, T, sigma, df=1.0) -> np.ndarray:
+    """d2Price/dF dsigma, the same for calls and puts: ``-df * n(d1) * d2 / sigma``."""
+    F, K, T, sigma, df = (np.asarray(a, dtype=float) for a in (F, K, T, sigma, df))
+    d1, d2 = _d1_d2(F, K, T, sigma)
+    return -df * _pdf(d1) * d2 / sigma
+
+
+def volga(F, K, T, sigma, df=1.0) -> np.ndarray:
+    """d2Price/dsigma2, the same for calls and puts: ``vega * d1 * d2 / sigma``."""
+    F, K, T, sigma, df = (np.asarray(a, dtype=float) for a in (F, K, T, sigma, df))
+    d1, d2 = _d1_d2(F, K, T, sigma)
+    return df * F * _pdf(d1) * np.sqrt(T) * d1 * d2 / sigma
+
+
+def theta(F, K, T, sigma, df=1.0) -> np.ndarray:
+    """-dPrice/dT at fixed ``F`` and ``df``, per year: ``-df * F * n(d1) * sigma / (2 sqrt(T))``.
+
+    The same for calls and puts, because parity ``C - P = df (F - K)`` does not
+    depend on ``T`` once ``F`` and ``df`` are held fixed.
+    """
+    F, K, T, sigma, df = (np.asarray(a, dtype=float) for a in (F, K, T, sigma, df))
+    d1, _ = _d1_d2(F, K, T, sigma)
+    return -df * F * _pdf(d1) * sigma / (2.0 * np.sqrt(T))
 
 
 def implied_vol(

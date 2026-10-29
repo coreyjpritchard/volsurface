@@ -1,5 +1,5 @@
 # One entry point: a locked environment, the fast tests, and the README figure.
-.PHONY: reproduce test lint
+.PHONY: reproduce test lint dashboard
 
 reproduce:
 	uv sync --locked --extra dev --extra autodiff
@@ -11,3 +11,7 @@ test:
 
 lint:
 	uv run --locked ruff check .
+
+# The volatility environment lab (marimo app) at http://localhost:2718.
+dashboard:
+	uv run --locked --extra dev marimo run dashboard/vol_lab.py
