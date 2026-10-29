@@ -13,6 +13,8 @@ Cboe's data is subject to Cboe's terms, and complying with them is up to you. A 
 taken on another day is a different chain, so its numbers will not match the committed
 figures. Without a snapshot the tests run on the synthetic chain in `tests/fixtures/`, and
 the figure scripts stop with a message pointing here.
+The committed figure data under `docs/` holds per-expiry summaries and model output, not
+per-quote values; the scripts write per-quote output to `data/cache/figures/` (ignored).
 
 The rest of this file describes the 14 October 2026 snapshot the results were computed on.
 
