@@ -45,13 +45,13 @@ at-the-money level and skew with $H$ free (fitted $H = 0.207$), and with $H$ fix
 fit is within 5.2% of the market skew at every expiry (median 1.8%), with three
 parameters plus a forward variance curve read off the market. The price-fitted Heston
 needs $\xi = 2.70$ (Feller ratio 0.14) to reach the 10-hour skew and then overshoots by more
-than 5% from 1.4 to 128 days (by up to 52%, at 5 days). In Heston the skew is roughly constant for maturities well
-below $1/\kappa$ and decays like $1/T$ well above it (Gatheral 2006); with one
-mean-reversion speed ($1/\kappa \approx 27$ days here) it cannot decay like $T^{-1/3}$ over
-three orders of magnitude in maturity. Caveats: the rough
-Bergomi skews are Monte Carlo estimates (4,000 paths, 64 steps, seed 0) with no error bars
-drawn, the fitted at-the-money level is up to 2.4 vol points above the market at the
-front, and $H = 0.21$ from one day's option prices is not the $H \approx 0.1$ that
+than 5% from 1.4 to 128 days (by up to 52%, at 5 days). In Heston the skew is roughly
+constant for maturities well below $1/\kappa$ and decays like $1/T$ well above it (Gatheral
+2006); with one mean-reversion speed ($1/\kappa \approx 27$ days here) it cannot decay like
+$T^{-1/3}$ over three orders of magnitude in maturity. Caveats: the rough Bergomi skews
+are Monte Carlo estimates (4,000 paths, 64 steps, seed 0) with no error bars drawn,
+the fitted at-the-money level is up to 2.4 vol points above the market at the front, and
+$H = 0.21$ from one day's option prices is not the $H \approx 0.1$ that
 Gatheral, Jaisson and Rosenbaum (2018) estimate from realised volatility time series.
 
 Earlier versions of the first figure reported a Heston fit with $\rho = -0.533$ and a
@@ -114,7 +114,11 @@ uv run marimo edit sessions/00_the_smile.py  # the same, with the code
 
 Plain pip also works (`pip install -e ".[dev]"`, then `pytest -m "not slow"`). Without the
 `autodiff` extra the torch tests are skipped rather than failing at collection. Without
-Python, open the static export: [docs/00_the_smile.html](docs/00_the_smile.html).
+Python, download the static export [docs/00_the_smile.html](docs/00_the_smile.html) and
+open it in a browser (GitHub shows the file as source rather than rendering it).
+
+GitHub Actions runs `ruff check` and the fast tests on every push to `main` and on pull
+requests (`.github/workflows/ci.yml`); the slow tests are run by hand.
 
 Fetch a new snapshot:
 
