@@ -134,15 +134,57 @@ python -m volsurface.chains yfinance SPX     # writes data/snapshots/SPX_<date>.
 make dashboard        # = uv run --locked --extra dev marimo run dashboard/vol_lab.py
 ```
 
-A marimo app for playing with volatility environments. Pick one of seven: Black-Scholes
-(one flat vol), Heston, SABR, a raw SVI surface, rough Bergomi (Monte Carlo, through the
-plug-in), and the raw SVI and SANOS fits to the 14 October 2026 SPXW chain. Each has
-sliders and a few presets, including ones built to break: SVI with calendar arbitrage,
-SVI and SABR with butterfly arbitrage, and the README's bound-limited Heston fit. Every
-panel is computed live by the library; the app holds no pricing code
-(`volsurface/environments.py` does the work). The SPX fits are read from
-`data/presets/spx_fits.npz`, which `scripts/build_dashboard_presets.py` rebuilds in about
-three minutes.
+A marimo app for playing with volatility models. Pick a model (Black-Scholes with one
+flat vol, Heston, SABR, raw SVI, SANOS, or rough Bergomi by Monte Carlo through the
+plug-in) and a **Mode**:
+
+- **Synthetic**: you set the parameters with sliders. Nothing is fitted to data. The
+  presets include ones built to break: SVI with calendar arbitrage, and SVI and SABR with
+  butterfly arbitrage. SANOS has no synthetic version (it is only ever a fit).
+- **Fitted**: the same model calibrated to the SPX (SPXW) option chain of 14 October 2026,
+  drawn over the market quotes, with its implied-vol RMSE. For Black-Scholes, Heston and
+  rough Bergomi the sliders start at the fitted values and stay editable; "Reset to fit"
+  puts them back, and the panel says when they have moved. SABR, SVI and SANOS are fitted
+  expiry by expiry and are shown as fitted.
+
+Every view is labelled Synthetic or Fitted, and Fitted views name the underlying, the
+index print, the forward treatment and the expiries. Every panel is computed live by the
+library; the app holds no pricing code and calibrates nothing
+(`volsurface/environments.py` does the work).
+
+The fits are read from two files. `data/presets/spx_fits.npz` holds the SVI and SANOS fits
+and the quotes; `scripts/build_dashboard_presets.py` rebuilds it in about three minutes.
+`data/presets/spx_model_fits.json` holds every model's fitted parameters and fit quality;
+`scripts/build_model_fits.py` rebuilds it in about five minutes.
+
+The data is one snapshot: 8,973 out-of-the-money SPXW mids, 40 expiries from 10 hours to
+351 days, CBOE delayed quotes taken at 10:01 UTC on 14 October 2026 (06:01 in New York,
+before the cash open, so the index print of 7,805.45 is the previous close). There is no
+rate or dividend input: each expiry's forward and discount factor come from put-call
+parity on the eight strikes nearest the money, and moneyness is $k = \log(K/F)$ against
+that forward. The error is the same for every model: the root mean square of model minus
+market implied vol over all the quotes, in vol points (1 point = 0.01 of vol), although
+each model was fitted to its own loss.
+
+| Model | How it is fitted | Fitted parameters | RMSE (vol points) |
+|---|---|---|---|
+| Black-Scholes | One vol for every quote: the mean implied vol | $\sigma$ = 20.3% | 11.34 |
+| Heston | At-the-money level and skew of every expiry (as `docs/figure_00.py`), 35 starts | $v_0$ = 0.00287, $\kappa$ = 8.72, $\theta$ = 0.0642, $\xi$ = 5.00 (on its bound), $\rho$ = −0.625 | 3.35 |
+| SABR | Per expiry, $\beta$ = 1 fixed, vega-weighted prices | one $(\alpha, \rho, \nu)$ per expiry | 4.04 |
+| Raw SVI | Per expiry (the saved fit) | five per expiry | 0.39 |
+| SANOS | Arbitrage-free fit (the saved fit) | | 0.13 |
+| Rough Bergomi | At-the-money level and skew, $H$ free, forward variance from SANOS | $H$ = 0.207, $\eta$ = 2.35, $\rho$ = −0.657 | 2.06 (Monte Carlo) |
+
+Read the table with its caveats. Heston's $\xi$ sits on the upper bound of 5 of the box
+and the loss has no interior optimum in $\xi$, so a wider box moves $\xi$ to the new
+bound; these are not well-identified parameters. SABR's error is mostly the shortest
+expiries: $\nu$ ends on its bound of 4 on every expiry out to 21 days, and $\rho$ on
+−0.999 on the first three (to 2.4 days). One SABR smile cannot bend as sharply as SPX
+does a few days out; from 20 days on each expiry is within about one vol point. SVI and SANOS have many more parameters than the others, so their lower
+errors are not like for like. The rough Bergomi figures are Monte Carlo (4,000 paths,
+seed 0) and leave out the 1,332 deep out-of-the-money quotes whose prices are too small
+for the paths to resolve. This is one morning of one index; nothing here says how these
+fits behave on another day.
 
 ![The dashboard: Heston controls, implied volatility surface and one smile](docs/figures/dashboard_surface.png)
 

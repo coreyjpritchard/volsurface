@@ -26,6 +26,7 @@ expiry's strikes.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +37,8 @@ from volsurface.arbitrage import check_surface
 from volsurface.core.types import ArbTol, Curves, Domain
 from volsurface.models import BlackScholes, Heston
 from volsurface.models.sabr import SABR, hagan_implied_vol
+from volsurface.surface.base import SurfaceMixin
+from volsurface.surface.black import call_from_total_variance
 from volsurface.surface.model import ModelSurface
 from volsurface.surface.svi import RawSVI, SVISurface
 
@@ -45,6 +48,7 @@ DEFAULT_T = np.array([7, 14, 30, 61, 91, 182, 273, 365, 547, 730]) / 365.0
 DEFAULT_Z = np.linspace(-3.0, 2.5, 45)
 GREEKS = ("delta", "gamma", "vega", "vanna", "volga", "theta")
 PRESET_PATH = Path(__file__).resolve().parents[1] / "data" / "presets" / "spx_fits.npz"
+MODEL_FITS_PATH = PRESET_PATH.with_name("spx_model_fits.json")
 
 
 def _unit(T):
@@ -216,19 +220,25 @@ def svi_environment(grid_T, atm_vol, term_slope, b, rho, m, sigma, skew_decay) -
     )
 
 
-def rbergomi_environment(H, eta, rho, sigma0, n_paths=4000, n_steps=64, seed=0) -> Environment:
+def rbergomi_environment(
+    H, eta, rho, sigma0=None, n_paths=4000, n_steps=64, seed=0, xi0=None
+) -> Environment:
     """Rough Bergomi from the ``rbergomi`` plug-in, flat forward variance ``sigma0^2``.
 
+    ``xi0``, a callable of time, replaces the flat level with a forward variance curve
+    (the fitted environment passes the SANOS curve, :func:`fitted_rbergomi_xi0`).
     Raises ``KeyError`` when the rough-volatility package is not installed.
     """
     from volsurface.plugins import create
 
+    if (sigma0 is None) == (xi0 is None):
+        raise ValueError("give exactly one of sigma0 (flat) and xi0 (a curve)")
     model = create(
         "rbergomi",
         H=float(H),
         nu=float(eta),
         rho=float(rho),
-        xi0=float(sigma0) ** 2,
+        xi0=float(sigma0) ** 2 if xi0 is None else xi0,
         n_paths=int(n_paths),
         n_steps=int(n_steps),
         seed=int(seed),
@@ -236,7 +246,7 @@ def rbergomi_environment(H, eta, rho, sigma0, n_paths=4000, n_steps=64, seed=0) 
     return Environment(
         name="Rough Bergomi (Monte Carlo)",
         surface=ModelSurface(model, UNIT_CURVES, _domain()),
-        params={"H": H, "eta": eta, "rho": rho, "sigma0": sigma0},
+        params={"H": H, "eta": eta, "rho": rho, "sigma0": sigma0, "xi0": xi0},
         monte_carlo=True,
         note=f"Monte Carlo, {n_paths:,} paths, {n_steps} steps, seed {seed}; no error bars.",
     )
@@ -295,6 +305,164 @@ def spx_grid(env: Environment, n_T: int = 10, z=None) -> Grid:
     lo, hi = env.params["T_range"]
     lo = max(lo, 3.0 / 365.0)
     T = np.linspace(np.sqrt(lo), np.sqrt(hi), n_T) ** 2
+    return default_grid(T=T, z=z)
+
+
+# Fitted environments: the models above with parameters calibrated to the SPX chain -----
+#
+# ``scripts/build_model_fits.py`` runs the calibrations once and writes
+# ``data/presets/spx_model_fits.json``. The functions below only rebuild surfaces from
+# those numbers, so the dashboard (and its web build) never calibrates and never fetches.
+
+
+class SABRSlicesSurface(SurfaceMixin):
+    """One Hagan SABR smile per fitted expiry, total variance linear in ``T`` between them.
+
+    At a pillar the smile is that expiry's SABR exactly. Between pillars, at fixed ``k``,
+    total variance is linear in ``T``, as in :class:`~volsurface.surface.svi.SVISurface`.
+    Before the first pillar the first smile's vol is held (total variance proportional to
+    ``T``), after the last pillar the last one's. Derivatives are the mixin's differences.
+    """
+
+    def __init__(self, T, alpha, rho, nu, beta: float, market: Curves, domain: Domain):
+        order = np.argsort(np.asarray(T, dtype=float))
+        self.T = np.asarray(T, dtype=float)[order]
+        self.alpha = np.asarray(alpha, dtype=float)[order]
+        self.rho = np.asarray(rho, dtype=float)[order]
+        self.nu = np.asarray(nu, dtype=float)[order]
+        self.beta = float(beta)
+        self.market = market
+        self.domain = domain
+        self.finite_difference_gamma = True
+
+    def _vol(self, j: int, t: float, k: np.ndarray) -> np.ndarray:
+        return hagan_implied_vol(
+            1.0, np.exp(k), t, self.alpha[j], self.beta, self.rho[j], self.nu[j]
+        )
+
+    def total_variance(self, T, k) -> np.ndarray:
+        T = np.atleast_1d(np.asarray(T, dtype=float))
+        k = np.atleast_1d(np.asarray(k, dtype=float))
+        out = np.empty((T.size, k.size))
+        for i, t in enumerate(T):
+            j = int(np.searchsorted(self.T, t))
+            if j == 0 or j == self.T.size:
+                j = min(j, self.T.size - 1)
+                out[i] = self._vol(j, self.T[j], k) ** 2 * t
+                continue
+            t0, t1 = self.T[j - 1], self.T[j]
+            w0 = self._vol(j - 1, t0, k) ** 2 * t0
+            w1 = self._vol(j, t1, k) ** 2 * t1
+            a = (t - t0) / (t1 - t0)
+            out[i] = (1.0 - a) * w0 + a * w1
+        return out
+
+    def call(self, T, k) -> np.ndarray:
+        k = np.atleast_1d(np.asarray(k, dtype=float))
+        return call_from_total_variance(k[None, :], self.total_variance(T, k))
+
+    def iv(self, T, k) -> np.ndarray:
+        T = np.atleast_1d(np.asarray(T, dtype=float))
+        w = self.total_variance(T, k)
+        with np.errstate(invalid="ignore"):
+            return np.where(w > 0.0, np.sqrt(w / T[:, None]), np.nan)
+
+
+def load_model_fits(path=MODEL_FITS_PATH) -> dict:
+    """The calibrated parameters, fit quality and data description, as saved.
+
+    ``path`` is a file path or an open binary or text file (the web build passes bytes).
+    """
+    if hasattr(path, "read"):
+        raw = path.read()
+        return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    return json.loads(Path(path).read_text())
+
+
+def fitted_sabr_environment(fit: dict) -> Environment:
+    """SABR fitted expiry by expiry (``beta`` fixed), from :func:`load_model_fits`."""
+    s = fit["models"]["sabr"]
+    T = np.asarray(s["T"], dtype=float)
+    surface = SABRSlicesSurface(
+        T, s["alpha"], s["rho"], s["nu"], s["beta"], UNIT_CURVES, _domain(float(T.max()))
+    )
+    return Environment(
+        name=f"SABR fitted per expiry, beta = {s['beta']:g}",
+        surface=surface,
+        params={"T_range": (float(T.min()), float(T.max()))},
+        iv_override=lambda t, k: surface.iv([t], k)[0],
+        note=f"{T.size} expiries, one (alpha, rho, nu) each; beta fixed at {s['beta']:g}.",
+    )
+
+
+def fitted_rbergomi_xi0(spx: dict[str, Environment]):
+    """The forward variance curve the rough Bergomi fit used: the saved SANOS surface's."""
+    from volsurface.fit.rbergomi import forward_variance
+
+    return forward_variance(spx["spx_sanos"].surface)
+
+
+def iv_at(env: Environment, T, k) -> np.ndarray:
+    """The environment's implied vol at scattered points ``(T[i], k[i])``, one call per expiry."""
+    T = np.asarray(T, dtype=float)
+    k = np.asarray(k, dtype=float)
+    out = np.full(T.shape, np.nan)
+    for t in np.unique(T):
+        sel = T == t
+        with np.errstate(all="ignore"):
+            if env.iv_override is not None:
+                out[sel] = env.iv_override(float(t), k[sel])
+            else:
+                out[sel] = np.asarray(env.surface.iv([float(t)], k[sel]), dtype=float)[0]
+    return out
+
+
+@dataclass(frozen=True)
+class FitQuality:
+    """Implied-vol error against the market quotes, in vol points (0.01 of vol = 1 point)."""
+
+    rmse: float
+    n_used: int
+    n_quotes: int
+    by_expiry_T: np.ndarray
+    by_expiry_rmse: np.ndarray
+
+
+def fit_quality(env: Environment, market: dict, T_max: float | None = None) -> FitQuality:
+    """RMSE of ``model iv - market iv`` over the quotes, in vol points.
+
+    ``market`` has arrays ``T``, ``k`` and ``iv`` (the out-of-the-money mids saved with the
+    SPX fits). Quotes where the model has no implied vol (a price below what the inversion
+    resolves, deep in a short-dated wing) are left out and counted in ``n_used``.
+    """
+    T, k, iv = (np.asarray(market[name], dtype=float) for name in ("T", "k", "iv"))
+    if T_max is not None:
+        keep = T <= T_max
+        T, k, iv = T[keep], k[keep], iv[keep]
+    err = (iv_at(env, T, k) - iv) * 100.0
+    ok = np.isfinite(err)
+    Ts = np.unique(T)
+    by = np.array(
+        [np.sqrt(np.mean(err[ok & (T == t)] ** 2)) if np.any(ok & (T == t)) else np.nan for t in Ts]
+    )
+    return FitQuality(
+        rmse=float(np.sqrt(np.mean(err[ok] ** 2))),
+        n_used=int(ok.sum()),
+        n_quotes=int(T.size),
+        by_expiry_T=Ts,
+        by_expiry_rmse=by,
+    )
+
+
+def fitted_grid(expiry_T, n_T: int = 10, z=None, t_min: float = 1.0 / 365.0) -> Grid:
+    """Up to ``n_T`` of the quoted expiries, spread evenly in ``sqrt(T)``, from ``t_min``.
+
+    Each row of the grid is a quoted expiry, so a smile can be drawn over its own quotes.
+    """
+    quoted = np.unique(np.asarray(expiry_T, dtype=float))
+    quoted = quoted[quoted >= t_min]
+    targets = np.linspace(np.sqrt(quoted[0]), np.sqrt(quoted[-1]), n_T) ** 2
+    T = np.unique([quoted[np.argmin(np.abs(quoted - t))] for t in targets])
     return default_grid(T=T, z=z)
 
 
