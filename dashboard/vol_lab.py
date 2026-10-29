@@ -951,7 +951,7 @@ def _(fits, mo):
             "About the data (Fitted mode)": mo.md(f"""
     - **Underlying:** {_d["underlying"]}. European, cash-settled index options; no
       other underlying is fitted.
-    - **Snapshot:** `{_d["snapshot"]}`, {_d["source"]}, quote time {_d["quote_time_utc"]}
+    - **Snapshot:** `{_d["snapshot"]}`, {_d["source"]}, quote time {_d["quote_time_utc"][:16]}
       UTC (06:01 in New York, before the cash open). One day, not refreshed.
     - **Quotes used:** {_d["n_quotes"]:,} out-of-the-money mids (puts below the forward,
       calls above), {_d["n_expiries"]} expiries from {_d["T_min"] * 365 * 24:.0f} hours to
@@ -962,7 +962,8 @@ def _(fits, mo):
     - **Rates, dividends and forwards:** no rate or dividend yield is input. At each expiry
       put-call parity on the eight strikes nearest the money gives the forward and the
       discount factor (forward {_F[0]:,.1f} at the front, {_F[-1]:,.1f} at the last expiry;
-      discount factor {_DF[0]:.4f} to {_DF[-1]:.4f}), so the forward already carries the
+      discount factor {_DF[0]:.4f} to {_DF[-1]:.4f}; just above 1 at the front is
+      noise in a parity fit 10 hours from expiry), so the forward already carries the
       dividends the market implies. Moneyness is $k = \\log(K/F)$ against each expiry's own
       forward, and the model surfaces are drawn per 100 of forward.
     - **Fit error** is the root mean square of model minus market implied vol over those
