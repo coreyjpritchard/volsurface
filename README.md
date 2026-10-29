@@ -194,6 +194,11 @@ phone page in `m/` (`dashboard/vol_lab_mobile.py`): one column, the parameters i
 collapsible panel, and one view at a time behind tabs (surface, smile, term structure,
 Greeks with a picker, arbitrage) on a coarser grid. Screens narrower than 760 px are sent
 to `m/`; each page links to the other, and the choice of the desktop page is remembered.
+While it loads, both pages show a plain HTML loading screen (`scripts/public_vollab/`)
+that paints before any script runs: what the lab is, what the first visit downloads, the
+current stage, and a bar of the megabytes the Python worker has fetched so far. It gives
+way to the app when the first plot appears, and offers a retry and the repository link if
+a download fails or nothing moves for two minutes.
 
 The folder is about 72 MB. A first visit downloads about 57 MB (about 42 MB if the host
 compresses it) and shows the first plots after about 13 to 15 seconds on a fast link,

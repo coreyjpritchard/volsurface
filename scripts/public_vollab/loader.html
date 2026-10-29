@@ -1,0 +1,156 @@
+<!-- Loading screen, inlined by scripts/build_public_vollab.py so it paints before any
+     script runs. It fades out when the first plot appears. -->
+<style>
+#vl-loader{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
+  padding:20px;box-sizing:border-box;overflow-y:auto;background:#f7f8fb;
+  font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:#1f2430;
+  transition:opacity .5s ease}
+#vl-loader.vl-hide{opacity:0;pointer-events:none}
+#vl-loader *{box-sizing:border-box}
+.vl-card{position:relative;width:100%;max-width:470px;background:#fff;border:1px solid #e3e6ee;border-radius:14px;
+  padding:22px 22px 18px;box-shadow:0 6px 30px rgba(30,40,70,.08);overflow:hidden}
+.vl-preview{display:block;width:150px;height:auto;float:right;margin:-4px -6px 6px 10px;opacity:.85}
+.vl-card h1{font-size:24px;line-height:1.2;margin:0 0 6px;font-weight:650;letter-spacing:-.01em}
+.vl-lead{margin:0 0 10px;color:#3c4354}
+.vl-note{clear:both;margin:0 0 14px;font-size:13.5px;color:#5b6375;background:#f3f5f9;border-radius:8px;padding:9px 11px}
+.vl-steps{list-style:none;margin:0 0 12px;padding:0}
+.vl-steps li{position:relative;padding:3px 0 3px 26px;color:#9aa1b0;font-size:14.5px}
+.vl-steps li::before{content:"";position:absolute;left:4px;top:9px;width:11px;height:11px;border-radius:50%;
+  border:2px solid #cfd4de}
+.vl-steps li.vl-active{color:#1f2430;font-weight:600}
+.vl-steps li.vl-active::before{border-color:#3d6fd8;border-right-color:transparent;animation:vl-spin .8s linear infinite}
+.vl-steps li.vl-ok{color:#3c4354}
+.vl-steps li.vl-ok::before{background:#2f9e62;border-color:#2f9e62}
+.vl-track{position:relative;height:8px;border-radius:4px;background:#e8ebf2;overflow:hidden}
+.vl-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#3d6fd8;border-radius:4px;transition:width .25s}
+.vl-track.vl-indet .vl-fill{width:35%;animation:vl-slide 1.4s ease-in-out infinite}
+.vl-meta{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-size:12.5px;color:#5b6375;
+  font-variant-numeric:tabular-nums}
+.vl-error{display:none;margin-top:14px;border-left:4px solid #c6493a;background:#fdf3f1;border-radius:6px;padding:10px 12px;font-size:14px}
+#vl-loader.vl-failed .vl-error{display:block}
+#vl-loader.vl-failed .vl-steps li.vl-active::before{animation:none;border-color:#c6493a}
+.vl-error p{margin:0 0 9px}
+.vl-buttons{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.vl-buttons button{font:inherit;font-weight:600;border-radius:8px;padding:9px 16px;min-height:42px;cursor:pointer;
+  border:1px solid #3d6fd8;background:#3d6fd8;color:#fff}
+.vl-buttons button.vl-secondary{background:#fff;color:#3d6fd8}
+.vl-buttons a{color:#3d6fd8;padding:9px 4px}
+@keyframes vl-spin{to{transform:rotate(360deg)}}
+@keyframes vl-slide{0%{left:-35%}100%{left:100%}}
+@media (min-width:900px){#vl-loader{font-size:16px}.vl-card{max-width:560px;padding:28px 30px 22px}.vl-card h1{font-size:28px}.vl-preview{width:170px}}
+@media (max-width:480px){.vl-card{padding:18px 16px 14px}.vl-card h1{font-size:22px}.vl-preview{width:118px}}
+@media (prefers-reduced-motion:reduce){#vl-loader *{animation:none!important;transition:none!important}}
+</style>
+<div id="vl-loader" role="status" aria-live="polite">
+  <div class="vl-card">
+    <img class="vl-preview" alt="" width="300" height="346" src="__PREVIEW__">
+    <h1>Volatility lab</h1>
+    <p class="vl-lead">Implied volatility surfaces, Greeks and static arbitrage checks for Heston, SABR,
+      SVI and fits to the SPX option chain, computed live as you move the parameters.</p>
+    <p class="vl-note">Everything runs in your browser, with no server behind it. The first visit
+      downloads the Python runtime and libraries (about 57 MB) and takes roughly 15 to 60 seconds
+      depending on your connection; later visits are faster because your browser keeps a copy.</p>
+    <ol class="vl-steps">
+      <li class="vl-active">Loading the page</li>
+      <li>Starting Python</li>
+      <li>Installing packages</li>
+      <li>Building the surfaces</li>
+    </ol>
+    <div class="vl-track vl-indet"><div class="vl-fill"></div></div>
+    <div class="vl-meta"><span class="vl-bytes">Preparing the download</span><span class="vl-time">0 s</span></div>
+    <div class="vl-error" role="alert">
+      <p class="vl-error-text">The lab could not finish loading.</p>
+      <div class="vl-buttons">
+        <button type="button" class="vl-retry">Retry</button>
+        <button type="button" class="vl-secondary vl-wait">Keep waiting</button>
+        <a href="__REPO__" target="_blank" rel="noopener">Run it from GitHub</a>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var TOTAL = __TOTAL_BYTES__; // runtime, packages and data the worker downloads
+  var STALL_MS = 120000;
+  var root = document.getElementById("vl-loader");
+  if (!root) return;
+  var steps = root.querySelectorAll(".vl-steps li");
+  var track = root.querySelector(".vl-track");
+  var fill = root.querySelector(".vl-fill");
+  var bytesText = root.querySelector(".vl-bytes");
+  var timeText = root.querySelector(".vl-time");
+  var waitButton = root.querySelector(".vl-wait");
+  var start = Date.now(), last = start, got = 0, stage = 0, done = false, failed = false;
+  function mb(n) { return (n / 1e6).toFixed(1); }
+  function setStage(i) {
+    if (i <= stage || done) return;
+    stage = i;
+    last = Date.now();
+    for (var k = 0; k < steps.length; k++) {
+      steps[k].className = k < i ? "vl-ok" : k === i ? "vl-active" : "";
+    }
+    if (i === 3) { track.className = "vl-track vl-indet"; bytesText.textContent = "Downloads finished; computing the first surface"; }
+  }
+  function render() {
+    if (stage === 3 || !TOTAL || !got) return;
+    track.className = "vl-track";
+    fill.style.width = Math.min(100, (100 * got) / TOTAL).toFixed(1) + "%";
+    bytesText.textContent = "Python runtime and packages: " + mb(Math.min(got, TOTAL)) + " of " + mb(TOTAL) + " MB";
+  }
+  function fail(message, stalled) {
+    if (done || failed) return;
+    failed = true;
+    root.className = "vl-failed";
+    root.querySelector(".vl-error-text").textContent = message;
+    waitButton.style.display = stalled ? "" : "none";
+  }
+  root.querySelector(".vl-retry").onclick = function () { location.reload(); };
+  waitButton.onclick = function () { failed = false; root.className = ""; last = Date.now(); };
+  if (typeof BroadcastChannel !== "undefined") {
+    var channel = new BroadcastChannel("vollab-loader");
+    channel.onmessage = function (event) {
+      var m = event.data || {}, url = String(m.url || "");
+      last = Date.now();
+      if (m.kind === "start") {
+        if (/\.whl(\?|$)/.test(url)) setStage(2); else if (/pyodide/.test(url)) setStage(1);
+      } else if (m.kind === "bytes" || m.kind === "done") {
+        got += m.n || 0;
+        render();
+        if (m.kind === "done" && /spx_fits\.npz/.test(url)) setStage(3);
+      } else if (m.kind === "error") {
+        fail("A file the lab needs did not download (" + url.split("/").pop().split("?")[0] + "). Check your connection and retry.", false);
+        root.querySelector(".vl-error-text").title = String(m.message || "");
+      }
+    };
+  }
+  window.addEventListener("error", function (event) {
+    var t = event.target;
+    if (t && t !== window && (t.tagName === "SCRIPT" || (t.tagName === "LINK" && /stylesheet|modulepreload/.test(t.rel)))) {
+      fail("Part of the page did not load (" + String(t.src || t.href).split("/").pop() + "). Check your connection and retry.", false);
+    }
+  }, true);
+  function hasPlot(node) {
+    var els = node.querySelectorAll("*");
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.classList && el.classList.contains("js-plotly-plot") && el.data) return true;
+      if (el.shadowRoot && hasPlot(el.shadowRoot)) return true;
+    }
+    return false;
+  }
+  var timer = setInterval(function () {
+    var now = Date.now();
+    timeText.textContent = Math.round((now - start) / 1000) + " s";
+    if (hasPlot(document)) {
+      done = true;
+      clearInterval(timer);
+      root.className = "vl-hide";
+      setTimeout(function () { root.remove(); }, 700);
+      return;
+    }
+    if (!failed && now - last > STALL_MS) {
+      fail("Loading has made no progress for two minutes. The connection may have dropped; retry, or keep waiting.", true);
+    }
+  }, 500);
+})();
+</script>

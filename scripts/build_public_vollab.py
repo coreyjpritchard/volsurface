@@ -24,6 +24,7 @@ Serve the folder with any static file server, for example
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -37,6 +38,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LOADER = ROOT / "scripts" / "public_vollab"
+REPO_URL = "https://github.com/coreyjpritchard/volsurface"
 WHEEL = "volsurface-0.1.0-py3-none-any.whl"
 # Phone page: hide marimo's own controls and badge, use the full width.
 MOBILE_CSS = """
@@ -257,6 +260,43 @@ def add_head(index: Path, snippet: str) -> None:
     index.write_text(html.replace("</head>", snippet + "</head>"))
 
 
+def add_loader(out: Path) -> None:
+    """Inline the loading screen in both pages and let the worker report its downloads.
+
+    The screen is plain HTML and CSS at the top of <body>, so it shows before any script
+    runs. Its progress bar counts the bytes the Pyodide worker fetches (reported by
+    worker_hook.js) against the size of everything in pyodide/ and public/.
+    """
+    total = sum(
+        f.stat().st_size
+        for d in ("pyodide", "public")
+        if (out / d).exists()
+        for f in (out / d).iterdir()
+        # pyodide.asm.mjs is imported as a module, not fetched, so the hook never sees it.
+        if f.is_file() and f.name != "pyodide.asm.mjs"
+    )
+    preview = base64.b64encode((LOADER / "loader-preview.webp").read_bytes()).decode()
+    loader = (
+        (LOADER / "loader.html")
+        .read_text()
+        .replace("__PREVIEW__", f"data:image/webp;base64,{preview}")
+        .replace("__TOTAL_BYTES__", str(total))
+        .replace("__REPO__", REPO_URL)
+    )
+    for index in (out / "index.html", out / "m" / "index.html"):
+        html = index.read_text()
+        if html.count("<body>") != 1:
+            raise SystemExit(f"no unique <body> in {index}")
+        # marimo's stylesheets (about 400 kB) would hold back the first paint; after the
+        # loader they only block what follows it, which the loader covers anyway.
+        sheets = re.findall(r'<link rel="stylesheet"[^>]*>\n?', html)
+        for sheet in sheets:
+            html = html.replace(sheet, "", 1)
+        index.write_text(html.replace("<body>", "<body>\n" + loader + "".join(sheets)))
+    (worker,) = [f for f in (out / "assets").glob("worker-*.js")]
+    worker.write_text((LOADER / "worker_hook.js").read_text() + worker.read_text())
+
+
 def main(out: Path, cdn: bool) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp) / "stage"
@@ -293,12 +333,18 @@ def main(out: Path, cdn: bool) -> None:
         (built / "m" / "index.html").write_text(re.sub(r'((?:href|src)=")\./', r"\1../", html))
         # marimo's runtime also asks for favicon.ico next to the page.
         shutil.copy(built / "favicon.ico", built / "m" / "favicon.ico")
-        add_head(built / "index.html", DESKTOP_HEAD)
+        # The redirect goes straight after the viewport tag (before it, phones report a
+        # 980 px layout width) and ahead of anything that could delay it.
+        desktop = built / "index.html"
+        html = desktop.read_text()
+        (viewport,) = re.findall(r'<meta name="viewport"[^>]*>', html)
+        desktop.write_text(html.replace(viewport, viewport + "\n" + DESKTOP_HEAD, 1))
         add_head(built / "m" / "index.html", MOBILE_HEAD.replace("MOBILE_CSS", MOBILE_CSS))
         # marimo's export adds an assistant prompt file that a public site does not need.
         (built / "CLAUDE.md").unlink(missing_ok=True)
         if not cdn:
             self_host(built)
+        add_loader(built)
         # Refill OUTPUT_DIR in place (a server already serving it keeps working).
         out.mkdir(parents=True, exist_ok=True)
         for child in out.iterdir():
