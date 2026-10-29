@@ -60,8 +60,9 @@ def test_implied_vol_vectorised(impl):
     sigma = np.array([[0.4, 0.2, 0.3]])
     kind = np.array([["put", "call", "call"]])
     p = bs.price(F, K, T, sigma, 1.0, kind)
-    np.testing.assert_allclose(bs.implied_vol(p, F, K, T, 1.0, kind), sigma * np.ones((2, 1)),
-                               rtol=1e-8)
+    np.testing.assert_allclose(
+        bs.implied_vol(p, F, K, T, 1.0, kind), sigma * np.ones((2, 1)), rtol=1e-8
+    )
 
 
 def test_implied_vol_edge_cases_are_nan(impl):

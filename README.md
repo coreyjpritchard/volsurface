@@ -84,7 +84,8 @@ reproduces each version and explains why they differ.
 
 Rough Bergomi itself (the hybrid scheme of Bennedsen, Lunde and Pakkanen 2017) lives in
 a separate package, [rough-volatility](https://github.com/coreyjpritchard/rough-volatility),
-pinned by commit in `pyproject.toml` and loaded through a plugin entry point.
+pinned to its v0.1.0 tag in `pyproject.toml` (commit 65f3f99 in `uv.lock`) and loaded
+through a plugin entry point.
 
 ## How to reproduce
 
@@ -192,6 +193,10 @@ correction. It is a draft and is not frozen, and there are no results yet.
 - Calibrations are local least squares from seeded starts, not global optimisation. The
   headline Heston fit ends on its $\xi$ bound, and $\kappa$ is poorly identified (8.0 to
   10.8 across the starts that end within 1% of the best cost).
+- Because that fit sits in a flat valley in $\kappa$, the last digits of the first figure's
+  numbers (the Feller ratio, the short-skew limit) can differ slightly from machine to
+  machine with the linear algebra library and thread count (Feller 0.045 against 0.046,
+  limit 14.4 against 14.6, on two Linux machines); the conclusions do not.
 - Raw SVI fitted slice by slice is not free of static arbitrage on this chain: 2,246
   violations on the check grid, against 0 for SANOS (`docs/figures/p3c_shootout.csv`).
 - The yfinance fetcher has no test, and the IBKR test needs a live gateway.

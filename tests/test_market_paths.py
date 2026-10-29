@@ -725,9 +725,7 @@ def test_windowed_returns_sum_to_the_coarse_return():
     perp = np.array([[0.3, 0.0]])
     times = np.array([0.0, 0.1, 0.3])
     rho = -0.4
-    log_sub = _bridge_log_returns(
-        v_left, dW, perp, times, rho, 21, generator(run_seed(1, 0))
-    )
+    log_sub = _bridge_log_returns(v_left, dW, perp, times, rho, 21, generator(run_seed(1, 0)))
     orthogonal = math.sqrt(1.0 - rho * rho)
     for i, dt in enumerate(np.diff(times)):
         shock = rho * dW[0, i] + orthogonal * math.sqrt(dt) * perp[0, i]
@@ -1047,11 +1045,14 @@ def _score_draw(nus, H, n_paths):
     times = np.linspace(0.0, 1.0, 21)
     paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2))
     labels = paths.regime[:, 10]
-    return {name: regime_scores(paths.state[name][:, 10], labels) for name in (
-        "regime_prob_spot",
-        "regime_prob_rv",
-        "regime_prob_latent",
-    )}
+    return {
+        name: regime_scores(paths.state[name][:, 10], labels)
+        for name in (
+            "regime_prob_spot",
+            "regime_prob_rv",
+            "regime_prob_latent",
+        )
+    }
 
 
 def _single_regime(nu: float, n_mc: int, **kwargs) -> RegimeSwitchingBergomi:
@@ -2277,9 +2278,7 @@ def _episode_draw(nus, hurst, n_paths):
     )
     model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=hurst, n_mc=2)
     times = np.arange(126 + 30 + 1) / 252.0
-    paths = model.simulate_market(
-        n_paths, times, seed=run_seed(12, 2), store_forward=False
-    )
+    paths = model.simulate_market(n_paths, times, seed=run_seed(12, 2), store_forward=False)
     return paths, _switched_by(paths.regime)
 
 
@@ -2338,9 +2337,7 @@ def test_episode_filter_scores_after_burn_in():
             for switched in (False, True):
                 mask0 = changed[:, 126] if switched else ~changed[:, 126]
                 for name in filters:
-                    scored = regime_scores(
-                        paths.state[name][mask0, 126], paths.regime[mask0, 126]
-                    )
+                    scored = regime_scores(paths.state[name][mask0, 126], paths.regime[mask0, 126])
                     confusion, brier = t0[(hurst, n_paths, switched, name)]
                     assert scored["confusion"].tolist() == confusion
                     assert scored["brier"] == pytest.approx(brier, abs=1e-8)

@@ -40,7 +40,11 @@ def _pdf(x):
 
 
 def price(
-    F: ArrayLike, K: ArrayLike, T: ArrayLike, sigma: ArrayLike, df: ArrayLike = 1.0,
+    F: ArrayLike,
+    K: ArrayLike,
+    T: ArrayLike,
+    sigma: ArrayLike,
+    df: ArrayLike = 1.0,
     kind="call",
 ) -> np.ndarray:
     """Discounted Black price.
@@ -108,8 +112,16 @@ def theta(F, K, T, sigma, df=1.0) -> np.ndarray:
 
 
 def implied_vol(
-    price_: ArrayLike, F: ArrayLike, K: ArrayLike, T: ArrayLike, df: ArrayLike = 1.0,
-    kind="call", *, lo: float = 1e-6, hi: float = 10.0, tol: float = 1e-12,
+    price_: ArrayLike,
+    F: ArrayLike,
+    K: ArrayLike,
+    T: ArrayLike,
+    df: ArrayLike = 1.0,
+    kind="call",
+    *,
+    lo: float = 1e-6,
+    hi: float = 10.0,
+    tol: float = 1e-12,
     max_iter: int = 100,
 ) -> np.ndarray:
     """Black implied volatility, vectorised.
@@ -131,7 +143,8 @@ def implied_vol(
         # Out-of-the-money equivalent: call for K >= F, put for K < F.
         otm_call = K >= F
         target = np.where(
-            is_call == otm_call, undiscounted,
+            is_call == otm_call,
+            undiscounted,
             undiscounted - np.where(is_call, F - K, K - F),
         )
         upper = np.where(otm_call, F, K)

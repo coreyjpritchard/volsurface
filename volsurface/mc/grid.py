@@ -23,7 +23,14 @@ from volsurface.core.types import PriceResult
 
 
 def estimate_terminal(
-    Z, F: float, K, df: float, kind, *, antithetic: bool, control_variate: bool,
+    Z,
+    F: float,
+    K,
+    df: float,
+    kind,
+    *,
+    antithetic: bool,
+    control_variate: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mean cash price and its standard error from one column of ``Z``.
 
@@ -49,8 +56,15 @@ def estimate_terminal(
 
 
 def price_grid(
-    model, F: float, strikes, maturities, df=1.0, kind="call", *,
-    n_paths: int, seed: int | np.random.SeedSequence,
+    model,
+    F: float,
+    strikes,
+    maturities,
+    df=1.0,
+    kind="call",
+    *,
+    n_paths: int,
+    seed: int | np.random.SeedSequence,
 ) -> PriceResult:
     """Price every strike at every maturity from one ``simulate`` call.
 
@@ -83,11 +97,18 @@ def price_grid(
     control = bool(getattr(model, "control_variate", False))
     for i in range(maturities.size):
         value[i], stderr[i] = estimate_terminal(
-            paths.Z[:, i + 1], float(F), strikes[i], float(dfs[i]), kinds[i],
-            antithetic=antithetic, control_variate=control,
+            paths.Z[:, i + 1],
+            float(F),
+            strikes[i],
+            float(dfs[i]),
+            kinds[i],
+            antithetic=antithetic,
+            control_variate=control,
         )
     return PriceResult(
-        value=value, stderr=stderr, n_evals=int(paths.Z.shape[0]),
+        value=value,
+        stderr=stderr,
+        n_evals=int(paths.Z.shape[0]),
         wall_time=time.perf_counter() - started,
     )
 

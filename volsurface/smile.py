@@ -7,8 +7,9 @@ import pandas as pd
 from numpy.typing import ArrayLike
 
 
-def atm_fit(k: ArrayLike, iv: ArrayLike, half_width: float,
-            min_points: int = 5) -> tuple[float, float]:
+def atm_fit(
+    k: ArrayLike, iv: ArrayLike, half_width: float, min_points: int = 5
+) -> tuple[float, float]:
     """At-the-money implied vol and skew ``d iv / d k`` at ``k = 0``.
 
     Fits ``iv = a + b k + c k^2`` by least squares to the points with ``|k| <= half_width``

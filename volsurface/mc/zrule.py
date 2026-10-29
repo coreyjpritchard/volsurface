@@ -85,17 +85,13 @@ def check_z(
         centre = float(np.mean(scores))
         if abs(centre) >= bound:
             return (
-                f"z-rule mean z is {centre:.4f}, bound {bound:.4f} "
-                f"at n_eff={effective:g} (n={n})"
+                f"z-rule mean z is {centre:.4f}, bound {bound:.4f} at n_eff={effective:g} (n={n})"
             )
     if fraction:
         frac = float(np.mean(np.abs(scores) < 2.0))
         lo, hi = fraction_band(n)
         if frac < lo or frac > hi:
-            return (
-                f"z-rule fraction |z|<2 is {frac:.4f}, "
-                f"band [{lo:.4f}, {hi:.4f}] at n={n}"
-            )
+            return f"z-rule fraction |z|<2 is {frac:.4f}, band [{lo:.4f}, {hi:.4f}] at n={n}"
     return None
 
 

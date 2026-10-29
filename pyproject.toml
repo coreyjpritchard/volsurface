@@ -23,7 +23,7 @@ dev = [
     "pytest>=8.0",
     "hypothesis>=6.100",
     "ruff>=0.4",
-    "rough-volatility @ git+https://github.com/coreyjpritchard/rough-volatility.git@2aca346571ccfaaab0b6af8730e90d43a57a35ab",
+    "rough-volatility @ git+https://github.com/coreyjpritchard/rough-volatility.git@v0.1.0",
 ]
 data = ["yfinance>=0.2.40", "ib_async>=1.0"]
 autodiff = ["torch>=2.2"]
