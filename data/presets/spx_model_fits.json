@@ -448,12 +448,12 @@
   },
   "svi": {
    "method": "The saved fit in data/presets/spx_fits.npz, unchanged.",
-   "rmse_vol_points": 0.39,
-   "n_used": 8968,
+   "rmse_vol_points": 0.395,
+   "n_used": 8973,
    "n_quotes": 8973,
    "rmse_by_expiry": [
-    1.5934,
-    0.8554,
+    1.6645,
+    0.8667,
     0.9247,
     0.6672,
     0.534,
