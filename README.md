@@ -171,7 +171,7 @@ each model was fitted to its own loss.
 | Black-Scholes | One vol for every quote: the mean implied vol | $\sigma$ = 20.3% | 11.34 |
 | Heston | At-the-money level and skew of every expiry (as `docs/figure_00.py`), 35 starts | $v_0$ = 0.00287, $\kappa$ = 8.72, $\theta$ = 0.0642, $\xi$ = 5.00 (on its bound), $\rho$ = −0.625 | 3.35 |
 | SABR | Per expiry, $\beta$ = 1 fixed, vega-weighted prices | one $(\alpha, \rho, \nu)$ per expiry | 4.04 |
-| Raw SVI | Per expiry (the saved fit) | five per expiry | 0.39 (0.395) |
+| Raw SVI | Per expiry (the saved fit) | five per expiry | 0.39 |
 | SANOS | Arbitrage-free fit (the saved fit) | | 0.13 |
 | Rough Bergomi | At-the-money level and skew, $H$ free, forward variance from SANOS | $H$ = 0.207, $\eta$ = 2.35, $\rho$ = −0.657 | 2.06 (Monte Carlo) |
 
