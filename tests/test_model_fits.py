@@ -27,8 +27,23 @@ def spx():
 
 
 @pytest.fixture(scope="module")
-def market(spx):
-    return spx["spx_svi"].params["market"]
+def market():
+    # Rebuilt from the snapshot: the preset files hold no quotes.
+    quotes = env_lib.load_market_quotes()
+    if quotes is None:
+        pytest.skip("no SPX snapshot in data/snapshots")
+    return quotes
+
+
+def test_preset_files_hold_fitted_parameters_not_quotes(fits):
+    # No per-quote array: nothing in the presets has the length of the quote set.
+    n = fits["data"]["n_quotes"]
+    saved = np.load(env_lib.PRESET_PATH, allow_pickle=False)
+    assert not any(name.startswith("market") for name in saved.files)
+    assert all(saved[name].size < n for name in saved.files)
+    assert all(
+        len(v) < n for m in fits["models"].values() if m for v in m.values() if isinstance(v, list)
+    )
 
 
 def test_fits_file_has_every_model_and_describes_the_data(fits, market):

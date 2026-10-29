@@ -45,7 +45,7 @@ def _(WEB, mo):
 
     Pick a **Mode** and a model, open **Parameters** to move it, and switch views with the
     tabs. **Synthetic**: your parameters, not fitted to anything. **Fitted**: the model
-    calibrated to the SPX option chain of 14 October 2026, drawn over the quotes. Every
+    calibrated to the SPX option chain of 14 October 2026, with its fit error. Every
     number is computed in your browser by the `volsurface` library.
 
     <small>{_switch}Best on a wide screen for the full layout.</small>
@@ -111,9 +111,10 @@ def _(mo):
 
 @app.cell(hide_code=True)
 async def _(BASE, WEB, env_lib, mo):
-    # The saved SPX fits (SVI, SANOS, the quotes) and every model's fitted parameters,
-    # served next to the page on the web. Nothing is fitted here and nothing is downloaded
-    # from anywhere else.
+    # The saved SPX fits (SVI, SANOS) and every model's fitted parameters, served next to
+    # the page on the web. Nothing is fitted here and nothing is downloaded from anywhere
+    # else. The files hold fitted parameters only; the quotes for the black dots are
+    # rebuilt from the local snapshot, which the web build does not have (market is None).
     if WEB:
         import io
 
@@ -123,10 +124,11 @@ async def _(BASE, WEB, env_lib, mo):
         spx = env_lib.load_spx_presets(io.BytesIO(await _resp.bytes()))
         _resp = await pyfetch(str(BASE / "public" / "spx_model_fits.json"))
         fits = env_lib.load_model_fits(io.BytesIO(await _resp.bytes()))
+        market = None
     else:
         spx = mo.cache(env_lib.load_spx_presets)()
         fits = env_lib.load_model_fits()
-    market = spx["spx_svi"].params["market"]
+        market = mo.cache(env_lib.load_market_quotes)()
     return fits, market, spx
 
 
@@ -270,7 +272,7 @@ def _(
             ),
         )
     if fitted:
-        grid = env_lib.fitted_grid(market["T"], n_T=MOBILE_T.size, z=MOBILE_Z)
+        grid = env_lib.fitted_grid(fits["data"]["expiry_T"], n_T=MOBILE_T.size, z=MOBILE_Z)
         if key in ("flat", "heston"):
             env = (env_lib.flat_environment if key == "flat" else env_lib.heston_environment)(**_p)
         elif key == "sabr":
@@ -322,10 +324,12 @@ def _(
     # The label every tab carries: Synthetic or Fitted, and for Fitted the fit error.
     if fitted:
         _saved = fits["models"][key]
-        if moved and not env.monte_carlo:
+        if moved and not env.monte_carlo and market is not None:
             _rmse = f"{env_lib.fit_quality(env, market).rmse:.2f} vol pts, your parameters"
         elif moved:
-            _rmse = "not recomputed (Monte Carlo)"
+            _rmse = "not recomputed " + (
+                "(Monte Carlo)" if env.monte_carlo else "(no quotes in this build)"
+            )
         else:
             _rmse = f"{_saved['rmse_vol_points']:.2f} vol pts"
         caption = f"**Fitted** · {MODEL_NAME[key]} · SPX (SPXW) 14 Oct 2026 · RMSE {_rmse}" + (
@@ -360,10 +364,10 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(MOBILE_T, MOBILE_Z, env_lib, environment, market, mo, mode):
+def _(MOBILE_T, MOBILE_Z, env_lib, environment, fits, mo, mode):
     # Depends on the model and mode only, so moving a slider keeps the chosen expiry.
     _T = (
-        env_lib.fitted_grid(market["T"], n_T=MOBILE_T.size, z=MOBILE_Z).T
+        env_lib.fitted_grid(fits["data"]["expiry_T"], n_T=MOBILE_T.size, z=MOBILE_Z).T
         if mode.value == "fitted"
         else MOBILE_T
     )
@@ -490,7 +494,7 @@ def _(
                     name="SPX quotes",
                 )
             )
-        style(_fig, 400, "Implied vol surface" + (" over SPX quotes" if fitted else ""))
+        style(_fig, 400, "Implied vol surface" + (" over SPX quotes" if _mk is not None else ""))
         _fig.update_layout(
             margin=dict(l=0, r=0, t=40, b=0),
             showlegend=False,
@@ -511,7 +515,7 @@ def _(
                     "Black implied vol for every strike and expiry; k = log(K/F). Drag to "
                     "rotate. Tilt is correlation, curvature is vol of vol, and how the short "
                     "end bends is the term structure of the skew. Red points fail an "
-                    "arbitrage check; in Fitted mode black points are the SPX quotes. The "
+                    "arbitrage check. The "
                     "grid is 8 expiries by 28 strikes, coarser than the desktop page."
                 ),
             ]
@@ -571,8 +575,7 @@ def _(
                 _read(
                     "Implied vol against log-moneyness at one expiry; grey lines are the "
                     "other expiries. A downward slope is the equity skew: puts cost more "
-                    "vol than calls. In Fitted mode the black dots are the SPX quotes at "
-                    "this expiry."
+                    "vol than calls."
                 ),
             ]
         )
@@ -641,8 +644,7 @@ def _(
                     "Top: at-the-money vol by expiry. Bottom: the size of the at-the-money "
                     "skew on log-log axes, where a power law is a straight line. Diffusions "
                     "such as Heston bend (flat at the short end, then like 1/T); rough "
-                    "volatility stays straight with slope H - 1/2. In Fitted mode black dots "
-                    "are the market's level and skew."
+                    "volatility stays straight with slope H - 1/2."
                 ),
             ]
         )
@@ -777,6 +779,9 @@ def _(REPO_URL, fits, mo):
       {_F[-1]:,.1f} at the last expiry), and k = log(K/F) uses that forward.
     - **Fit error:** RMSE of model minus market implied vol over the quotes, in vol points,
       measured the same way for every model.
+    - **No quotes on this page:** it ships fitted parameters, forwards and fit errors only,
+      no option prices or per-quote implied vols. The fit errors are the saved ones, at
+      the fit.
     """),
             "About this page": mo.md(f"""
     Runs entirely in your browser (Python compiled to WebAssembly with Pyodide); nothing

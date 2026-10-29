@@ -10,7 +10,9 @@ the pure-Python ``volsurface`` wheel built from this checkout and the SPX fits i
 ``data/presets/spx_fits.npz`` and every model's fitted parameters in
 ``data/presets/spx_model_fits.json`` (14 October 2026 SPXW snapshot), plus the plotly wheel
 pinned in ``uv.lock`` (Pyodide does not ship plotly). Nothing calls back to
-any server of ours.
+any server of ours. The folder holds fitted parameters only: no snapshot, option price
+or per-quote implied vol (``no_quotes`` stops the build if one gets in), so the pages
+draw no market dots.
 
 By default the build also self-hosts the runtime: the Pyodide core files and every
 package the page loads (from the jsDelivr Pyodide CDN and PyPI, hash-checked against
@@ -298,6 +300,21 @@ def add_loader(out: Path) -> None:
     worker.write_text((LOADER / "worker_hook.js").read_text() + worker.read_text())
 
 
+def no_quotes(public: Path) -> None:
+    """Stop the build if the public folder would carry quotes rather than fitted parameters."""
+    import zipfile
+
+    import numpy as np
+
+    with np.load(public / "spx_fits.npz", allow_pickle=False) as saved:
+        bad = [name for name in saved.files if name.startswith("market")]
+    with zipfile.ZipFile(public / WHEEL) as wheel:
+        bad += [n for n in wheel.namelist() if n.endswith((".parquet", ".csv", ".npz"))]
+    bad += [str(p.name) for p in public.rglob("*.parquet")]
+    if bad:
+        raise SystemExit(f"quotes in the public folder: {bad[:5]}")
+
+
 def main(out: Path, cdn: bool) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp) / "stage"
@@ -312,6 +329,7 @@ def main(out: Path, cdn: bool) -> None:
         shutil.copy(
             ROOT / "data" / "presets" / "spx_model_fits.json", public / "spx_model_fits.json"
         )
+        no_quotes(public)
         plotly = locked_wheel("plotly", public)
         slim_plotly(public / plotly)
         for name in ("vol_lab.py", "vol_lab_mobile.py"):

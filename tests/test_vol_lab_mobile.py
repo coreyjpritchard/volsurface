@@ -46,3 +46,12 @@ def test_both_pages_read_the_precomputed_fits():
     for page in ("vol_lab.py", "vol_lab_mobile.py"):
         text = (DASHBOARD / page).read_text()
         assert "spx_model_fits.json" in text and "spx_fits.npz" in text
+
+
+def test_web_pages_ship_no_quotes():
+    # On the web there is no snapshot: both pages set the market overlay to None, and
+    # the build script refuses a public folder with quotes in it.
+    for page in ("vol_lab.py", "vol_lab_mobile.py"):
+        assert "market = None" in (DASHBOARD / page).read_text()
+    build = DASHBOARD.parent / "scripts" / "build_public_vollab.py"
+    assert "no_quotes(public)" in build.read_text()
