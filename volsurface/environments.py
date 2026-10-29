@@ -13,6 +13,11 @@ implied volatility ``sigma(T, k)`` on a grid of expiries ``T`` and log-moneyness
 - ``spx_svi`` and ``spx_sanos``: the 14 October 2026 SPXW fits, rebuilt from
   ``data/presets/spx_fits.npz`` (written by ``scripts/build_dashboard_presets.py``).
 
+The preset files hold fitted parameters and summary numbers only, never quotes or the
+implied vols of single quotes. The market implied vols that the overlays and the fit
+errors need are rebuilt from the local snapshot by :func:`load_market_quotes`, which
+returns ``None`` where there is no snapshot (the static web build).
+
 The grid is rectangular in standardised moneyness ``z = k / (sigma_ref sqrt(T))``, so each
 expiry is sampled over the same number of standard deviations and the short end is not
 all wing. ``k`` is therefore a ``(n_T, n_z)`` array.
@@ -259,7 +264,7 @@ def load_spx_presets(path: str | Path = PRESET_PATH) -> dict[str, Environment]:
     """The 14 October 2026 SPXW SVI and SANOS fits, rebuilt from saved parameters.
 
     Moneyness is normalised to each expiry's forward and prices to ``df F``, so the
-    curves are unit curves; the saved implied vols already carry the market's forwards.
+    curves are unit curves. The file holds the fitted parameters only, no quotes.
     """
     from volsurface.surface.sanos import SanosSurface
 
@@ -284,18 +289,13 @@ def load_spx_presets(path: str | Path = PRESET_PATH) -> dict[str, Environment]:
         Domain(*map(float, s_dom)),
         time_interp=str(data["sanos_time_interp"]),
     )
-    market = {
-        "T": data["market_T"],
-        "k": data["market_k"],
-        "iv": data["market_iv"],
-    }
     out = {}
     for key, surface, name in (
         ("spx_svi", svi, "SPX 14 Oct 2026: raw SVI per expiry"),
         ("spx_sanos", sanos, f"SPX 14 Oct 2026: SANOS, eta = {float(data['sanos_eta']):g}"),
     ):
         env = Environment(name=name, surface=surface, note="One snapshot, SPXW mids.")
-        env.params = {"market": market, "T_range": (float(svi_T.min()), float(svi_T.max()))}
+        env.params = {"T_range": (float(svi_T.min()), float(svi_T.max()))}
         out[key] = env
     return out
 
@@ -395,6 +395,36 @@ def fitted_sabr_environment(fit: dict) -> Environment:
     )
 
 
+def otm_quotes(data) -> dict[str, np.ndarray]:
+    """Out-of-the-money implied vols of a :class:`MarketData`: ``T``, ``k``, ``iv`` arrays.
+
+    Calls at ``k >= 0`` and puts at ``k < 0``, quotes with no implied vol dropped, as in
+    the session 00 overlay. These are the quotes every fit error in the lab is taken over.
+    """
+    quotes = data.quotes.dropna(subset=["iv"])
+    otm = ((quotes["k"] >= 0) & (quotes["kind"] == "call")) | (
+        (quotes["k"] < 0) & (quotes["kind"] == "put")
+    )
+    quotes = quotes[otm]
+    return {name: quotes[name].to_numpy(dtype=float) for name in ("T", "k", "iv")}
+
+
+def load_market_quotes(underlying: str = "SPX", directory=None) -> dict[str, np.ndarray] | None:
+    """The snapshot's out-of-the-money implied vols, or ``None`` when there is no snapshot.
+
+    Rebuilt from the local parquet each time (a few seconds), so no quote or per-quote
+    implied vol is written into the preset files or shipped in the web build.
+    """
+    from volsurface import chains
+    from volsurface.core.market import market_data_from_snapshot
+
+    try:
+        path = chains.latest_snapshot(underlying, directory or chains.SNAPSHOT_DIR)
+    except FileNotFoundError:
+        return None
+    return otm_quotes(market_data_from_snapshot(chains.load_snapshot(path)))
+
+
 def fitted_rbergomi_xi0(spx: dict[str, Environment]):
     """The forward variance curve the rough Bergomi fit used: the saved SANOS surface's."""
     from volsurface.fit.rbergomi import forward_variance
@@ -441,9 +471,10 @@ class FitQuality:
 def fit_quality(env: Environment, market: dict, T_max: float | None = None) -> FitQuality:
     """RMSE of ``model iv - market iv`` over the quotes, in vol points.
 
-    ``market`` has arrays ``T``, ``k`` and ``iv`` (the out-of-the-money mids saved with the
-    SPX fits). Quotes where the model has no implied vol (a price below what the inversion
-    resolves, deep in a short-dated wing) are left out and counted in ``n_used``.
+    ``market`` has arrays ``T``, ``k`` and ``iv``, the out-of-the-money quotes from
+    :func:`load_market_quotes`. Quotes where the model has no implied vol (a price below
+    what the inversion resolves, deep in a short-dated wing) are left out and counted in
+    ``n_used``.
     """
     T, k, iv = (np.asarray(market[name], dtype=float) for name in ("T", "k", "iv"))
     if T_max is not None:

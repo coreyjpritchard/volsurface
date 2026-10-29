@@ -7,7 +7,9 @@ programme):
 
 Writes ``data/presets/spx_fits.npz``: the raw SVI parameters of every expiry,
 the SANOS (eta = 0.25, omega = 0, pchip in time) strikes, weights and ATM
-variances, and the market implied vols for the overlay. Both fits are the ones
+variances. Fitted parameters only: no quote and no per-quote implied vol is saved
+(the lab rebuilds those from the local snapshot,
+:func:`volsurface.environments.load_market_quotes`). Both fits are the ones
 in ``scripts/figures_p3c.py``. The dashboard rebuilds the surfaces from these
 numbers, so it never refits.
 """
@@ -44,12 +46,6 @@ def main() -> None:
     )
     print(f"SANOS: {sanos.T.size} expiries", flush=True)
 
-    quotes = data.quotes.dropna(subset=["iv"])
-    # Out-of-the-money quotes only, as in the session 00 overlay.
-    otm = ((quotes["k"] >= 0) & (quotes["kind"] == "call")) | (
-        (quotes["k"] < 0) & (quotes["kind"] == "put")
-    )
-    quotes = quotes[otm]
     arrays = {
         "svi_T": svi_T,
         "svi_params": svi_params,
@@ -62,9 +58,6 @@ def main() -> None:
         "sanos_domain": np.array(
             [sanos.domain.t_min, sanos.domain.t_max, sanos.domain.k_min, sanos.domain.k_max]
         ),
-        "market_T": quotes["T"].to_numpy(dtype=float),
-        "market_k": quotes["k"].to_numpy(dtype=float),
-        "market_iv": quotes["iv"].to_numpy(dtype=float),
     }
     for j in range(sanos.T.size):
         arrays[f"sanos_strikes_{j}"] = sanos.strikes[j]

@@ -142,7 +142,8 @@ plug-in) and a **Mode**:
   presets include ones built to break: SVI with calendar arbitrage, and SVI and SABR with
   butterfly arbitrage. SANOS has no synthetic version (it is only ever a fit).
 - **Fitted**: the same model calibrated to the SPX (SPXW) option chain of 14 October 2026,
-  drawn over the market quotes, with its implied-vol RMSE. For Black-Scholes, Heston and
+  with its implied-vol RMSE, and drawn over the market quotes when the snapshot is on
+  disk. For Black-Scholes, Heston and
   rough Bergomi the sliders start at the fitted values and stay editable; "Reset to fit"
   puts them back, and the panel says when they have moved. SABR, SVI and SANOS are fitted
   expiry by expiry and are shown as fitted.
@@ -152,10 +153,15 @@ index print, the forward treatment and the expiries. Every panel is computed liv
 library; the app holds no pricing code and calibrates nothing
 (`volsurface/environments.py` does the work).
 
-The fits are read from two files. `data/presets/spx_fits.npz` holds the SVI and SANOS fits
-and the quotes; `scripts/build_dashboard_presets.py` rebuilds it in about three minutes.
-`data/presets/spx_model_fits.json` holds every model's fitted parameters and fit quality;
-`scripts/build_model_fits.py` rebuilds it in about five minutes.
+The fits are read from two files. `data/presets/spx_fits.npz` holds the SVI and SANOS fits;
+`scripts/build_dashboard_presets.py` rebuilds it in about three minutes.
+`data/presets/spx_model_fits.json` holds every model's fitted parameters, the forward and
+discount factor per expiry, and the fit errors; `scripts/build_model_fits.py` rebuilds it
+in about five minutes. Neither file holds an option price or the implied vol of a single
+quote. The black dots and the error after a slider moves need the quotes, so the app
+rebuilds them from the snapshot in `data/snapshots/` when it is there
+(`environments.load_market_quotes`, about a second). Without the snapshot, as in the
+static web build, the dots are left out and only the saved errors at the fit are shown.
 
 The data is one snapshot: 8,973 out-of-the-money SPXW mids, 40 expiries from 10 hours to
 351 days, CBOE delayed quotes taken at 10:01 UTC on 14 October 2026 (06:01 in New York,

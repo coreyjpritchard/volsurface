@@ -10,9 +10,9 @@ and the implied-vol RMSE against the quotes, so the vol lab's "Fitted" mode can 
 calibrated model without calibrating (and its web build without any download).
 
 The quotes are the 8,973 out-of-the-money SPXW mids of ``data/snapshots/SPX_2026-10-14``
-saved in ``spx_fits.npz``: 40 expiries, 10 hours to 351 days. One RMSE is computed the
-same way for every model, :func:`volsurface.environments.fit_quality`, even though each
-model was fitted to a different loss:
+(:func:`volsurface.environments.otm_quotes`): 40 expiries, 10 hours to 351 days. One RMSE
+is computed the same way for every model, :func:`volsurface.environments.fit_quality`,
+even though each model was fitted to a different loss:
 
 - Black-Scholes: the one vol that minimises the implied-vol RMSE over all the quotes,
   which is their mean.
@@ -168,7 +168,7 @@ def main() -> None:
     snapshot = chains.load_snapshot(path)
     data = market_data_from_snapshot(snapshot)
     spx = env_lib.load_spx_presets()
-    market = spx["spx_svi"].params["market"]
+    market = env_lib.otm_quotes(data)
     by_T = data.quotes.groupby("T")[["F", "df"]].first()
     out = {
         "data": {

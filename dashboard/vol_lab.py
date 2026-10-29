@@ -37,9 +37,8 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     MODES = {"Synthetic (your parameters)": "synthetic", "Fitted to SPX, 14 Oct 2026": "fitted"}
-    mode = mo.ui.radio(
-        options=MODES, value="Synthetic (your parameters)", label="Mode", inline=True
-    )
+    # Stacked, not inline: the labels are long for the controls column.
+    mode = mo.ui.radio(options=MODES, value="Synthetic (your parameters)", label="Mode")
     ENVIRONMENTS = {
         "Black-Scholes: one flat vol": "flat",
         "Heston: stochastic variance": "heston",
@@ -94,9 +93,11 @@ def _(env_lib, mo):
     # The SPX fits are loaded once, from data/presets/spx_fits.npz (SVI and SANOS) and
     # data/presets/spx_model_fits.json (every model's calibrated parameters, written by
     # scripts/build_model_fits.py). Nothing is fitted here and nothing is downloaded.
+    # Those files hold fitted parameters only. The market implied vols for the black dots
+    # and the live fit errors are rebuilt from the local snapshot; without it, None.
     spx = mo.cache(env_lib.load_spx_presets)()
     fits = env_lib.load_model_fits()
-    market = spx["spx_svi"].params["market"]
+    market = mo.cache(env_lib.load_market_quotes)()
     return fits, market, spx
 
 
@@ -169,7 +170,9 @@ def _(PRESETS, environment, fits, mo, mode, preset, reset):
                 step=step,
                 value=_values[name],
                 label=label,
-                show_value=True,
+                # The value is in the table below, to four figures: a fitted value has
+                # sixteen digits and the slider would print them all.
+                show_value=False,
                 debounce=True,
                 full_width=True,
             )
@@ -180,14 +183,19 @@ def _(PRESETS, environment, fits, mo, mode, preset, reset):
 
 
 @app.cell(hide_code=True)
-def _(MODES, environment, mo, mode):
+def _(MODES, environment, market, mo, mode):
     def badge(fitted: bool, model: str):
         """The caption every view carries: where the numbers come from."""
         if fitted:
+            _dots = (
+                "Black dots are the market quotes."
+                if market is not None
+                else "No quotes are shown: this build has the fitted parameters only."
+            )
             return mo.callout(
                 mo.md(
                     f"**Fitted:** {model} calibrated to the SPX (SPXW) option chain of "
-                    "14 Oct 2026. Black dots are the market quotes."
+                    f"14 Oct 2026. {_dots}"
                 ),
                 kind="info",
             )
@@ -238,7 +246,7 @@ def _(
             ),
         )
     if fitted:
-        grid = env_lib.fitted_grid(market["T"])
+        grid = env_lib.fitted_grid(fits["data"]["expiry_T"])
         if key == "flat":
             env = env_lib.flat_environment(**p)
         elif key == "heston":
@@ -309,12 +317,12 @@ def _(
             "n_quotes": _saved["n_quotes"],
             "live": False,
         }
-        if moved and not env.monte_carlo:
+        if moved and (env.monte_carlo or market is None):
+            quality = None
+        elif moved:
             _q = env_lib.fit_quality(env, market)
             quality = {"rmse": _q.rmse, "n_used": _q.n_used, "n_quotes": _q.n_quotes}
             quality["live"] = True
-        elif moved:
-            quality = None
     return (
         T_term,
         arb,
@@ -333,9 +341,12 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(env_lib, environment, market, mo, mode):
+def _(env_lib, environment, fits, mo, mode):
     # Depends on the model and mode only, so moving a slider keeps the chosen expiry.
-    _T = env_lib.fitted_grid(market["T"]).T if mode.value == "fitted" else env_lib.default_grid().T
+    if mode.value == "fitted":
+        _T = env_lib.fitted_grid(fits["data"]["expiry_T"]).T
+    else:
+        _T = env_lib.default_grid().T
 
     def days(t):
         d = t * 365
@@ -408,7 +419,7 @@ def _(
         _items += [mo.md("**Parameters**"), *params.elements.values()]
         _items.append(
             mo.md(
-                "| now | value |\n|---|---|\n"
+                "| parameter | now |\n|---|---|\n"
                 + "\n".join(f"| {k} | {v:.4g} |" for k, v in params.value.items())
             )
         )
@@ -453,18 +464,33 @@ def _(
                     else "*A fitted surface: no parameters to move.*"
                 )
             )
-        # Error at the shown expiry, live (one expiry is cheap even for Monte Carlo).
-        _sel = np.isclose(market["T"], _t)
-        _err = (env_lib.iv_at(env, market["T"][_sel], market["k"][_sel]) - market["iv"][_sel]) * 100
-        _ok = np.isfinite(_err)
-        _here = (
-            f"at {days(_t)}: {np.sqrt(np.mean(_err[_ok] ** 2)):.2f} vol points over "
-            f"{int(_ok.sum())} quotes"
-            if _ok.any()
-            else f"at {days(_t)}: no quote has a model vol"
-        )
+        if market is not None:
+            # Error at the shown expiry, live (one expiry is cheap even for Monte Carlo).
+            _sel = np.isclose(market["T"], _t)
+            _err = env_lib.iv_at(env, market["T"][_sel], market["k"][_sel])
+            _err = (_err - market["iv"][_sel]) * 100
+            _ok = np.isfinite(_err)
+            _here = (
+                f"at {days(_t)}: {np.sqrt(np.mean(_err[_ok] ** 2)):.2f} vol points over "
+                f"{int(_ok.sum())} quotes"
+                if _ok.any()
+                else f"at {days(_t)}: no quote has a model vol"
+            )
+        elif moved:
+            _here = f"at {days(_t)}: not recomputed, this build has no quotes"
+        else:
+            # The saved per-expiry error, at the fit.
+            _j = int(np.argmin(np.abs(np.asarray(fits["data"]["expiry_T"]) - _t)))
+            _v = fits["models"][key]["rmse_by_expiry"][_j]
+            _here = (
+                f"at {days(_t)}: {_v:.2f} vol points, at the fit"
+                if _v is not None
+                else f"at {days(_t)}: no quote has a model vol"
+            )
         if quality is None:
-            _all = "all expiries: not recomputed for Monte Carlo once a slider moves"
+            _all = "all expiries: not recomputed once a slider moves" + (
+                " (Monte Carlo)" if env.monte_carlo else " (this build has no quotes)"
+            )
         else:
             _all = (
                 f"all {fits['data']['n_expiries']} expiries: {quality['rmse']:.2f} vol points "
@@ -519,7 +545,7 @@ def _(TAG, arb, days, expiry, fitted, go, grid, iv, market, np, show_flags, x_ax
                 name="arbitrage",
             )
         )
-    if fitted:
+    if fitted and market is not None:
         _in = (market["T"] >= grid.T[0]) & (market["T"] <= grid.T[-1])
         _in &= np.abs(market["k"]) <= 0.6 * np.sqrt(market["T"]) + 0.02
         _mx = market["k"][_in] if x_axis.value == "k" else 100 * np.exp(market["k"][_in])
@@ -583,7 +609,7 @@ def _(TAG, arb, days, expiry, fitted, go, grid, iv, market, np, show_flags, x_ax
                     marker=dict(color="#d62728", size=7),
                 )
             )
-    if fitted:
+    if fitted and market is not None:
         # The quotes of exactly this expiry: in Fitted mode every grid row is a quoted one.
         _sel = np.isclose(market["T"], grid.T[_i])
         _sel &= (market["k"] >= grid.k[_i].min()) & (market["k"] <= grid.k[_i].max())
@@ -598,11 +624,11 @@ def _(TAG, arb, days, expiry, fitted, go, grid, iv, market, np, show_flags, x_ax
             )
         )
     _ = smile_fig.update_layout(
-        title=f"Smile at {days(grid.T[_i])} ({TAG}; grey: other expiries)",
+        title=f"Smile at {days(grid.T[_i])} ({TAG})<br><sup>grey: the other expiries</sup>",
         height=480,
         xaxis_title=X_LABEL,
         yaxis_title="implied vol",
-        margin=dict(l=50, r=10, t=40, b=40),
+        margin=dict(l=50, r=10, t=64, b=40),
         legend=dict(x=0.02, y=0.98),
         uirevision="keep",
     )
@@ -632,7 +658,7 @@ def _(TAG, T_term, atm_term, fitted, go, make_subplots, market, np, skew_term, s
         row=1,
         col=2,
     )
-    if fitted:
+    if fitted and market is not None:
         # The market's ATM level and skew per quoted expiry, measured as in the README.
         _rows = []
         for _t in np.unique(market["T"]):
@@ -667,7 +693,7 @@ def _(TAG, T_term, atm_term, fitted, go, make_subplots, market, np, skew_term, s
     term_fig.update_xaxes(title_text="T (years)", type="log", row=1, col=2)
     term_fig.update_yaxes(title_text="implied vol", row=1, col=1)
     term_fig.update_yaxes(title_text="|d sigma / dk| at k = 0", type="log", row=1, col=2)
-    _ = term_fig.update_layout(height=360, showlegend=False, margin=dict(l=50, r=10, t=40, b=40))
+    _ = term_fig.update_layout(height=480, showlegend=False, margin=dict(l=50, r=10, t=40, b=40))
     return (term_fig,)
 
 
@@ -798,12 +824,19 @@ def _(TAG, arb, go, grid, make_subplots, np):
 def _(F_check, controls, mo, smile_fig, surface_fig, term_fig):
     mo.vstack(
         [
+            # Two rows, so the controls column is wide enough for its labels and the
+            # 3D scene does not run under it.
             mo.hstack(
-                [controls, mo.ui.plotly(surface_fig), mo.ui.plotly(smile_fig)],
-                widths=[1.3, 1.9, 1.5],
+                [controls, mo.ui.plotly(surface_fig)],
+                widths=[1.0, 2.2],
+                align="start",
+                gap=1.5,
+            ),
+            mo.hstack(
+                [mo.ui.plotly(smile_fig), mo.ui.plotly(term_fig)],
+                widths=[1.0, 1.6],
                 align="start",
             ),
-            mo.ui.plotly(term_fig),
             F_check,
         ]
     )
@@ -973,6 +1006,9 @@ def _(fits, mo):
     - **Rebuild:** `scripts/build_dashboard_presets.py` (SVI, SANOS) and
       `scripts/build_model_fits.py` (every model's parameters) write
       `data/presets/`. The page reads those files and never fits or downloads anything.
+    - **Quotes:** those files hold fitted parameters, forwards and fit errors only, no
+      option prices or per-quote implied vols. The black dots and the live fit errors are
+      rebuilt from the local snapshot when it is there; without it they are left out.
     """)
         }
     )
@@ -990,8 +1026,8 @@ def _(mo):
     all wing. Middle: one expiry's smile, with the others in grey. Below: the ATM vol and the
     ATM skew $d\sigma/dk$ against expiry; on log-log axes a power law is a straight line.
     Red points are nodes where an arbitrage check fails. In Fitted mode the rows are quoted
-    SPX expiries and the black dots are the market quotes at that expiry (smile) or all
-    expiries (surface, term structure).
+    SPX expiries and, when the local snapshot is there, the black dots are the market
+    quotes at that expiry (smile) or all expiries (surface, term structure).
 
     **Takeaway.** The surface is the model's fingerprint: tilt is correlation, curvature is
     vol of vol, and how the skew decays with expiry tells a diffusion (bending line) from a
