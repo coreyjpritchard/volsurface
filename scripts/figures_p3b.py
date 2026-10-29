@@ -7,6 +7,10 @@ Run from the repository root:
 The left panel is the projected mass at four expiries. At eta = 0 the
 density is atomic, so the mass is the density. The right panel is the
 quote residual divided by the half-spread.
+
+The committed docs/figures/p3b_sanos_residuals_by_expiry.csv summarises the
+residuals per expiry; the per-quote residuals go to data/cache/figures/, which
+git ignores.
 """
 
 from __future__ import annotations
@@ -26,7 +30,32 @@ from volsurface.fit.sanos import SanosFitter
 
 ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "docs" / "figures"
+LOCAL = ROOT / "data" / "cache" / "figures"
 TARGETS = (7 / 365, 30 / 365, 90 / 365, 0.96)
+
+
+def residuals_by_expiry(quotes: pd.DataFrame) -> pd.DataFrame:
+    """Per-expiry summary of the residual in half-spreads (no per-quote values)."""
+    rows = []
+    for maturity, group in quotes.groupby("T", sort=True):
+        r = group["residual_spreads"].to_numpy(dtype=float)
+        q05, q25, q50, q75, q95 = np.quantile(r, [0.05, 0.25, 0.5, 0.75, 0.95])
+        rows.append(
+            {
+                "T": float(maturity),
+                "n_quotes": int(r.size),
+                "mean": float(np.mean(r)),
+                "rmse": float(np.sqrt(np.mean(r**2))),
+                "max_abs": float(np.max(np.abs(r))),
+                "q05": float(q05),
+                "q25": float(q25),
+                "median": float(q50),
+                "q75": float(q75),
+                "q95": float(q95),
+                "share_within_1": float(np.mean(np.abs(r) <= 1.0)),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def main() -> None:
@@ -48,7 +77,9 @@ def main() -> None:
             "residual_spreads": residual_spreads,
         }
     )
-    quotes.to_csv(FIG / "p3b_sanos_residuals.csv", index=False)
+    LOCAL.mkdir(parents=True, exist_ok=True)
+    quotes.to_csv(LOCAL / "p3b_sanos_residuals.csv", index=False)
+    residuals_by_expiry(quotes).to_csv(FIG / "p3b_sanos_residuals_by_expiry.csv", index=False)
 
     chosen = []
     for target in TARGETS:

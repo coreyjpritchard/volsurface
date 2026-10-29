@@ -5,8 +5,10 @@ Run from the repository root:
     python scripts/figures_p2c.py
 
 Writes PNG and CSV under docs/figures/, and the widget preset
-data/presets/heston.json. Seeds are fixed. The chain is the committed
-SPXW file: CBOE delayed mids, European and cash-settled.
+data/presets/heston.json. Seeds are fixed. The chain is a local SPXW snapshot
+(CBOE delayed mids, European and cash-settled), which is not committed. The
+committed smile CSVs hold the fitted model and per-expiry fit errors only; the
+per-quote market implied vols go to data/cache/figures/, which git ignores.
 """
 
 from __future__ import annotations
@@ -32,9 +34,35 @@ from volsurface.surface_export import write_surface_preset
 
 ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "docs" / "figures"
+LOCAL = ROOT / "data" / "cache" / "figures"
 FO = dict(v0=0.0175, kappa=1.5768, theta=0.0398, xi=0.5751, rho=-0.5711)
 FO_CALL = 5.785155450
 SOURCE = "SPXW mids, CBOE delayed, 14 Oct 2026"
+
+
+def smile_errors(smiles: pd.DataFrame) -> pd.DataFrame:
+    """Per-expiry model minus market implied vol, in vol points (1 point = 0.01 of vol)."""
+    rows = []
+    for maturity, group in smiles.groupby("T", sort=True):
+        error = 100.0 * (group["model_iv"] - group["market_iv"]).to_numpy(dtype=float)
+        rows.append(
+            {
+                "T": float(maturity),
+                "n_quotes": int(error.size),
+                "mean_vol_pts": float(np.mean(error)),
+                "rmse_vol_pts": float(np.sqrt(np.mean(error**2))),
+                "max_abs_vol_pts": float(np.max(np.abs(error))),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def write_smiles(smiles: pd.DataFrame) -> None:
+    """Commit the model smiles and per-expiry errors; keep per-quote market vols local."""
+    LOCAL.mkdir(parents=True, exist_ok=True)
+    smiles.to_csv(LOCAL / "p2c_spx_smiles.csv", index=False)
+    smiles[["T", "k", "model_iv"]].to_csv(FIG / "p2c_spx_smiles.csv", index=False)
+    smile_errors(smiles).to_csv(FIG / "p2c_spx_smile_errors.csv", index=False)
 
 
 def cos_error_against_n() -> pd.DataFrame:
@@ -244,7 +272,7 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
     fig.savefig(FIG / "p2c_spx_smiles.png", dpi=140)
     plt.close(fig)
     smiles = pd.DataFrame(smile_rows)
-    smiles.to_csv(FIG / "p2c_spx_smiles.csv", index=False)
+    write_smiles(smiles)
 
     skew_rows = []
     # Market skew uses every quote, not the 11-strike subset the fitter saw.
