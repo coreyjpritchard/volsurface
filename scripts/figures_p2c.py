@@ -313,7 +313,7 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         0.5,
         0.01,
         f"{SOURCE}. Skew: quadratic fit for |k| <= max(0.15 sqrt(T), 0.01).\n"
-        "The headline figure fits ATM level and skew directly, with xi capped at 2.",
+        "The headline figure fits ATM level and skew directly, with xi capped at 5.",
         ha="center",
         fontsize=7,
         color="0.3",

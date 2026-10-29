@@ -38,8 +38,11 @@ Seed 0 holds out 1,796 of 8,973 quotes. The mean fraction of strikes
 left out of an expiry is 0.2002. SANOS at `eta = 0.25` and `omega = 0`,
 fit on the other 7,177 quotes, places 0.990535 of the held-out model
 calls inside the held-out bid and ask. Raw SVI on the same split places
-0.541203. The fitted SANOS surface has 0 violations on the dense grid.
-Both fits and that check took 86.7 s.
+0.540646 on the locked dependencies of `uv.lock` (0.541203 on the
+unrecorded versions of the first run). The fitted SANOS surface has 0
+violations on the dense grid. Both fits and that check took 86.7 s on
+the first run. `pytest -s -m slow tests/test_sanos_smooth.py -k holdout`
+prints these numbers.
 
 The solver is the HiGHS interior point method, with crossover off. The
 simplex run on the smooth book returns HiGHS status 15 and no solution
