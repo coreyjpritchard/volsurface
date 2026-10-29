@@ -107,9 +107,7 @@ class SurfaceMixin:
         # Second difference of total variance uses the wider step. See d2call_dk2.
         h2 = 1e-3
         w_kk = (
-            self.total_variance(T, k_axis + h2)
-            - 2.0 * w
-            + self.total_variance(T, k_axis - h2)
+            self.total_variance(T, k_axis + h2) - 2.0 * w + self.total_variance(T, k_axis - h2)
         ) / h2**2
         # dw/dT at fixed k. The down step may have been clipped near 0.
         dt = (T + h) - np.maximum(T - h, h * 0.5)

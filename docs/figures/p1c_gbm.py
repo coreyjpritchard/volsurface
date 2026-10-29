@@ -56,14 +56,12 @@ def main() -> None:
     ax = axes[0]
     ax.axhline(100 * sigma, color="k", lw=1.0, label="Black, 20% (the true value)")
     for i, label in enumerate(labels):
-        ax.plot(k, 100 * ivs[i], marker="o", ms=3.5, color=f"C{i}",
-                label=f"Monte Carlo, {label}")
+        ax.plot(k, 100 * ivs[i], marker="o", ms=3.5, color=f"C{i}", label=f"Monte Carlo, {label}")
     finite = np.concatenate([100 * iv[np.isfinite(iv)] for iv in ivs])
     pad = 0.4
     ax.set_ylim(min(finite.min(), 100 * sigma) - pad, max(finite.max(), 100 * sigma) + pad)
     ax.set_ylabel("implied volatility (%)")
-    ax.set_title("Implied vol, one dot per strike: puts for k < 0, calls for k ≥ 0",
-                 fontsize=10)
+    ax.set_title("Implied vol, one dot per strike: puts for k < 0, calls for k ≥ 0", fontsize=10)
     ax.legend(frameon=False, fontsize=8, loc="lower right")
     ax.grid(True, alpha=0.3)
 

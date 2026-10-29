@@ -48,27 +48,40 @@ def _(chains, mo, np, smile):
         for i, (e, t) in enumerate(zip(grid_ts["expiry"], T_grid, strict=True))
     }
     return (
-        T_grid, T_surface, grid_ts, k_slice, k_surface, market, market_grid, market_ts,
-        maturity_labels, snapshot, snapshot_path,
+        T_grid,
+        T_surface,
+        grid_ts,
+        k_slice,
+        k_surface,
+        market,
+        market_grid,
+        market_ts,
+        maturity_labels,
+        snapshot,
+        snapshot_path,
     )
 
 
 @app.cell(hide_code=True)
 def _(maturity_labels, mo):
-    v0 = mo.ui.slider(0.01, 0.15, step=0.001, value=0.011, label="v0, initial variance",
-                      show_value=True)
-    kappa = mo.ui.slider(0.1, 10.0, step=0.1, value=3.0, label="kappa, mean reversion speed",
-                         show_value=True)
-    theta = mo.ui.slider(0.01, 0.15, step=0.001, value=0.04, label="theta, long-run variance",
-                         show_value=True)
-    xi = mo.ui.slider(0.05, 2.0, step=0.05, value=0.4, label="xi, vol of variance",
-                      show_value=True)
-    rho = mo.ui.slider(-0.99, 0.99, step=0.01, value=-0.9, label="rho, correlation",
-                       show_value=True)
+    v0 = mo.ui.slider(
+        0.01, 0.15, step=0.001, value=0.011, label="v0, initial variance", show_value=True
+    )
+    kappa = mo.ui.slider(
+        0.1, 10.0, step=0.1, value=3.0, label="kappa, mean reversion speed", show_value=True
+    )
+    theta = mo.ui.slider(
+        0.01, 0.15, step=0.001, value=0.04, label="theta, long-run variance", show_value=True
+    )
+    xi = mo.ui.slider(0.05, 2.0, step=0.05, value=0.4, label="xi, vol of variance", show_value=True)
+    rho = mo.ui.slider(
+        -0.99, 0.99, step=0.01, value=-0.9, label="rho, correlation", show_value=True
+    )
     use_bs = mo.ui.switch(value=False, label="Black-Scholes instead (sigma = sqrt(v0))")
     show_market = mo.ui.checkbox(value=True, label="Overlay SPX market implied vols")
-    maturity = mo.ui.dropdown(options=maturity_labels, value=list(maturity_labels)[3],
-                              label="Smile at expiry")
+    maturity = mo.ui.dropdown(
+        options=maturity_labels, value=list(maturity_labels)[3], label="Smile at expiry"
+    )
     return kappa, maturity, rho, show_market, theta, use_bs, v0, xi
 
 
@@ -88,47 +101,104 @@ def _(T_grid, k_slice, k_surface, kappa, models, np, rho, theta, use_bs, v0, xi)
 
 @app.cell(hide_code=True)
 def _(
-    T_grid, T_surface, go, grid_ts, iv_slice, iv_surface, k_slice, k_surface, kappa,
-    market_grid, maturity, mo, model_name, rho, show_market, theta, use_bs, v0, xi,
+    T_grid,
+    T_surface,
+    go,
+    grid_ts,
+    iv_slice,
+    iv_surface,
+    k_slice,
+    k_surface,
+    kappa,
+    market_grid,
+    maturity,
+    mo,
+    model_name,
+    rho,
+    show_market,
+    theta,
+    use_bs,
+    v0,
+    xi,
 ):
     _i = maturity.value
     surface = go.Figure(
-        go.Surface(x=k_surface, y=T_surface, z=iv_surface, colorscale="Viridis",
-                   cmin=0.05, cmax=0.45, showscale=False, opacity=0.95, name=model_name)
+        go.Surface(
+            x=k_surface,
+            y=T_surface,
+            z=iv_surface,
+            colorscale="Viridis",
+            cmin=0.05,
+            cmax=0.45,
+            showscale=False,
+            opacity=0.95,
+            name=model_name,
+        )
     )
     if show_market.value:
-        surface.add_trace(go.Scatter3d(
-            x=market_grid["k"], y=market_grid["T"], z=market_grid["iv"], mode="markers",
-            marker=dict(size=2, color="#d62728"), name="SPX",
-        ))
+        surface.add_trace(
+            go.Scatter3d(
+                x=market_grid["k"],
+                y=market_grid["T"],
+                z=market_grid["iv"],
+                mode="markers",
+                marker=dict(size=2, color="#d62728"),
+                name="SPX",
+            )
+        )
     surface.update_layout(
-        title=model_name, height=560, margin=dict(l=0, r=0, t=40, b=0), showlegend=False,
+        title=model_name,
+        height=560,
+        margin=dict(l=0, r=0, t=40, b=0),
+        showlegend=False,
         uirevision="keep",
-        scene=dict(xaxis_title="k = log(K/F)", yaxis_title="T (years)",
-                   zaxis_title="implied vol", zaxis=dict(range=[0.0, 0.6]),
-                   aspectmode="manual", aspectratio=dict(x=1.2, y=1.2, z=0.8),
-                   camera=dict(eye=dict(x=-1.0, y=-2.0, z=0.9))),
+        scene=dict(
+            xaxis_title="k = log(K/F)",
+            yaxis_title="T (years)",
+            zaxis_title="implied vol",
+            zaxis=dict(range=[0.0, 0.6]),
+            aspectmode="manual",
+            aspectratio=dict(x=1.2, y=1.2, z=0.8),
+            camera=dict(eye=dict(x=-1.0, y=-2.0, z=0.9)),
+        ),
     )
 
-    smile_fig = go.Figure(go.Scatter(x=k_slice[_i], y=iv_slice[_i], mode="lines",
-                                     name=model_name, line=dict(width=3)))
+    smile_fig = go.Figure(
+        go.Scatter(x=k_slice[_i], y=iv_slice[_i], mode="lines", name=model_name, line=dict(width=3))
+    )
     if show_market.value:
         _m = market_grid[market_grid["expiry"] == grid_ts["expiry"].iloc[_i]]
-        smile_fig.add_trace(go.Scatter(x=_m["k"], y=_m["iv"], mode="markers", name="SPX",
-                                       marker=dict(size=5, color="#d62728")))
+        smile_fig.add_trace(
+            go.Scatter(
+                x=_m["k"],
+                y=_m["iv"],
+                mode="markers",
+                name="SPX",
+                marker=dict(size=5, color="#d62728"),
+            )
+        )
     smile_fig.update_layout(
-        title=f"Smile, {T_grid[_i] * 365:.0f} days", height=560, uirevision="keep",
-        xaxis_title="k = log(K/F)", yaxis_title="implied vol", yaxis=dict(rangemode="tozero"),
-        margin=dict(l=50, r=10, t=40, b=40), legend=dict(x=0.6, y=0.95),
+        title=f"Smile, {T_grid[_i] * 365:.0f} days",
+        height=560,
+        uirevision="keep",
+        xaxis_title="k = log(K/F)",
+        yaxis_title="implied vol",
+        yaxis=dict(rangemode="tozero"),
+        margin=dict(l=50, r=10, t=40, b=40),
+        legend=dict(x=0.6, y=0.95),
     )
 
-    _controls = mo.vstack([v0, kappa, theta, xi, rho, mo.md("---"), use_bs, show_market,
-                           maturity])
-    mo.vstack([
-        mo.md("# The smile is the model's fingerprint"),
-        mo.hstack([_controls, mo.ui.plotly(surface), mo.ui.plotly(smile_fig)],
-                  widths=[1, 2.2, 1.6], align="start"),
-    ])
+    _controls = mo.vstack([v0, kappa, theta, xi, rho, mo.md("---"), use_bs, show_market, maturity])
+    mo.vstack(
+        [
+            mo.md("# The smile is the model's fingerprint"),
+            mo.hstack(
+                [_controls, mo.ui.plotly(surface), mo.ui.plotly(smile_fig)],
+                widths=[1, 2.2, 1.6],
+                align="start",
+            ),
+        ]
+    )
     return
 
 
@@ -183,30 +253,32 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.accordion({
-        "1. Set rho to 0. Which way does the skew go, and is the smile symmetric?": mo.md(
-            "The downward slope disappears and the smile becomes a U that is exactly "
-            "symmetric in $k$. With zero correlation, implied vol is an even function of "
-            "$\\log(K/F)$ for any stochastic volatility model (Renault and Touzi 1996, "
-            "Math. Finance 6(3)). Push rho positive and the skew turns upward."
-        ),
-        "2. With rho at 0, raise xi from 0.4 to 1.2. Which moves more, the wings or the "
-        "at-the-money vol?": mo.md(
-            "At short maturities the wings rise sharply and at-the-money vol falls a "
-            "little: vol of variance adds curvature, not level. At one year the whole smile "
-            "drops, at-the-money most, so it still bends more. The effect is strongest at "
-            "short maturities, where mean reversion has not yet averaged the variance "
-            "shocks away."
-        ),
-        "3. Set v0 = 0.01 and theta = 0.06. Is short-dated or long-dated vol higher? Now "
-        "raise kappa: what happens?": mo.md(
-            "Long-dated vol is higher: variance is expected to drift up from $v_0$ to "
-            "$\\theta$. With kappa = 3, at-the-money vol climbs from about 10% at one day "
-            "to about 20% at one year. With kappa = 10 the climb happens sooner and one-year "
-            "vol reaches 23%, close to $\\sqrt{\\theta} = 24.5\\%$; the skew also flattens "
-            "at every maturity beyond a few days."
-        ),
-    })
+    mo.accordion(
+        {
+            "1. Set rho to 0. Which way does the skew go, and is the smile symmetric?": mo.md(
+                "The downward slope disappears and the smile becomes a U that is exactly "
+                "symmetric in $k$. With zero correlation, implied vol is an even function of "
+                "$\\log(K/F)$ for any stochastic volatility model (Renault and Touzi 1996, "
+                "Math. Finance 6(3)). Push rho positive and the skew turns upward."
+            ),
+            "2. With rho at 0, raise xi from 0.4 to 1.2. Which moves more, the wings or the "
+            "at-the-money vol?": mo.md(
+                "At short maturities the wings rise sharply and at-the-money vol falls a "
+                "little: vol of variance adds curvature, not level. At one year the whole smile "
+                "drops, at-the-money most, so it still bends more. The effect is strongest at "
+                "short maturities, where mean reversion has not yet averaged the variance "
+                "shocks away."
+            ),
+            "3. Set v0 = 0.01 and theta = 0.06. Is short-dated or long-dated vol higher? Now "
+            "raise kappa: what happens?": mo.md(
+                "Long-dated vol is higher: variance is expected to drift up from $v_0$ to "
+                "$\\theta$. With kappa = 3, at-the-money vol climbs from about 10% at one day "
+                "to about 20% at one year. With kappa = 10 the climb happens sooner and one-year "
+                "vol reaches 23%, close to $\\sqrt{\\theta} = 24.5\\%$; the skew also flattens "
+                "at every maturity beyond a few days."
+            ),
+        }
+    )
     return
 
 
@@ -215,23 +287,45 @@ def _(T_grid, go, kappa, market_ts, mo, model, np, rho, smile, theta, use_bs, v0
     _model_ts = smile.model_term_structure(model, T_grid)
     _A, _alpha = smile.power_law(market_ts["T"], market_ts["skew"])
     _T_line = np.geomspace(market_ts["T"].min(), market_ts["T"].max(), 50)
-    skew_fig = go.Figure([
-        go.Scatter(x=market_ts["T"], y=-market_ts["skew"], mode="markers", name="SPX",
-                   marker=dict(size=7, color="#d62728")),
-        go.Scatter(x=_T_line, y=_A * _T_line ** (-_alpha), mode="lines",
-                   name=f"{_A:.2f} T^(-{_alpha:.2f})", line=dict(dash="dot", color="#d62728")),
-        go.Scatter(x=T_grid, y=-_model_ts[:, 1], mode="lines+markers",
-                   name="Black-Scholes" if use_bs.value else "Heston (sliders)",
-                   line=dict(width=3)),
-    ])
+    skew_fig = go.Figure(
+        [
+            go.Scatter(
+                x=market_ts["T"],
+                y=-market_ts["skew"],
+                mode="markers",
+                name="SPX",
+                marker=dict(size=7, color="#d62728"),
+            ),
+            go.Scatter(
+                x=_T_line,
+                y=_A * _T_line ** (-_alpha),
+                mode="lines",
+                name=f"{_A:.2f} T^(-{_alpha:.2f})",
+                line=dict(dash="dot", color="#d62728"),
+            ),
+            go.Scatter(
+                x=T_grid,
+                y=-_model_ts[:, 1],
+                mode="lines+markers",
+                name="Black-Scholes" if use_bs.value else "Heston (sliders)",
+                line=dict(width=3),
+            ),
+        ]
+    )
     skew_fig.update_layout(
-        title="At-the-money skew, -d(iv)/dk at k = 0", height=420, uirevision="keep",
+        title="At-the-money skew, -d(iv)/dk at k = 0",
+        height=420,
+        uirevision="keep",
         xaxis=dict(type="log", title="T (years)"),
         yaxis=dict(type="log", title="-skew", range=[np.log10(0.05), np.log10(10)]),
-        margin=dict(l=50, r=10, t=40, b=40), legend=dict(x=0.55, y=0.95),
+        margin=dict(l=50, r=10, t=40, b=40),
+        legend=dict(x=0.55, y=0.95),
     )
-    mo.hstack([mo.vstack([v0, kappa, theta, xi, rho]), mo.ui.plotly(skew_fig)],
-              widths=[1, 3], align="start")
+    mo.hstack(
+        [mo.vstack([v0, kappa, theta, xi, rho]), mo.ui.plotly(skew_fig)],
+        widths=[1, 3],
+        align="start",
+    )
     return
 
 

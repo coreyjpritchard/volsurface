@@ -50,7 +50,12 @@ def _bump_rmse(crn: bool, order: int, bumps, model, contract, truth, n_paths, se
         engine = FiniteDifference(F=100.0, df=1.0, bump=float(h), crn=crn)
         for seed in seeds:
             got = engine.compute(
-                model, contract, [Forward()], order=order, n_paths=n_paths, seed=int(seed),
+                model,
+                contract,
+                [Forward()],
+                order=order,
+                n_paths=n_paths,
+                seed=int(seed),
             )
             errors.append(float(got.value[0, 0]) - truth)
         out[i] = float(np.sqrt(np.mean(np.square(errors))))
@@ -62,12 +67,14 @@ def _derivatives(F: float, df: float, sigma: float, T: float) -> tuple[float, fl
 
     def gamma(forward: float) -> float:
         return float(
-            Analytic(F=forward, df=df).compute(
+            Analytic(F=forward, df=df)
+            .compute(
                 BlackScholes(sigma=sigma),
                 [Contract(Vanilla(F), T)],
                 [Forward()],
                 order=2,
-            ).value[0, 0]
+            )
+            .value[0, 0]
         )
 
     h = 1e-2
@@ -81,9 +88,15 @@ def main() -> None:
     F, df, sigma, T = 100.0, 1.0, 0.2, 1.0
     k = np.linspace(-0.2, 0.2, 9)
     contracts = [Contract(Vanilla(float(F * np.exp(log_k))), T) for log_k in k]
-    truth = Analytic(F=F, df=df).compute(
-        BlackScholes(sigma=sigma), contracts, [Forward()],
-    ).value[:, 0]
+    truth = (
+        Analytic(F=F, df=df)
+        .compute(
+            BlackScholes(sigma=sigma),
+            contracts,
+            [Forward()],
+        )
+        .value[:, 0]
+    )
     model = GBM(sigma=sigma, scheme="exact", n_steps=1)
     counts = [1_000, 4_000, 16_000, 64_000]
     seeds = range(6)
@@ -102,15 +115,25 @@ def main() -> None:
             error, n_evals = _rmse(engine, model, contracts, truth, n, seeds)
             xs.append(n_evals)
             ys.append(error)
-        ax.loglog(xs, ys, marker=marker, ms=size, color=colour, label=label,
-                  mfc="none" if marker == "o" else colour)
+        ax.loglog(
+            xs,
+            ys,
+            marker=marker,
+            ms=size,
+            color=colour,
+            label=label,
+            mfc="none" if marker == "o" else colour,
+        )
         if pathwise_start is None:
             pathwise_start = (xs[0], ys[0])
     # Slope -1/2: four times the paths, half the error. Anchored on pathwise.
     guide_x = np.array([pathwise_start[0], counts[-1]])
     guide_y = pathwise_start[1] * np.sqrt(pathwise_start[0] / guide_x)
     ax.loglog(
-        guide_x, guide_y, color="0.4", lw=0.8,
+        guide_x,
+        guide_y,
+        color="0.4",
+        lw=0.8,
         label="slope $-1/2$ (error halves when paths quadruple)",
     )
     ax.set_xlabel("Monte Carlo paths")
@@ -126,13 +149,19 @@ def main() -> None:
     error = np.empty(bumps.size)
     for i, h in enumerate(bumps):
         got = FiniteDifference(F=F, df=df, bump=float(h)).compute(
-            BlackScholes(sigma=sigma), atm, [Forward()],
+            BlackScholes(sigma=sigma),
+            atm,
+            [Forward()],
         )
         error[i] = abs(float(got.value[0, 0]) - atm_truth)
     ax.loglog(bumps, error, color="C2", marker="o", ms=3.5)
     valley = int(np.argmin(error))
     ax.plot(
-        bumps[valley], error[valley], "o", color="k", ms=6,
+        bumps[valley],
+        error[valley],
+        "o",
+        color="k",
+        ms=6,
         label=f"smallest error, bump {bumps[valley]:.1e}",
     )
     ax.loglog([], [], color="C2", marker="o", ms=3.5, label="closed-form delta, central difference")
@@ -148,9 +177,14 @@ def main() -> None:
     mc_seeds = range(8)
     mc_model = GBM(sigma=sigma, scheme="exact", n_steps=1, n_paths=mc_paths)
     gamma_truth = float(
-        Analytic(F=F, df=df).compute(
-            BlackScholes(sigma=sigma), atm, [Forward()], order=2,
-        ).value[0, 0]
+        Analytic(F=F, df=df)
+        .compute(
+            BlackScholes(sigma=sigma),
+            atm,
+            [Forward()],
+            order=2,
+        )
+        .value[0, 0]
     )
     third, fourth = _derivatives(F, df, sigma, T)
     series = [
@@ -167,11 +201,18 @@ def main() -> None:
         printed.append((label, float(mc_bumps[best]), float(rmse[best]), rmse))
     # Central-difference truncation. Delta bias is h² |f'''| / 6. Gamma bias is h² |f''''| / 12.
     ax.loglog(
-        mc_bumps, mc_bumps**2 * abs(third) / 6.0, color="k", lw=0.9,
+        mc_bumps,
+        mc_bumps**2 * abs(third) / 6.0,
+        color="k",
+        lw=0.9,
         label="delta truncation bias, $h^2|f^{(3)}|/6$",
     )
     ax.loglog(
-        mc_bumps, mc_bumps**2 * abs(fourth) / 12.0, color="k", lw=0.9, ls=":",
+        mc_bumps,
+        mc_bumps**2 * abs(fourth) / 12.0,
+        color="k",
+        lw=0.9,
+        ls=":",
         label="gamma truncation bias, $h^2|f^{(4)}|/12$",
     )
     ax.set_xlabel("bump h in the forward (forward = 100)")

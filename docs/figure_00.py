@@ -97,7 +97,8 @@ pred = smile.model_term_structure(fit, maturities, iv_tol=IV_TOL)
 limit = fit.rho * fit.xi / (4.0 * np.sqrt(fit.v0))
 tol = 1e-4 * (HI - LO)
 at_bound = [
-    n for n, v, lo, hi, t in zip(NAMES, best.x, LO, HI, tol, strict=True)
+    n
+    for n, v, lo, hi, t in zip(NAMES, best.x, LO, HI, tol, strict=True)
     if abs(v - lo) <= t or abs(v - hi) <= t
 ]
 bound_text = ", ".join(
@@ -115,8 +116,10 @@ print(
     f"at_bounds={at_bound} feller={2 * fit.kappa * fit.theta / fit.xi**2:.4f}"
 )
 costs = np.array([r.cost for r in results])
-print(f"final costs over starts: min={costs.min():.6f} median={np.median(costs):.6f} "
-      f"max={costs.max():.6f}; within 1% of best: {int(np.sum(costs <= 1.01 * best.cost))}")
+print(
+    f"final costs over starts: min={costs.min():.6f} median={np.median(costs):.6f} "
+    f"max={costs.max():.6f}; within 1% of best: {int(np.sum(costs <= 1.01 * best.cost))}"
+)
 spread = np.array([r.x for r in results if r.cost <= 1.01 * best.cost])
 ranges = zip(NAMES, spread.min(0), spread.max(0), strict=True)
 print("params within 1% of best cost:", " ".join(f"{n}={a:.4f}..{b:.4f}" for n, a, b in ranges))
@@ -147,8 +150,10 @@ print(
     f"heston_flat_below_days={flat_days:.2f} (local slope < alpha/2) "
     f"crosses_power_law_days={[round(365 * T_line[i], 2) for i in cross]}"
 )
-print("heston local slope by day:", " ".join(
-    f"{365 * t:.2f}:{s:.3f}" for t, s in zip(T_line[::6], slope[::6], strict=True)))
+print(
+    "heston local slope by day:",
+    " ".join(f"{365 * t:.2f}:{s:.3f}" for t, s in zip(T_line[::6], slope[::6], strict=True)),
+)
 
 # %% Figure
 days = [1, 7, 30, 91, 365]
@@ -184,10 +189,21 @@ ax.grid(True, alpha=0.3)
 ax.legend(handles=handles, title="expiry", fontsize=8, loc="upper right")
 
 ax = fig.add_subplot(1, 2, 2)
-ax.loglog(365 * maturities, -market_skew, "o", ms=4, color="#d62728",
-          label="SPX ATM skew, one dot per expiry")
-ax.loglog(365 * T_line, A * T_line**-alpha, ":", color="#d62728",
-          label=f"power law ${A:.3f}\\,T^{{-{alpha:.3f}}}$ (T in years), H = {H:.2f}")
+ax.loglog(
+    365 * maturities,
+    -market_skew,
+    "o",
+    ms=4,
+    color="#d62728",
+    label="SPX ATM skew, one dot per expiry",
+)
+ax.loglog(
+    365 * T_line,
+    A * T_line**-alpha,
+    ":",
+    color="#d62728",
+    label=f"power law ${A:.3f}\\,T^{{-{alpha:.3f}}}$ (T in years), H = {H:.2f}",
+)
 ax.loglog(365 * T_line, model_line, color="#1f77b4", label="Heston, calibrated")
 xt = [0.5, 1, 2, 7, 30, 91, 365]
 ax.xaxis.set_major_locator(FixedLocator(xt))

@@ -61,8 +61,15 @@ class Pathwise:
         )
 
     def compute(
-        self, model, contracts, wrt, *, order: int = 1, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        model,
+        contracts,
+        wrt,
+        *,
+        order: int = 1,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> GreeksResult:
         started = time.perf_counter()
         contracts = list(contracts)
@@ -70,9 +77,7 @@ class Pathwise:
         _refuse_control(model, "pathwise")
         for contract in contracts:
             if not self.supports(model, contract, order):
-                raise ValueError(
-                    "pathwise greeks support an exact GBM vanilla at order 1 only"
-                )
+                raise ValueError("pathwise greeks support an exact GBM vanilla at order 1 only")
         n_paths = int(model.n_paths if n_paths is None else n_paths)
         seed = model.seed if seed is None else seed
         value = np.empty((len(contracts), len(factors)), dtype=float)
@@ -95,8 +100,11 @@ class Pathwise:
                     value[index, j] = mean[slot]
                     stderr[index, j] = error[slot]
         return GreeksResult(
-            value=value, stderr=stderr, n_evals=evals,
-            wall_time=time.perf_counter() - started, method="pathwise",
+            value=value,
+            stderr=stderr,
+            n_evals=evals,
+            wall_time=time.perf_counter() - started,
+            method="pathwise",
         )
 
 

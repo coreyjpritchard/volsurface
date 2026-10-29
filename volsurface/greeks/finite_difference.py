@@ -49,7 +49,11 @@ class FiniteDifference:
     """Central bump of ``price``. See the module note for the step and the error."""
 
     def __init__(
-        self, F: float, df: float = 1.0, bump: float | None = None, crn: bool = True,
+        self,
+        F: float,
+        df: float = 1.0,
+        bump: float | None = None,
+        crn: bool = True,
     ):
         if bump is not None and bump <= 0.0:
             raise ValueError(f"bump must be positive, got {bump}")
@@ -68,8 +72,15 @@ class FiniteDifference:
         )
 
     def compute(
-        self, model, contracts, wrt, *, order: int = 1, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        model,
+        contracts,
+        wrt,
+        *,
+        order: int = 1,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> GreeksResult:
         started = time.perf_counter()
         if order not in (1, 2):
@@ -84,7 +95,14 @@ class FiniteDifference:
         n_evals = 0
         for j, factor in enumerate(factors):
             column, error, evals = _column(
-                self, model, contracts, factor, order, state, n_paths, seed,
+                self,
+                model,
+                contracts,
+                factor,
+                order,
+                state,
+                n_paths,
+                seed,
             )
             value[:, j] = column
             if error is None:
@@ -120,13 +138,31 @@ def _column(engine, model, contracts, factor, order, state, n_paths, seed):
         kind = kinds[0] if len(set(kinds)) == 1 else kinds
         if _path_difference(model, engine.crn):
             greek, error, used = _crn_difference(
-                engine, model, strikes, kind, maturity, factor, order, h,
-                state, n_paths, seed,
+                engine,
+                model,
+                strikes,
+                kind,
+                maturity,
+                factor,
+                order,
+                h,
+                state,
+                n_paths,
+                seed,
             )
         else:
             greek, error, used = _repriced(
-                engine, model, strikes, kind, maturity, factor, order, h,
-                state, n_paths, seed,
+                engine,
+                model,
+                strikes,
+                kind,
+                maturity,
+                factor,
+                order,
+                h,
+                state,
+                n_paths,
+                seed,
             )
         evals += used
         flat = np.asarray(greek, dtype=float).reshape(-1)
@@ -169,7 +205,17 @@ def _is_simulator(model) -> bool:
 
 
 def _crn_difference(
-    engine, model, strikes, kind, maturity, factor, order, h, state, n_paths, seed,
+    engine,
+    model,
+    strikes,
+    kind,
+    maturity,
+    factor,
+    order,
+    h,
+    state,
+    n_paths,
+    seed,
 ):
     """Mean and standard error of the per-batch greek. One shared seed."""
     n_paths = int(model.n_paths if n_paths is None else n_paths)
@@ -211,7 +257,15 @@ def _repriced(engine, model, strikes, kind, maturity, factor, order, h, state, n
     for slot, bump_seed in zip(slots, seeds, strict=True):
         bumped, forward = _bumped(engine, model, factor, slot, h)
         value, error = _price(
-            bumped, forward, strikes, kind, maturity, engine.df, state, n_paths, bump_seed,
+            bumped,
+            forward,
+            strikes,
+            kind,
+            maturity,
+            engine.df,
+            state,
+            n_paths,
+            bump_seed,
         )
         levels[slot] = value
         if error is None:
@@ -232,8 +286,8 @@ def _combine(levels: dict[str, np.ndarray], order: int, h: float) -> np.ndarray:
 def _rss(errors: dict[str, np.ndarray], order: int, h: float) -> np.ndarray:
     """Independent node errors. The middle price is multiplied by 2, so its variance by 4."""
     if order == 1:
-        return np.sqrt(errors["up"]**2 + errors["down"]**2) / (2.0 * h)
-    return np.sqrt(errors["up"]**2 + 4.0 * errors["mid"]**2 + errors["down"]**2) / h**2
+        return np.sqrt(errors["up"] ** 2 + errors["down"] ** 2) / (2.0 * h)
+    return np.sqrt(errors["up"] ** 2 + 4.0 * errors["mid"] ** 2 + errors["down"] ** 2) / h**2
 
 
 def _sign(slot: str) -> float:
@@ -290,7 +344,8 @@ def _price(model, forward, strikes, kind, maturity, df, state, n_paths, seed):
         result = model.price_with_error(forward, strikes, maturity, df, kind, **kwargs)
         return np.asarray(result.value, dtype=float), np.asarray(result.stderr, dtype=float)
     value = np.asarray(
-        model.price(forward, strikes, maturity, df, kind, state=state), dtype=float,
+        model.price(forward, strikes, maturity, df, kind, state=state),
+        dtype=float,
     )
     return value, None
 

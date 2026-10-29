@@ -92,9 +92,7 @@ def _forward_ratios() -> None:
             p0=np.array([1.0]),
             switch="nu",
         )
-        model = RegimeSwitchingBergomi(
-            spec, xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_pilot=2
-        )
+        model = RegimeSwitchingBergomi(spec, xi0=0.04, rho=-0.4, H=0.1, n_mc=2, n_pilot=2)
         paths = model.simulate_market(2000, times, seed=run_seed(80, 2))
         future = paths.state["xi"][:, clock, clock + 1 :]
         print(f"forward_mean_ratio nu={nu:.1f}: {float(future.mean()) / 0.04:.6f}")

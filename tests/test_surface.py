@@ -50,8 +50,7 @@ def test_call_derivatives_match_finite_differences():
         return 0.04 + 0.01 * kk + 0.005 * kk**2
 
     fd_dk = (
-        call_from_total_variance(k + h, w_of(k + h))
-        - call_from_total_variance(k - h, w_of(k - h))
+        call_from_total_variance(k + h, w_of(k + h)) - call_from_total_variance(k - h, w_of(k - h))
     ) / (2 * h)
     np.testing.assert_allclose(dcall_dk_from_w(k, w, w_k), fd_dk, atol=1e-8)
     fd_dkk = (

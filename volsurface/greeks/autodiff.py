@@ -46,8 +46,15 @@ class Autodiff:
         )
 
     def compute(
-        self, model, contracts, wrt, *, order: int = 1, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        model,
+        contracts,
+        wrt,
+        *,
+        order: int = 1,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> GreeksResult:
         started = time.perf_counter()
         if state:
@@ -81,16 +88,25 @@ class Autodiff:
             for j, factor in enumerate(factors):
                 column = _grad_column(z, forward, sigma, strikes, calls, self.df, factor)
                 samples = _samples(
-                    z_np, self.F, self.df,
-                    np.array(strikes), np.array(calls), model.sigma, maturity, factor,
+                    z_np,
+                    self.F,
+                    self.df,
+                    np.array(strikes),
+                    np.array(calls),
+                    model.sigma,
+                    maturity,
+                    factor,
                 )
                 _, error = _reduce(samples, model.antithetic)
                 for slot, index in enumerate(indices):
                     value[index, j] = column[slot]
                     stderr[index, j] = error[slot]
         return GreeksResult(
-            value=value, stderr=stderr, n_evals=evals,
-            wall_time=time.perf_counter() - started, method="autodiff",
+            value=value,
+            stderr=stderr,
+            n_evals=evals,
+            wall_time=time.perf_counter() - started,
+            method="autodiff",
         )
 
 

@@ -49,12 +49,18 @@ def test_analytic_matches_finite_differences_including_digitals():
     np.testing.assert_allclose(first.value[2, 2], bumped["vega"], rtol=1e-7)
     np.testing.assert_allclose(second.value[2, 2], bumped["volga"], rtol=1e-5)
     vanilla = FiniteDifference(F=100.0, df=0.97, bump=1e-4).compute(
-        model, contracts[:2], [Forward(), Param("sigma")], order=1,
+        model,
+        contracts[:2],
+        [Forward(), Param("sigma")],
+        order=1,
     )
     np.testing.assert_allclose(vanilla.value[:, 0], first.value[:2, 1], rtol=1e-6)
     np.testing.assert_allclose(vanilla.value[:, 1], first.value[:2, 2], rtol=1e-6)
     second_fd = FiniteDifference(F=100.0, df=0.97, bump=1e-4).compute(
-        model, contracts[:2], [Forward(), Param("sigma")], order=2,
+        model,
+        contracts[:2],
+        [Forward(), Param("sigma")],
+        order=2,
     )
     np.testing.assert_allclose(second_fd.value[:, 0], second.value[:2, 1], rtol=5e-4)
     np.testing.assert_allclose(second_fd.value[:, 1], second.value[:2, 2], rtol=1e-4)
@@ -83,15 +89,29 @@ def _digital_bump(F, K, T, sigma, df, h):
 def test_finite_difference_order_is_two_above_the_roundoff_floor():
     """Bumps from 1e-2 down to 1.25e-3. Slope of log error on log bump is 2 within 0.2."""
     model = BlackScholes(sigma=0.2)
-    truth = Analytic(F=100.0, df=1.0).compute(
-        model, [Contract(Vanilla(100.0), 1.0)], [Forward()], order=1,
-    ).value[0, 0]
+    truth = (
+        Analytic(F=100.0, df=1.0)
+        .compute(
+            model,
+            [Contract(Vanilla(100.0), 1.0)],
+            [Forward()],
+            order=1,
+        )
+        .value[0, 0]
+    )
     bumps = np.array([1e-2, 5e-3, 2.5e-3, 1.25e-3])
     error = np.empty(bumps.size)
     for i, h in enumerate(bumps):
-        got = FiniteDifference(F=100.0, df=1.0, bump=float(h)).compute(
-            model, [Contract(Vanilla(100.0), 1.0)], [Forward()], order=1,
-        ).value[0, 0]
+        got = (
+            FiniteDifference(F=100.0, df=1.0, bump=float(h))
+            .compute(
+                model,
+                [Contract(Vanilla(100.0), 1.0)],
+                [Forward()],
+                order=1,
+            )
+            .value[0, 0]
+        )
         error[i] = abs(got - truth)
     # Each halving multiplies the error by about 1/4.
     ratios = error[:-1] / error[1:]
@@ -152,17 +172,25 @@ def test_finite_difference_standard_error_follows_the_simulator():
     contract = [Contract(Vanilla(100.0), 1.0)]
     model = GBM(sigma=0.2, n_paths=2_000, n_steps=1, scheme="exact")
     shared = FiniteDifference(F=100.0, df=1.0, bump=1.0, crn=True).compute(
-        model, contract, [Forward()], seed=4,
+        model,
+        contract,
+        [Forward()],
+        seed=4,
     )
     split = FiniteDifference(F=100.0, df=1.0, bump=1.0, crn=False).compute(
-        model, contract, [Forward()], seed=4,
+        model,
+        contract,
+        [Forward()],
+        seed=4,
     )
     assert shared.stderr is not None and shared.stderr.shape == (1, 1)
     assert split.stderr is not None and split.stderr.shape == (1, 1)
     assert np.isfinite(shared.stderr[0, 0]) and shared.stderr[0, 0] > 0.0
     assert np.isfinite(split.stderr[0, 0]) and split.stderr[0, 0] > shared.stderr[0, 0]
     closed = FiniteDifference(F=100.0, df=1.0, bump=1e-4).compute(
-        BlackScholes(sigma=0.2), contract, [Forward()],
+        BlackScholes(sigma=0.2),
+        contract,
+        [Forward()],
     )
     assert closed.stderr is None
 
@@ -180,7 +208,10 @@ def test_omitted_bump_scales_with_the_level():
     np.testing.assert_allclose(got.value, truth.value, rtol=1e-5, atol=1e-6)
     assert got.stderr is None
     mc = FiniteDifference(F=100.0).compute(
-        GBM(sigma=0.2, n_paths=400, scheme="exact"), contract, [Forward()], seed=1,
+        GBM(sigma=0.2, n_paths=400, scheme="exact"),
+        contract,
+        [Forward()],
+        seed=1,
     )
     assert np.isfinite(mc.value[0, 0])
     assert mc.stderr is not None and np.isfinite(mc.stderr[0, 0]) and mc.stderr[0, 0] > 0.0
@@ -210,7 +241,12 @@ def test_finite_difference_standard_error_is_calibrated_over_200_seeds():
         for i, seed in enumerate(seeds):
             engine = FiniteDifference(F=100.0, df=1.0, bump=bump, crn=True)
             got = engine.compute(
-                model, contract, [factor], order=order, n_paths=2_000, seed=seed,
+                model,
+                contract,
+                [factor],
+                order=order,
+                n_paths=2_000,
+                seed=seed,
             )
             values[i] = got.value[0, 0]
             errors[i] = got.stderr[0, 0]
@@ -264,15 +300,28 @@ def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
     for i, log_k in enumerate(k):
         contract = [Contract(Vanilla(F * np.exp(log_k)), T)]
         truth_1 = analytic.compute(
-            bs_model, contract, [Forward(), Param("sigma")], order=1,
+            bs_model,
+            contract,
+            [Forward(), Param("sigma")],
+            order=1,
         ).value[0]
         truth_g = analytic.compute(bs_model, contract, [Forward()], order=2).value[0, 0]
         mc = GBM(sigma=sigma, scheme="exact", n_steps=1)
         got_1 = LikelihoodRatio(F=F, df=df).compute(
-            mc, contract, [Forward(), Param("sigma")], order=1, n_paths=20_000, seed=300 + i,
+            mc,
+            contract,
+            [Forward(), Param("sigma")],
+            order=1,
+            n_paths=20_000,
+            seed=300 + i,
         )
         got_g = LikelihoodRatio(F=F, df=df).compute(
-            mc, contract, [Forward()], order=2, n_paths=20_000, seed=300 + i,
+            mc,
+            contract,
+            [Forward()],
+            order=2,
+            n_paths=20_000,
+            seed=300 + i,
         )
         z["delta"][i] = (got_1.value[0, 0] - truth_1[0]) / got_1.stderr[0, 0]
         z["vega"][i] = (got_1.value[0, 1] - truth_1[1]) / got_1.stderr[0, 1]
@@ -289,8 +338,12 @@ def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
     contract = [Contract(Vanilla(F), 1.0)]
     truth_v = analytic.compute(bs_model, contract, [Param("sigma")], order=2).value[0, 0]
     got_v = LikelihoodRatio(F=F, df=df).compute(
-        GBM(sigma=sigma, scheme="exact"), contract, [Param("sigma")],
-        order=2, n_paths=100_000, seed=9,
+        GBM(sigma=sigma, scheme="exact"),
+        contract,
+        [Param("sigma")],
+        order=2,
+        n_paths=100_000,
+        seed=9,
     )
     z_volga = (got_v.value[0, 0] - truth_v) / got_v.stderr[0, 0]
     _assert_z([z_volga])
@@ -299,8 +352,11 @@ def test_likelihood_ratio_matches_black_and_is_noisier_when_expiry_is_short():
 def _digital_delta_se(F, sigma, df, T, seed) -> float:
     contract = [Contract(Digital(F, "call"), T)]
     got = LikelihoodRatio(F=F, df=df).compute(
-        GBM(sigma=sigma, scheme="exact"), contract, [Forward()],
-        n_paths=30_000, seed=seed,
+        GBM(sigma=sigma, scheme="exact"),
+        contract,
+        [Forward()],
+        n_paths=30_000,
+        seed=seed,
     )
     return float(got.stderr[0, 0])
 
@@ -309,11 +365,16 @@ def test_likelihood_ratio_prices_a_digital_that_pathwise_cannot():
     """One cash-or-nothing call. n = 1, 200,000 paths, z-rule against df n(d2) / (F s)."""
     F, K, T, sigma, df = 100.0, 105.0, 0.5, 0.2, 0.99
     analytic = Analytic(F=F, df=df).compute(
-        BlackScholes(sigma=sigma), [Contract(Digital(K, "call"), T)], [Forward()],
+        BlackScholes(sigma=sigma),
+        [Contract(Digital(K, "call"), T)],
+        [Forward()],
     )
     got = LikelihoodRatio(F=F, df=df).compute(
-        GBM(sigma=sigma, scheme="exact"), [Contract(Digital(K, "call"), T)], [Forward()],
-        n_paths=200_000, seed=11,
+        GBM(sigma=sigma, scheme="exact"),
+        [Contract(Digital(K, "call"), T)],
+        [Forward()],
+        n_paths=200_000,
+        seed=11,
     )
     z = (got.value[0, 0] - analytic.value[0, 0]) / got.stderr[0, 0]
     _assert_z([z])
@@ -341,8 +402,11 @@ def test_put_pathwise_delta_is_the_negative_indicator():
     F, K, T, sigma, df = 100.0, 100.0, 1.0, 0.2, 1.0
     truth = float(bs.delta(F, K, T, sigma, df, "put"))
     got = Pathwise(F=F, df=df).compute(
-        GBM(sigma=sigma, scheme="exact"), [Contract(Vanilla(K, "put"), T)], [Spot()],
-        n_paths=30_000, seed=13,
+        GBM(sigma=sigma, scheme="exact"),
+        [Contract(Vanilla(K, "put"), T)],
+        [Spot()],
+        n_paths=30_000,
+        seed=13,
     )
     z = (got.value[0, 0] - truth) / got.stderr[0, 0]
     _assert_z([z])
