@@ -1,6 +1,6 @@
 """Build a tidy SPX snapshot from CBOE's public delayed quotes JSON.
 
-The committed file is one fetch, not whatever is live when this script is
+The 14 October 2026 file the results use is one fetch, not whatever is live when this script is
 re-run. Pass a saved JSON path. With no argument the script downloads
 
     https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json
@@ -16,7 +16,7 @@ expiry is never a mix of the two settlements. Every SPXW expiry with positive
 time to expiry inside the tidy window is kept, including dailies and weeklies.
 
 ``quote_time`` is the JSON ``timestamp`` read as UTC. That field has no zone.
-The fetch that produced the committed file matched the clock in UTC. ``rate``
+The fetch that produced the 14 October 2026 file matched the clock in UTC. ``rate``
 is left NaN. :func:`volsurface.chains.market_implied_vols` then keeps the
 put-call parity regression at each expiry (``df = -slope``, ``F = intercept / df``).
 No dividend yield is fitted.

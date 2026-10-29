@@ -13,3 +13,6 @@ docs/*.html.tmp
 .ipynb_checkpoints/
 __marimo__/
 build/
+# Raw quote snapshots stay local: Cboe's terms restrict redistributing them.
+data/snapshots/*
+!data/snapshots/README.md

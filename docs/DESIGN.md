@@ -593,7 +593,8 @@ Exercise and settlement are not in the parquet file. The loader fills
 requires the caller to pass them. **Hypothesis:** that mapping matches the
 contracts. It is an assumption of the loader, not a field we observed.
 
-The committed file is `data/snapshots/SPX_2026-10-14.parquet`. It is SPXW
+The SPX results use `data/snapshots/SPX_2026-10-14.parquet`, which is not
+redistributed (see `data/snapshots/README.md`; the tests use a synthetic chain). It is SPXW
 only, PM-settled, two-sided mids from CBOE's delayed quotes. Forwards and
 discount factors come from put-call parity at each expiry. The note
 `docs/notes/spx_not_spy.md` says why this replaced the SPY last-trade file.

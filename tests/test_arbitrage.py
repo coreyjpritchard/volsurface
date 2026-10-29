@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.fixtures import needs_real_snapshot
 from tests.test_surface import _Bump, _flat_market
 from volsurface.arbitrage import check_quotes, check_surface
 from volsurface.core.market import market_data_from_snapshot
@@ -232,13 +233,23 @@ def test_quote_check_with_no_bids_evaluates_nothing():
     assert report.violations.empty
 
 
-def test_committed_snapshot_runs_the_checker():
+def test_spx_chain_runs_the_checker(synthetic_spx):
+    """The two shortest expiries of the synthetic SPX chain are jointly feasible."""
+    _run_the_checker(synthetic_spx, n_checked=29)
+
+
+@needs_real_snapshot
+def test_real_snapshot_runs_the_checker():
     """The two shortest SPX expiries are two-sided and jointly feasible."""
     from volsurface import chains
+
+    _run_the_checker(chains.load_snapshot(chains.latest_snapshot("SPX")), n_checked=278)
+
+
+def _run_the_checker(chain, n_checked):
     from volsurface.surface.linear import linear_surface
     from volsurface.surface.spline import spline_surface
 
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     expiries = list(data.quotes.groupby("expiry", sort=True).groups)[:2]
     subset = data.quotes[data.quotes["expiry"].isin(expiries)].copy()
@@ -252,7 +263,7 @@ def test_committed_snapshot_runs_the_checker():
     )
     quotes = check_quotes(book, side="bidask")
     assert quotes.ok is True
-    assert quotes.n_checked == 278
+    assert quotes.n_checked == n_checked
     assert quotes.violations.empty
     assert "Dropped 0" in quotes.note
     linear = linear_surface(subset, Curves(data.F, data.df))

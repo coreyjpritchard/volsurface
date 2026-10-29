@@ -43,7 +43,7 @@ def _flat(level):
 
 
 def snapshot_panels(data) -> dict:
-    """Linear, spline and SVI local variance of the committed SPX chain.
+    """Linear, spline and SVI local variance of the SPX snapshot.
 
     The expiry is the one nearest 23 calendar days. The vertical axis is
     symmetric-log so a spike and the at-the-money level share a panel.
@@ -380,7 +380,7 @@ def heston_panel() -> dict:
 
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     summary = snapshot_panels(data)
     heston = heston_panel()

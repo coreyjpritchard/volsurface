@@ -9,7 +9,7 @@ Writes ``data/presets/spx_model_fits.json``: the fitted parameters, how each was
 and the implied-vol RMSE against the quotes, so the vol lab's "Fitted" mode can show a
 calibrated model without calibrating (and its web build without any download).
 
-The quotes are the 8,973 out-of-the-money SPXW mids of ``data/snapshots/SPX_2026-10-14``
+The quotes are the 8,973 out-of-the-money SPXW mids of the local ``data/snapshots/SPX_2026-10-14``
 (:func:`volsurface.environments.otm_quotes`): 40 expiries, 10 hours to 351 days. One RMSE
 is computed the same way for every model, :func:`volsurface.environments.fit_quality`,
 even though each model was fitted to a different loss:
@@ -164,7 +164,7 @@ def quality(env, market) -> dict:
 
 def main() -> None:
     started = time.perf_counter()
-    path = chains.latest_snapshot("SPX")
+    path = chains.require_snapshot("SPX")
     snapshot = chains.load_snapshot(path)
     data = market_data_from_snapshot(snapshot)
     spx = env_lib.load_spx_presets()

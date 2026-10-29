@@ -88,7 +88,7 @@ def _nearest(surface, target: float) -> int:
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     FIG.mkdir(parents=True, exist_ok=True)
     market = Curves(data.F, data.df)
