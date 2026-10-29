@@ -403,15 +403,25 @@ def fitted_rbergomi_xi0(spx: dict[str, Environment]):
 
 
 def iv_at(env: Environment, T, k) -> np.ndarray:
-    """The environment's implied vol at scattered points ``(T[i], k[i])``, one call per expiry."""
+    """The environment's implied vol at scattered points ``(T[i], k[i])``, one call per expiry.
+
+    A surface that defines its own total variance (raw SVI, the SABR slices) is read off
+    it, ``sqrt(w / T)``, rather than by inverting its price: on the shortest expiry the
+    far out-of-the-money prices are so small that the inversion, and whether it returns a
+    number at all, depends on the platform's floating point.
+    """
     T = np.asarray(T, dtype=float)
     k = np.asarray(k, dtype=float)
     out = np.full(T.shape, np.nan)
+    native_w = type(env.surface).total_variance is not SurfaceMixin.total_variance
     for t in np.unique(T):
         sel = T == t
         with np.errstate(all="ignore"):
             if env.iv_override is not None:
                 out[sel] = env.iv_override(float(t), k[sel])
+            elif native_w:
+                w = np.asarray(env.surface.total_variance([float(t)], k[sel]), dtype=float)[0]
+                out[sel] = np.where(w > 0.0, np.sqrt(w / t), np.nan)
             else:
                 out[sel] = np.asarray(env.surface.iv([float(t)], k[sel]), dtype=float)[0]
     return out
