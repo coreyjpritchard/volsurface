@@ -4,6 +4,32 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The draft pre-registration is pinned and is not frozen. A day is `1/252` of a trading year. L1 matures in 21 trading days and L2's life is 30 trading days. The episode starts at `t0 = 0.5`, with the burn-in visible to the filter. P&L is per unit of the liability's time-0 premium at `lambda = 0.1`. The path counts are 100,000 train, 20,000 validation and 20,000 test. Validation is only for early stopping and selection. The bootstrap is hierarchical, paired, percentile, with `B = 10,000`. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The hedger's probability is the spot filter by default; the gate uses rv. Prices do not read that probability. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `state["xi"]` is the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. `surface_at` prices the call on that curve. Each copy runs the regime chain forward from the current true regime. Given the `nu` path so far, the variance swap is a martingale up to a tail-weight bias of about -0.1 percent of the quote. The call is a martingale by construction up to Monte Carlo error, because each copy replicates the simulator's law. The tail-weight bias does not enter the call. The surface grid from the clock to the last expiry is equally spaced. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `Q5 = 2.3 Q`, `Q0.5 = 23 Q`, the ratio grid, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda = 0.1`, the day, the episode start, the path counts, the bootstrap, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that pinned draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
+## 2026-10-29 Committed figure data holds no per-quote SPX values
+
+Two figure CSVs held one row per Cboe quote, and the static export of session 00 drew
+every quote. They now hold per-expiry summaries or model output only. No figure image
+and no published number changes.
+
+- `docs/figures/p2c_spx_smiles.csv` keeps the Heston smile (`T`, `k`, `model_iv`) and
+  drops the 44 market implied vols. `docs/figures/p2c_spx_smile_errors.csv` gives, per
+  plotted expiry, the number of quotes and the mean, RMSE and largest absolute model minus
+  market implied vol, in vol points.
+- `docs/figures/p3b_sanos_residuals.csv` (8,973 residuals) is replaced by
+  `docs/figures/p3b_sanos_residuals_by_expiry.csv`: per expiry, the count, mean, RMSE,
+  largest absolute value, the 5, 25, 50, 75 and 95 per cent quantiles of the residual in
+  half-spreads, and the share within one half-spread. The largest absolute residual is
+  still 0.669 half-spreads.
+- `docs/00_the_smile.html` no longer carries the SPX points of the 3D surface and the
+  30-day smile, and its overlay box is unticked. The skew figure keeps its SPX points,
+  one per expiry, as in `docs/figures/p2c_spx_skew.csv`.
+  `scripts/strip_export_quotes.py` makes that change to a fresh export.
+
+The summaries were computed from the per-quote files as committed, not from a refit.
+`scripts/figures_p2c.py` and `scripts/figures_p3b.py` now write the summaries, and write
+the per-quote files to `data/cache/figures/`, which git ignores.
+`tests/test_docs_data.py` checks that no CSV under `docs/` has a per-quote column and that
+the export has no per-quote trace.
+
 ## 2026-10-29 The Cboe snapshot is no longer committed
 
 `data/snapshots/SPX_2026-10-14.parquet` is removed from the repository. Cboe's

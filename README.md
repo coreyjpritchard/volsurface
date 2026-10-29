@@ -77,7 +77,7 @@ reproduces each version and explains why they differ.
 | `volsurface/chains.py` | Option chains from yfinance or IBKR (CBOE through `scripts/build_cboe_spx_snapshot.py`), snapshots, forwards, market implied vols |
 | `volsurface/smile.py` | At-the-money level and skew, power-law fits |
 | `volsurface/core/`, `docs/DESIGN.md` | Shared types and protocols; the design document |
-| `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed |
+| `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed (SPX quote data as per-expiry summaries only) |
 | `sessions/` | marimo apps, one per session |
 | `dashboard/`, `volsurface/environments.py` | The volatility environment lab and the library code behind it |
 | `data/snapshots/` | Where a local SPX chain goes (parquet); the Cboe snapshot itself is not redistributed |
@@ -126,7 +126,10 @@ uv run marimo edit sessions/00_the_smile.py  # the same, with the code
 Plain pip also works (`pip install -e ".[dev]"`, then `pytest -m "not slow"`). Without the
 `autodiff` extra the torch tests are skipped rather than failing at collection. Without
 Python, download the static export [docs/00_the_smile.html](docs/00_the_smile.html) and
-open it in a browser (GitHub shows the file as source rather than rendering it).
+open it in a browser (GitHub shows the file as source rather than rendering it). The export
+leaves out the SPX market point of each quote; its skew figure keeps one SPX skew
+per expiry. After re-exporting, `python scripts/strip_export_quotes.py docs/00_the_smile.html`
+removes the per-quote points again.
 
 GitHub Actions runs `ruff check` and the fast tests on every push to `main` and on pull
 requests (`.github/workflows/ci.yml`); the slow tests are run by hand.
