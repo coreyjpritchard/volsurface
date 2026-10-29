@@ -5,8 +5,23 @@ app = marimo.App(width="full", app_title="Volatility environment lab")
 
 
 @app.cell(hide_code=True)
-def _():
+async def _():
+    import sys
+
     import marimo as mo
+
+    # WEB is the static build (scripts/build_public_vollab.py): Pyodide in the visitor's
+    # browser, the library wheel and the SPX fits served next to the page, no server.
+    WEB = sys.platform == "emscripten"
+    REPO_URL = "https://github.com/coreyjpritchard/volsurface"
+    if WEB:
+        import micropip
+
+        # numpy, scipy, pandas and tzdata (the chain clock uses New York time) come with
+        # Pyodide; plotly and volsurface ship in public/.
+        await micropip.install(["numpy", "scipy", "pandas", "tzdata"])
+        for _wheel in ("plotly-7.1.0-py3-none-any.whl", "volsurface-0.1.0-py3-none-any.whl"):
+            await micropip.install(str(mo.notebook_location() / "public" / _wheel), deps=False)
     import numpy as np
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -14,12 +29,15 @@ def _():
     from volsurface import environments as env_lib
     from volsurface import smile as smile_lib
 
-    return env_lib, go, make_subplots, mo, np, smile_lib
+    return REPO_URL, WEB, env_lib, go, make_subplots, mo, np, smile_lib
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(WEB, mo):
+    if WEB:
+        mo.output.append(mo.md('<small><a href="m/" target="_self">Mobile version</a></small>'))
+    mo.output.append(
+        mo.md(r"""
     # Volatility environment lab
 
     Pick a model, move its parameters, and watch three things change together: the implied
@@ -32,6 +50,7 @@ def _(mo):
     `volsurface` library: Lewis Fourier prices for Heston, Hagan's formula for SABR, raw
     SVI slices, SANOS, and the rough Bergomi plug-in (Monte Carlo).
     """)
+    )
     return
 
 
@@ -90,15 +109,29 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(env_lib, mo):
+async def _(WEB, env_lib, mo):
     # The SPX fits are loaded once, from data/presets/spx_fits.npz (SVI and SANOS) and
     # data/presets/spx_model_fits.json (every model's calibrated parameters, written by
-    # scripts/build_model_fits.py). Nothing is fitted here and nothing is downloaded.
+    # scripts/build_model_fits.py). Nothing is fitted here and nothing is downloaded: the
+    # web build ships the same two files in its public folder and reads them from there.
     # Those files hold fitted parameters only. The market implied vols for the black dots
-    # and the live fit errors are rebuilt from the local snapshot; without it, None.
-    spx = mo.cache(env_lib.load_spx_presets)()
-    fits = env_lib.load_model_fits()
-    market = mo.cache(env_lib.load_market_quotes)()
+    # and the live fit errors are rebuilt from the local snapshot; the web build has no
+    # snapshot, so there it is None.
+    if WEB:
+        import io
+
+        from pyodide.http import pyfetch
+
+        _base = mo.notebook_location() / "public"
+        _resp = await pyfetch(str(_base / "spx_fits.npz"))
+        spx = env_lib.load_spx_presets(io.BytesIO(await _resp.bytes()))
+        _resp = await pyfetch(str(_base / "spx_model_fits.json"))
+        fits = env_lib.load_model_fits(io.BytesIO(await _resp.bytes()))
+        market = None
+    else:
+        spx = mo.cache(env_lib.load_spx_presets)()
+        fits = env_lib.load_model_fits()
+        market = mo.cache(env_lib.load_market_quotes)()
     return fits, market, spx
 
 
@@ -216,6 +249,8 @@ def _(MODES, environment, market, mo, mode):
 
 @app.cell(hide_code=True)
 def _(
+    REPO_URL,
+    WEB,
     env_lib,
     environment,
     fit_values,
@@ -244,6 +279,15 @@ def _(
                 "option quotes (a mixture of Black calls with weights from a linear "
                 "programme), not a model with a few parameters to set. Switch **Mode** to "
                 "**Fitted** to see the SANOS fit to the SPX chain."
+            ),
+        )
+    if key == "rbergomi" and WEB:
+        mo.stop(
+            True,
+            unavailable(
+                "**Rough Bergomi is not supported on the web version: clone the project to "
+                f"run it.** [{REPO_URL}]({REPO_URL}), then `make dashboard`. It is a Monte "
+                "Carlo model from the separate rough-volatility package."
             ),
         )
     if fitted:
@@ -1122,11 +1166,19 @@ slices both fail it in reachable corners, while SANOS is built to pass.
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
+def _(REPO_URL, WEB, mo):
+    _web = (
+        "This web version runs entirely in your browser (Python compiled to WebAssembly with "
+        "Pyodide); nothing you do is sent anywhere. The SPX data and every fitted parameter "
+        "are bundled with the page. Rough Bergomi needs the full project. "
+        if WEB
+        else ""
+    )
+    mo.md(f"""
     ---
-    Run locally: `make dashboard` (or `uv run marimo run dashboard/vol_lab.py`). The
-    library code behind every panel is in `volsurface/environments.py`.
+    {_web}Run locally: clone [{REPO_URL}]({REPO_URL}) and run `make dashboard` (or
+    `uv run marimo run dashboard/vol_lab.py`). The library code behind every panel is in
+    `volsurface/environments.py`.
     """)
     return
 
