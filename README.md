@@ -79,6 +79,7 @@ reproduces each version and explains why they differ.
 | `volsurface/core/`, `docs/DESIGN.md` | Shared types and protocols; the design document |
 | `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed (SPX quote data as per-expiry summaries only) |
 | `sessions/` | marimo apps, one per session |
+| `dashboard/`, `volsurface/environments.py` | The volatility environment lab and the library code behind it |
 | `data/snapshots/` | Where a local SPX chain goes (parquet); the Cboe snapshot itself is not redistributed |
 | `tests/fixtures/` | A small synthetic SPX-like chain (Heston prices with noisy quotes) for the tests |
 
@@ -142,6 +143,112 @@ python -m volsurface.chains yfinance SPX              # writes data/snapshots/SP
 
 Cboe's delayed quotes are subject to Cboe's terms of use (<https://www.cboe.com/en/terms/>),
 and complying with them is up to you. The repository does not redistribute the data.
+
+## Volatility environment lab
+
+```bash
+make dashboard        # = uv run --locked --extra dev marimo run dashboard/vol_lab.py
+```
+
+A marimo app for playing with volatility models. Pick a model (Black-Scholes with one
+flat vol, Heston, SABR, raw SVI, SANOS, or rough Bergomi by Monte Carlo through the
+plug-in) and a **Mode**:
+
+- **Synthetic**: you set the parameters with sliders. Nothing is fitted to data. The
+  presets include ones built to break: SVI with calendar arbitrage, and SVI and SABR with
+  butterfly arbitrage. SANOS has no synthetic version (it is only ever a fit).
+- **Fitted**: the same model calibrated to the SPX (SPXW) option chain of 14 October 2026,
+  with its implied-vol RMSE, and drawn over the market quotes when the snapshot is on
+  disk. For Black-Scholes, Heston and
+  rough Bergomi the sliders start at the fitted values and stay editable; "Reset to fit"
+  puts them back, and the panel says when they have moved. SABR, SVI and SANOS are fitted
+  expiry by expiry and are shown as fitted.
+
+Every view is labelled Synthetic or Fitted, and Fitted views name the underlying, the
+index print, the forward treatment and the expiries. Every panel is computed live by the
+library; the app holds no pricing code and calibrates nothing
+(`volsurface/environments.py` does the work).
+
+The fits are read from two files. `data/presets/spx_fits.npz` holds the SVI and SANOS fits;
+`scripts/build_dashboard_presets.py` rebuilds it in about three minutes.
+`data/presets/spx_model_fits.json` holds every model's fitted parameters, the forward and
+discount factor per expiry, and the fit errors; `scripts/build_model_fits.py` rebuilds it
+in about five minutes. Neither file holds an option price or the implied vol of a single
+quote. The black dots and the error after a slider moves need the quotes, so the app
+rebuilds them from the snapshot in `data/snapshots/` when it is there
+(`environments.load_market_quotes`, about a second). Without the snapshot, as in the
+static web build, the dots are left out and only the saved errors at the fit are shown.
+
+The data is one snapshot: 8,973 out-of-the-money SPXW mids, 40 expiries from 10 hours to
+351 days, CBOE delayed quotes taken at 10:01 UTC on 14 October 2026 (06:01 in New York,
+before the cash open, so the index print of 7,805.45 is the previous close). There is no
+rate or dividend input: each expiry's forward and discount factor come from put-call
+parity on the eight strikes nearest the money, and moneyness is $k = \log(K/F)$ against
+that forward. The error is the same for every model: the root mean square of model minus
+market implied vol over all the quotes, in vol points (1 point = 0.01 of vol), although
+each model was fitted to its own loss.
+
+| Model | How it is fitted | Fitted parameters | RMSE (vol points) |
+|---|---|---|---|
+| Black-Scholes | One vol for every quote: the mean implied vol | $\sigma$ = 20.3% | 11.34 |
+| Heston | At-the-money level and skew of every expiry (as `docs/figure_00.py`), 35 starts | $v_0$ = 0.00287, $\kappa$ = 8.72, $\theta$ = 0.0642, $\xi$ = 5.00 (on its bound), $\rho$ = −0.625 | 3.35 |
+| SABR | Per expiry, $\beta$ = 1 fixed, vega-weighted prices | one $(\alpha, \rho, \nu)$ per expiry | 4.04 |
+| Raw SVI | Per expiry (the saved fit) | five per expiry | 0.39 |
+| SANOS | Arbitrage-free fit (the saved fit) | | 0.13 |
+| Rough Bergomi | At-the-money level and skew, $H$ free, forward variance from SANOS | $H$ = 0.207, $\eta$ = 2.35, $\rho$ = −0.657 | 2.06 (Monte Carlo) |
+
+Read the table with its caveats. Heston's $\xi$ sits on the upper bound of 5 of the box
+and the loss has no interior optimum in $\xi$, so a wider box moves $\xi$ to the new
+bound; these are not well-identified parameters. SABR's error is mostly the shortest
+expiries: $\nu$ ends on its bound of 4 on every expiry out to 21 days, and $\rho$ on
+−0.999 on the first three (to 2.4 days). One SABR smile cannot bend as sharply as SPX
+does a few days out; from 20 days on each expiry is within about one vol point. SVI and SANOS have many more parameters than the others, so their lower
+errors are not like for like. The rough Bergomi figures are Monte Carlo (4,000 paths,
+seed 0) and leave out the 1,332 deep out-of-the-money quotes whose prices are too small
+for the paths to resolve. This is one morning of one index; nothing here says how these
+fits behave on another day.
+
+![The vol lab in Fitted mode: Heston controls and fit error beside the implied volatility surface](docs/figures/dashboard_surface.png)
+
+**How to read this.** Heston in Fitted mode, as the static web build shows it (fitted
+parameters only, no quotes). Left: the Mode switch, the model, the sliders at the fitted
+values with the table of their values to four figures, "Reset to fit", and the fit error:
+3.35 vol points over 8,918 of the 8,973 quotes, and 2.34 at the 78-day expiry. Right:
+Black implied vol over log-moneyness $k = \log(K/F)$ and expiry; in Fitted mode the rows
+are nine of the quoted SPX expiries, from 1.4 days out to 351 days, each spanning the same
+number of standard deviations. Run locally with the snapshot on disk, the same view also
+draws the quotes as black dots. The takeaway is the shape Heston can reach on this chain:
+a steep short-dated skew that flattens with expiry. What it does not show: the
+arbitrage checks (the status line below the controls) are pointwise on the grid, so a
+pass says nothing between nodes, and a fit to one morning says nothing about another day.
+
+![The vol lab below the surface: one smile, the ATM vol and the ATM skew against expiry](docs/figures/dashboard_smile_term.png)
+
+**How to read this.** Below the surface, for the same fitted Heston. Left: the smile at the
+chosen expiry (78 days, yellow) with the other grid expiries in grey. Middle: the
+at-the-money vol against expiry. Right: the absolute at-the-money skew against expiry on
+log-log axes, with the fitted slope (here -0.51, a skew decaying like $1/\sqrt T$ over this
+range). The takeaway is that each parameter has a fingerprint: in Heston, $\rho$ tilts the
+smile, $\xi$ bends it, and $\kappa$ sets where the skew stops being flat and starts
+decaying like $1/T$, so the log-log skew line bends; in rough Bergomi it stays straight
+with slope $H - 1/2$. What it does not show: the market's own ATM level and skew per expiry
+are drawn as black dots only when the snapshot is on disk, and the rough Bergomi lines are
+a Monte Carlo estimate (4,000 paths) with no error bars.
+
+![The vol lab Greeks: a vanna surface and all six Greeks at one expiry](docs/figures/dashboard_greeks.png)
+
+**How to read this.** The same fitted Heston. Left: one Greek as a surface over strike and
+expiry (here vanna, the change in delta per vol point). Right: delta, gamma, vega, vanna, volga and theta per
+day at the chosen expiry. All are Black Greeks at each option's own implied vol, per 100
+of forward, with zero rates. Gamma and theta are the same surface with opposite sign
+($\Theta = -\tfrac12\sigma^2F^2\Gamma$, checked live in the app), gamma piles up at the
+money and at short expiries, vega grows like $\sqrt T$, vanna changes sign across the
+money and volga is positive in the wings. The delta panel has two lines: the
+sticky-strike Black delta, and the delta when the smile moves with the forward, which is
+the model's own delta for Heston and the alpha-fixed Hagan delta for SABR. What it does
+not show: these are not minimum-variance hedge ratios, and for the Monte Carlo environment they are Black Greeks
+of the Monte Carlo smile, not pathwise model Greeks. `tests/test_environments.py` checks
+the Greeks against finite differences and closed forms.
 
 ## Next: the regime experiment (draft pre-registration, no results)
 
