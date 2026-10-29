@@ -27,7 +27,8 @@ def _(mo):
     free of static arbitrage. The **Mode** switch says where the parameters come from.
     **Synthetic**: you set them with the sliders and nothing is fitted to data.
     **Fitted**: the model calibrated to the SPX option chain of 14 October 2026 (SPXW
-    mids), drawn over those quotes with its fit error. Every number is computed by the
+    mids), with its fit error; the quotes are drawn too when the snapshot is on disk (the
+    web build has the fitted parameters only). Every number is computed by the
     `volsurface` library: Lewis Fourier prices for Heston, Hagan's formula for SABR, raw
     SVI slices, SANOS, and the rough Bergomi plug-in (Monte Carlo).
     """)
