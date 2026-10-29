@@ -101,7 +101,18 @@ chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
 data = market_data_from_snapshot(chain)
 report = check_quotes(data)
 wall = time.perf_counter() - t0
-rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2
+# ru_maxrss survives fork/exec on Linux, so a child of a large pytest process
+# would report the parent's peak. VmHWM is per address space and resets at exec.
+rss_gb = None
+try:
+    with open("/proc/self/status") as fh:
+        for line in fh:
+            if line.startswith("VmHWM:"):
+                rss_gb = int(line.split()[1]) / 1024**2
+except OSError:
+    pass
+if rss_gb is None:
+    rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2
 print(json.dumps({
     "ok": report.ok,
     "n_checked": report.n_checked,
