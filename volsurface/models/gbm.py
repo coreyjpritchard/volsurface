@@ -81,8 +81,16 @@ class GBM:
         return self.price_with_error(F, K, T, df, kind, state=state).value
 
     def price_with_error(
-        self, F, K, T, df=1.0, kind="call", *, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        F,
+        K,
+        T,
+        df=1.0,
+        kind="call",
+        *,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> PriceResult:
         """Mean and standard error at one maturity, every strike from one set of paths."""
         _reject_state(state)
@@ -98,23 +106,36 @@ class GBM:
             value = _intrinsic(float(F), K_flat, float(df), kind).reshape(K_in.shape)
             stderr = np.zeros(K_in.shape, dtype=float)
             return PriceResult(
-                value=value, stderr=stderr, n_evals=0,
+                value=value,
+                stderr=stderr,
+                n_evals=0,
                 wall_time=time.perf_counter() - started,
             )
         times = np.linspace(0.0, T, self.n_steps + 1)
         paths = self.simulate(n_paths, times, seed=seed, state0=state)
         value, stderr = estimate_terminal(
-            paths.Z[:, -1], float(F), K_flat, float(df), kind,
-            antithetic=self.antithetic, control_variate=self.control_variate,
+            paths.Z[:, -1],
+            float(F),
+            K_flat,
+            float(df),
+            kind,
+            antithetic=self.antithetic,
+            control_variate=self.control_variate,
         )
         return PriceResult(
-            value=value.reshape(K_in.shape), stderr=stderr.reshape(K_in.shape),
-            n_evals=int(paths.Z.shape[0]), wall_time=time.perf_counter() - started,
+            value=value.reshape(K_in.shape),
+            stderr=stderr.reshape(K_in.shape),
+            n_evals=int(paths.Z.shape[0]),
+            wall_time=time.perf_counter() - started,
         )
 
     def simulate(
-        self, n_paths: int, times: np.ndarray, *,
-        seed: int | np.random.SeedSequence, state0: State | None = None,
+        self,
+        n_paths: int,
+        times: np.ndarray,
+        *,
+        seed: int | np.random.SeedSequence,
+        state0: State | None = None,
     ) -> Paths:
         """Unit-mean ``Z`` on ``times``. ``times[0]`` is 0. See the module note for draws."""
         _reject_state(state0)

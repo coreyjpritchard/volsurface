@@ -18,5 +18,7 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Lint
         run: uv run --locked ruff check .
+      - name: Format
+        run: uv run --locked ruff format --check .
       - name: Fast tests
         run: uv run --locked pytest -m "not slow" -q

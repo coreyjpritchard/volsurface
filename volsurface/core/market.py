@@ -25,8 +25,22 @@ _EQUITY_AMERICAN = {"SPY"}
 _INDEX_EUROPEAN = {"SPX", "XSP"}
 
 QUOTE_COLUMNS = [
-    "T", "K", "kind", "bid", "ask", "exercise", "settlement", "volume",
-    "price", "iv", "k", "F", "df", "expiry", "price_source", "underlying",
+    "T",
+    "K",
+    "kind",
+    "bid",
+    "ask",
+    "exercise",
+    "settlement",
+    "volume",
+    "price",
+    "iv",
+    "k",
+    "F",
+    "df",
+    "expiry",
+    "price_source",
+    "underlying",
 ]
 
 

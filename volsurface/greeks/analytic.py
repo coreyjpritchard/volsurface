@@ -49,8 +49,15 @@ class Analytic:
         )
 
     def compute(
-        self, model, contracts, wrt, *, order: int = 1, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        model,
+        contracts,
+        wrt,
+        *,
+        order: int = 1,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> GreeksResult:
         """One closed form per contract and factor. ``n_paths`` and ``seed`` are unused."""
         del n_paths, seed
@@ -66,8 +73,11 @@ class Analytic:
             for j, factor in enumerate(factors):
                 value[i, j] = _greek(self.F, self.df, model.sigma, contract, factor, order)
         return GreeksResult(
-            value=value, stderr=None, n_evals=len(contracts) * len(factors),
-            wall_time=time.perf_counter() - started, method="analytic",
+            value=value,
+            stderr=None,
+            n_evals=len(contracts) * len(factors),
+            wall_time=time.perf_counter() - started,
+            method="analytic",
         )
 
 

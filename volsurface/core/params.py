@@ -54,6 +54,4 @@ def from_unconstrained(x: np.ndarray, specs: list[ParamSpec]) -> dict[str, float
     x = np.asarray(x, dtype=float).reshape(-1)
     if x.size != len(specs):
         raise ValueError(f"expected {len(specs)} parameters, got {x.size}")
-    return {
-        spec.name: from_unconstrained_value(float(x[i]), spec) for i, spec in enumerate(specs)
-    }
+    return {spec.name: from_unconstrained_value(float(x[i]), spec) for i, spec in enumerate(specs)}

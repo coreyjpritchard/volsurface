@@ -170,8 +170,13 @@ def main() -> None:
     # The spline density spikes between noisy mids. The panel keeps the scale
     # of a probability density and lets those spikes leave the frame.
     lo, hi = -2.0, 8.0
-    ax.plot(wide, np.clip(density_spline, lo, hi), color="C0", lw=0.9,
-            label=f"spline density (clipped to {m(lo, '.0f')} and {m(hi, '.0f')})")
+    ax.plot(
+        wide,
+        np.clip(density_spline, lo, hi),
+        color="C0",
+        lw=0.9,
+        label=f"spline density (clipped to {m(lo, '.0f')} and {m(hi, '.0f')})",
+    )
     ax.plot(wide, density_svi, color="C2", label="SVI density")
     ax.fill_between(
         wide,
@@ -192,10 +197,18 @@ def main() -> None:
     ax = axes[2]
     g_min, worst_T, g_band = worst
     ax.axhline(0.0, color="0.4", lw=0.6)
-    ax.plot(k_band, g_band, color="C3",
-            label=f"worst SVI slice, T = {365 * worst_T:.0f} days (min g = {m(g_min, '.3f')})")
-    ax.plot(k_band, raw.g(k_band), color="C2",
-            label=f"SVI slice in the panels above (min g = {m(this_g, '.3f')})")
+    ax.plot(
+        k_band,
+        g_band,
+        color="C3",
+        label=f"worst SVI slice, T = {365 * worst_T:.0f} days (min g = {m(g_min, '.3f')})",
+    )
+    ax.plot(
+        k_band,
+        raw.g(k_band),
+        color="C2",
+        label=f"SVI slice in the panels above (min g = {m(this_g, '.3f')})",
+    )
     # The plotted slice's g rises steeply on the right; the axis is sized so the
     # worst slice's dip below zero is visible, and the green curve is labelled.
     this_band = np.asarray(raw.g(k_band), dtype=float)

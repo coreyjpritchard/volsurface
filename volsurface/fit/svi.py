@@ -54,9 +54,7 @@ def fit_raw_svi(
     best = None
     best_cost = np.inf
     for start in starts:
-        result = least_squares(
-            lambda x: _residual(x, k, total_var, weights), start, method="trf"
-        )
+        result = least_squares(lambda x: _residual(x, k, total_var, weights), start, method="trf")
         if result.cost < best_cost:
             best = result
             best_cost = float(result.cost)

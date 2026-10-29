@@ -25,8 +25,9 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
-def char_func(u: ArrayLike, T: float, v0: float, kappa: float, theta: float, xi: float,
-              rho: float) -> np.ndarray:
+def char_func(
+    u: ArrayLike, T: float, v0: float, kappa: float, theta: float, xi: float, rho: float
+) -> np.ndarray:
     """``E[exp(i u log(F_T / F_0))]`` for complex ``u``, in the trap-free form."""
     u = np.asarray(u, dtype=complex)
     alpha = -0.5 * u * u - 0.5j * u
@@ -71,8 +72,17 @@ def _u_max(T: float, params: tuple, tol: float = 1e-12) -> float:
     return float(u[above[-1] + 1]) if above.size and above[-1] + 1 < u.size else float(u[-1])
 
 
-def call_price(F: float, K: ArrayLike, T: float, v0: float, kappa: float, theta: float,
-               xi: float, rho: float, df: float = 1.0) -> np.ndarray:
+def call_price(
+    F: float,
+    K: ArrayLike,
+    T: float,
+    v0: float,
+    kappa: float,
+    theta: float,
+    xi: float,
+    rho: float,
+    df: float = 1.0,
+) -> np.ndarray:
     """Heston call prices for an array of strikes at one maturity."""
     K = np.asarray(K, dtype=float)
     params = (v0, kappa, theta, xi, rho)
@@ -86,8 +96,18 @@ def call_price(F: float, K: ArrayLike, T: float, v0: float, kappa: float, theta:
     return df * call.reshape(K.shape)
 
 
-def price(F: float, K: ArrayLike, T: float, v0: float, kappa: float, theta: float, xi: float,
-          rho: float, df: float = 1.0, kind="call") -> np.ndarray:
+def price(
+    F: float,
+    K: ArrayLike,
+    T: float,
+    v0: float,
+    kappa: float,
+    theta: float,
+    xi: float,
+    rho: float,
+    df: float = 1.0,
+    kind="call",
+) -> np.ndarray:
     """Heston call or put prices; puts by put-call parity ``P = C - df (F - K)``."""
     K = np.asarray(K, dtype=float)
     call = call_price(F, K, T, v0, kappa, theta, xi, rho, df)
@@ -95,8 +115,18 @@ def price(F: float, K: ArrayLike, T: float, v0: float, kappa: float, theta: floa
     return np.where(np.asarray(kind) == "call", call, put)
 
 
-def simulate(F: float, T: float, v0: float, kappa: float, theta: float, xi: float,
-             rho: float, n: int, m: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def simulate(
+    F: float,
+    T: float,
+    v0: float,
+    kappa: float,
+    theta: float,
+    xi: float,
+    rho: float,
+    n: int,
+    m: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
     """Euler full-truncation scheme (Lord, Koekkoek and van Dijk 2010).
 
     The variance is stepped with ``v^+ = max(v, 0)`` in drift and diffusion; the log forward

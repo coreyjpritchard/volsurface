@@ -22,12 +22,22 @@ def synthetic_chain(spot=500.0, r=0.04, q=0.012, rate_column=np.nan):
         sigma = 0.15 - 0.3 * np.log(K / F) + 0.5 * np.log(K / F) ** 2
         for kind in ("call", "put"):
             p = bs.price(F, K, T, sigma, df, kind)
-            rows.append(pd.DataFrame({"expiry": expiry, "kind": kind, "strike": K,
-                                      "bid": p * 0.99, "ask": p * 1.01}))
+            rows.append(
+                pd.DataFrame(
+                    {"expiry": expiry, "kind": kind, "strike": K, "bid": p * 0.99, "ask": p * 1.01}
+                )
+            )
     raw = pd.concat(rows, ignore_index=True)
-    return chains.tidy(raw, underlying="TEST", quote_time=quote_time, spot=spot,
-                       source="synthetic", rate=rate_column, min_price=1e-6,
-                       moneyness=(0.0, np.inf))
+    return chains.tidy(
+        raw,
+        underlying="TEST",
+        quote_time=quote_time,
+        spot=spot,
+        source="synthetic",
+        rate=rate_column,
+        min_price=1e-6,
+        moneyness=(0.0, np.inf),
+    )
 
 
 def test_infer_forward_exact():
@@ -57,20 +67,23 @@ def test_market_implied_vols_recovers_forward_and_smile(rate_column):
 
 def test_tidy_time_to_expiry_and_filters():
     quote_time = pd.Timestamp("2026-10-07 20:00", tz="UTC")  # 16:00 New York
-    raw = pd.DataFrame({
-        "expiry": [dt.date(2026, 10, 8)] * 3,
-        "kind": ["call", "call", "put"],
-        "strike": [100.0, 400.0, 100.0],
-        "bid": [1.0, 0.0, 0.0],
-        "ask": [1.2, 0.0, 0.0],
-        "last": [np.nan, 0.5, 2.0],
-    })
+    raw = pd.DataFrame(
+        {
+            "expiry": [dt.date(2026, 10, 8)] * 3,
+            "kind": ["call", "call", "put"],
+            "strike": [100.0, 400.0, 100.0],
+            "bid": [1.0, 0.0, 0.0],
+            "ask": [1.2, 0.0, 0.0],
+            "last": [np.nan, 0.5, 2.0],
+        }
+    )
     out = chains.tidy(raw, underlying="X", quote_time=quote_time, spot=100.0, source="test")
     assert len(out) == 1  # far OTM strike and the unquoted put are dropped
     assert out["T"].iloc[0] == pytest.approx(1 / 365)
     assert out["mid"].iloc[0] == pytest.approx(1.1)
-    with_last = chains.tidy(raw, underlying="X", quote_time=quote_time, spot=100.0,
-                            source="test", allow_last=True)
+    with_last = chains.tidy(
+        raw, underlying="X", quote_time=quote_time, spot=100.0, source="test", allow_last=True
+    )
     assert with_last["price_source"].tolist() == ["mid", "last"]
 
 
@@ -119,6 +132,7 @@ def _cboe_builder():
 
 def test_cboe_builder_keeps_spxw_and_drops_the_am_root():
     """SPX and SPXW can share a calendar day. The builder keeps the PM root only."""
+
     def row(symbol, bid=100.0, ask=101.0):
         return {
             "option": symbol,

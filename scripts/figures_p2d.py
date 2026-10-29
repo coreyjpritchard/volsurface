@@ -90,12 +90,19 @@ def snapshot_panels(data) -> dict:
         ax.axvspan(k[0], k_lo, color="0.92")
         ax.axvspan(k_hi, k[-1], color="0.92", label="past this expiry's quoted strikes")
         ax.plot(
-            quoted["k"], quoted["variance"], color="C0", lw=1.2,
+            quoted["k"],
+            quoted["variance"],
+            color="C0",
+            lw=1.2,
             label="inside the surface's domain",
         )
         if len(wing):
             ax.plot(
-                wing["k"], wing["variance"], color="C0", lw=1.0, ls="--",
+                wing["k"],
+                wing["variance"],
+                color="C0",
+                lw=1.0,
+                ls="--",
                 label="outside the surface's domain",
             )
         ax.axhline(0.0, color="k", lw=0.6)

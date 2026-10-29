@@ -327,9 +327,7 @@ class RegimeSwitchingBergomi:
         if store_forward:
             components = drawn["components"]
             if components is None:
-                state["xi"] = trader_forward_variance(
-                    self.H, nus, v, priced, self.xi0, grid, dW
-                )
+                state["xi"] = trader_forward_variance(self.H, nus, v, priced, self.xi0, grid, dW)
             else:
                 # The nu in force on each finished step, the same array that
                 # builds v. A constant-nu mixture prices a path that never
@@ -391,9 +389,7 @@ class RegimeSwitchingBergomi:
         ``smile_k``.
         """
         k = self._strike_grid(paths, i_t)
-        call, stderr, total, total_se, times, indices = self._surface_calls(
-            paths, i_t, np.exp(k)
-        )
+        call, stderr, total, total_se, times, indices = self._surface_calls(paths, i_t, np.exp(k))
         return SurfaceBatch(
             T=times[indices].copy(),
             k=k.copy(),
@@ -411,9 +407,7 @@ class RegimeSwitchingBergomi:
         across clocks, is the row ``Z_entry / Z_clock``. The spot ratio
         times that unit-forward call is the mark of ``max(Z_T / Z_entry - K, 0)``.
         """
-        call, stderr, _total, _total_se, _times, _indices = self._surface_calls(
-            paths, i_t, strikes
-        )
+        call, stderr, _total, _total_se, _times, _indices = self._surface_calls(paths, i_t, strikes)
         return call, stderr
 
     def _strike_grid(self, paths: MarketPaths, i_t: int) -> np.ndarray:
@@ -495,9 +489,7 @@ class RegimeSwitchingBergomi:
                 self.rho,
                 nu_step=nu_step,
             )
-        return self._rough_calls(
-            0.0, xi, times, i_t, indices, strikes, work_seed, nu_step=nu_step
-        )
+        return self._rough_calls(0.0, xi, times, i_t, indices, strikes, work_seed, nu_step=nu_step)
 
     def _rough_calls(self, nu, xi, times, i_t, indices, strikes, seed, nu_step=None):
         """Restarted hybrid factor on the forward curve ``xi``.
@@ -916,9 +908,7 @@ def hybrid_forward_variance(
     return hybrid_path_forward_variance(float(H), nu_step, float(xi0), grid, pieces)
 
 
-def hybrid_tail_mark_bias(
-    H: float, nu: float, n_steps: int, dt: float, kappa: int = 1
-) -> float:
+def hybrid_tail_mark_bias(H: float, nu: float, n_steps: int, dt: float, kappa: int = 1) -> float:
     """Expected mark change over a flat-``xi0`` life, as a fraction of the quote.
 
     Lag ``L > kappa`` has factor mean ``mu(L)`` from the power-kernel
@@ -1273,8 +1263,7 @@ def _bridge_log_returns(v_left, dW, perp, times, rho, n_sub, rng) -> np.ndarray:
     for i in range(n_steps):
         step = float(dt[i])
         shock = (
-            float(rho) * increments[:, i]
-            + orthogonal * math.sqrt(step) * orthogonal_shock[:, i]
+            float(rho) * increments[:, i] + orthogonal * math.sqrt(step) * orthogonal_shock[:, i]
         )
         if n_sub == 1:
             z = shock[:, None]

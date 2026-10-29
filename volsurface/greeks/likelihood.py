@@ -71,8 +71,15 @@ class LikelihoodRatio:
         )
 
     def compute(
-        self, model, contracts, wrt, *, order: int = 1, state: State | None = None,
-        n_paths: int | None = None, seed: int | np.random.SeedSequence | None = None,
+        self,
+        model,
+        contracts,
+        wrt,
+        *,
+        order: int = 1,
+        state: State | None = None,
+        n_paths: int | None = None,
+        seed: int | np.random.SeedSequence | None = None,
     ) -> GreeksResult:
         started = time.perf_counter()
         contracts = list(contracts)
@@ -96,15 +103,26 @@ class LikelihoodRatio:
             evals += int(z.size)
             for j, factor in enumerate(factors):
                 samples = _samples(
-                    z, self.F, self.df, contracts, indices, model.sigma, maturity, factor, order,
+                    z,
+                    self.F,
+                    self.df,
+                    contracts,
+                    indices,
+                    model.sigma,
+                    maturity,
+                    factor,
+                    order,
                 )
                 mean, error = _reduce(samples, model.antithetic)
                 for slot, index in enumerate(indices):
                     value[index, j] = mean[slot]
                     stderr[index, j] = error[slot]
         return GreeksResult(
-            value=value, stderr=stderr, n_evals=evals,
-            wall_time=time.perf_counter() - started, method="likelihood_ratio",
+            value=value,
+            stderr=stderr,
+            n_evals=evals,
+            wall_time=time.perf_counter() - started,
+            method="likelihood_ratio",
         )
 
 

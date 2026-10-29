@@ -56,8 +56,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = REPO_ROOT / "data" / "snapshots"
 
 COLUMNS = [
-    "underlying", "quote_time", "spot", "expiry", "T", "kind", "strike", "bid", "ask", "mid",
-    "last", "price", "price_source", "volume", "open_interest", "source", "rate",
+    "underlying",
+    "quote_time",
+    "spot",
+    "expiry",
+    "T",
+    "kind",
+    "strike",
+    "bid",
+    "ask",
+    "mid",
+    "last",
+    "price",
+    "price_source",
+    "volume",
+    "open_interest",
+    "source",
+    "rate",
 ]
 
 
@@ -150,7 +165,8 @@ def fetch_yfinance(symbol: str = "SPX", max_years: float = 1.0) -> pd.DataFrame:
     ticker = yf.Ticker(_yahoo_symbol(symbol))
     now = pd.Timestamp.now(tz="UTC")
     expiries = [
-        d for d in (dt.date.fromisoformat(s) for s in ticker.options)
+        d
+        for d in (dt.date.fromisoformat(s) for s in ticker.options)
         if (expiry_close_utc(d) - now).days <= 365.0 * max_years + 1
     ]
 
@@ -192,14 +208,22 @@ def fetch_yfinance(symbol: str = "SPX", max_years: float = 1.0) -> pd.DataFrame:
         # Market closed: use the last session's trades, priced against its close.
         market_time = underlying_info.get("regularMarketTime")
         quote_time = (
-            pd.Timestamp(market_time, unit="s", tz="UTC") if market_time
+            pd.Timestamp(market_time, unit="s", tz="UTC")
+            if market_time
             else raw["last_trade"].max()
         )
         spot = float(underlying_info.get("regularMarketPrice") or _last_close(ticker))
         session_start = quote_time.tz_convert(NEW_YORK).normalize().tz_convert("UTC")
         raw = raw[raw["last_trade"] >= session_start]
-    return tidy(raw, underlying=symbol, quote_time=quote_time, spot=spot, source="yfinance",
-                rate=float("nan"), allow_last=not live)
+    return tidy(
+        raw,
+        underlying=symbol,
+        quote_time=quote_time,
+        spot=spot,
+        source="yfinance",
+        rate=float("nan"),
+        allow_last=not live,
+    )
 
 
 def _last_close(ticker) -> float:
@@ -295,13 +319,15 @@ def fetch_ibkr(
         chains = ib.reqSecDefOptParams(stock.symbol, "", stock.secType, stock.conId)
         chain = next(c for c in chains if c.exchange == "SMART" and c.tradingClass == symbol)
         expiries = [
-            d for d in (dt.datetime.strptime(e, "%Y%m%d").date() for e in chain.expirations)
+            d
+            for d in (dt.datetime.strptime(e, "%Y%m%d").date() for e in chain.expirations)
             if 0 < (expiry_close_utc(d) - quote_time).days <= 365.0 * max_years + 1
         ]
         strikes = [k for k in chain.strikes if moneyness[0] * spot <= k <= moneyness[1] * spot]
         contracts = [
-            Option(symbol, d.strftime("%Y%m%d"), k, right, "SMART", currency="USD",
-                   tradingClass=symbol)
+            Option(
+                symbol, d.strftime("%Y%m%d"), k, right, "SMART", currency="USD", tradingClass=symbol
+            )
             for d in expiries
             for k in strikes
             for right in ("C", "P")
@@ -331,8 +357,9 @@ def fetch_ibkr(
     finally:
         ib.disconnect()
     raw = pd.DataFrame(rows)
-    return tidy(raw, underlying=symbol, quote_time=quote_time, spot=spot, source="ibkr",
-                moneyness=moneyness)
+    return tidy(
+        raw, underlying=symbol, quote_time=quote_time, spot=spot, source="ibkr", moneyness=moneyness
+    )
 
 
 # %% Storage
@@ -386,8 +413,9 @@ def infer_forward(
     return float(intercept / df), float(df)
 
 
-def market_implied_vols(snapshot: pd.DataFrame, n_atm: int = 8,
-                        rate: float | None = None) -> pd.DataFrame:
+def market_implied_vols(
+    snapshot: pd.DataFrame, n_atm: int = 8, rate: float | None = None
+) -> pd.DataFrame:
     """Implied vols of out-of-the-money options, one row per (expiry, strike).
 
     Adds columns ``F`` and ``df`` (inferred per expiry), ``k = log(K / F)`` and ``iv``.
@@ -437,7 +465,11 @@ def market_implied_vols(snapshot: pd.DataFrame, n_atm: int = 8,
         otm["df"] = df
         otm["k"] = np.log(otm["strike"].to_numpy() / F)
         otm["iv"] = bs.implied_vol(
-            otm["price"].to_numpy(), F, otm["strike"].to_numpy(), otm["T"].to_numpy(), df,
+            otm["price"].to_numpy(),
+            F,
+            otm["strike"].to_numpy(),
+            otm["T"].to_numpy(),
+            df,
             otm["kind"].to_numpy(),
         )
         out.append(otm)
@@ -463,5 +495,7 @@ if __name__ == "__main__":
     fetch = {"yfinance": fetch_yfinance, "ibkr": fetch_ibkr}[backend]
     chain = fetch(symbol)
     path = save_snapshot(chain)
-    print(f"{len(chain)} rows, {chain['expiry'].nunique()} expiries -> {path} "
-          f"({path.stat().st_size / 1e3:.0f} kB, prices from {chain['price_source'].unique()})")
+    print(
+        f"{len(chain)} rows, {chain['expiry'].nunique()} expiries -> {path} "
+        f"({path.stat().st_size / 1e3:.0f} kB, prices from {chain['price_source'].unique()})"
+    )

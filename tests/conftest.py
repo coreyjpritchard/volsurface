@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--impl", default="volsurface",
+        "--impl",
+        default="volsurface",
         help="'volsurface' (reference) or a directory such as 'exercises' holding bs.py etc.",
     )
 

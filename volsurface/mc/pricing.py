@@ -37,6 +37,4 @@ def price_with_error(
         return method(F, K, T, df, kind, state=state, n_paths=n_paths, seed=seed)
     started = time.perf_counter()
     value = np.asarray(model.price(F, K, T, df, kind, state=state), dtype=float)
-    return PriceResult(
-        value=value, stderr=None, n_evals=1, wall_time=time.perf_counter() - started
-    )
+    return PriceResult(value=value, stderr=None, n_evals=1, wall_time=time.perf_counter() - started)
