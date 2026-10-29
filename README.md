@@ -89,10 +89,6 @@ through a plugin entry point.
 
 ## How to reproduce
 
-Python 3.11. Dependencies are pinned in `uv.lock` ([uv](https://docs.astral.sh/uv/)); torch
-comes from the CPU wheel index. One command rebuilds the environment, runs the fast tests
-and redraws the first figure (about five minutes, most of it the Heston multi-start):
-
 The SPX results in this repository were computed on a Cboe delayed-quotes snapshot of
 the SPXW chain taken on 14 October 2026. That snapshot is not redistributed here; see
 [data/snapshots/README.md](data/snapshots/README.md) to rebuild one yourself, under Cboe's
@@ -101,6 +97,10 @@ few that check numbers of the real file are skipped without it. The figure scrip
 `docs/figure_00.py` stop with a message pointing to the build script when there is no
 local snapshot. The committed figures and their CSV and JSON outputs are the ones computed
 on the 14 October 2026 file.
+
+Python 3.11. Dependencies are pinned in `uv.lock` ([uv](https://docs.astral.sh/uv/)); torch
+comes from the CPU wheel index. One command rebuilds the environment, runs the fast tests
+and redraws the first figure (about five minutes, most of it the Heston multi-start):
 
 ```bash
 make reproduce   # the last step needs a local snapshot
