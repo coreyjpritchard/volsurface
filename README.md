@@ -174,6 +174,23 @@ not show: these are not minimum-variance hedge ratios, and for the Monte Carlo e
 of the Monte Carlo smile, not pathwise model Greeks. `tests/test_environments.py` checks
 the Greeks against finite differences and closed forms.
 
+### Static web version
+
+```bash
+make public-vollab    # = python scripts/build_public_vollab.py build/public-vollab
+python -m http.server -d build/public-vollab
+```
+
+The same app as one static folder that runs entirely in the visitor's browser (Pyodide,
+through `marimo export html-wasm`), with no server behind it. It ships the `volsurface`
+wheel, the plotly wheel and `data/presets/spx_fits.npz`, and by default it also
+self-hosts the Pyodide runtime, its packages and MathJax, so the page requests nothing
+from any other host (`--cdn` loads those from public CDNs instead). Every environment
+works except rough Bergomi, which needs the separate rough-volatility package and shows
+a note to clone this repository instead. The folder is about 80 MB; a first visit
+downloads about 67 MB and shows the first plots after roughly 15 to 30 seconds,
+depending on the connection, and later moves take one to three seconds.
+
 ## Next: the regime experiment (draft pre-registration, no results)
 
 [experiments/regime/PREREG.md](experiments/regime/PREREG.md) pins, before any run, a test

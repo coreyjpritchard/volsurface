@@ -5,15 +5,30 @@ app = marimo.App(width="full", app_title="Volatility environment lab")
 
 
 @app.cell(hide_code=True)
-def _():
+async def _():
+    import sys
+
     import marimo as mo
+
+    # WEB is the static build (scripts/build_public_vollab.py): Pyodide in the visitor's
+    # browser, the library wheel and the SPX fits served next to the page, no server.
+    WEB = sys.platform == "emscripten"
+    REPO_URL = "https://github.com/coreyjpritchard/volsurface"
+    if WEB:
+        import micropip
+
+        # numpy, scipy, pandas and tzdata (the chain clock uses New York time) come with
+        # Pyodide; plotly and volsurface ship in public/.
+        await micropip.install(["numpy", "scipy", "pandas", "tzdata"])
+        for _wheel in ("plotly-7.1.0-py3-none-any.whl", "volsurface-0.1.0-py3-none-any.whl"):
+            await micropip.install(str(mo.notebook_location() / "public" / _wheel), deps=False)
     import numpy as np
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     from volsurface import environments as env_lib
 
-    return env_lib, go, make_subplots, mo, np
+    return REPO_URL, WEB, env_lib, go, make_subplots, mo, np
 
 
 @app.cell(hide_code=True)
@@ -150,14 +165,23 @@ def _(PRESETS, environment, mo, preset):
 
 
 @app.cell(hide_code=True)
-def _(env_lib, mo):
+async def _(WEB, env_lib, mo):
     # The SPX fits are loaded once from data/presets/spx_fits.npz. No refitting here.
-    spx = mo.cache(env_lib.load_spx_presets)()
+    # The web build ships the same file in its public folder and reads it from there.
+    if WEB:
+        import io
+
+        from pyodide.http import pyfetch
+
+        _resp = await pyfetch(str(mo.notebook_location() / "public" / "spx_fits.npz"))
+        spx = env_lib.load_spx_presets(io.BytesIO(await _resp.bytes()))
+    else:
+        spx = mo.cache(env_lib.load_spx_presets)()
     return (spx,)
 
 
 @app.cell(hide_code=True)
-def _(env_lib, environment, mo, np, params, spx):
+def _(REPO_URL, WEB, env_lib, environment, mo, np, params, spx):
     key = environment.value
     p = {name: float(v) for name, v in params.value.items()}
     if key in ("spx_svi", "spx_sanos"):
@@ -174,17 +198,40 @@ def _(env_lib, environment, mo, np, params, spx):
         elif key == "svi":
             env = env_lib.svi_environment(grid.T, **p)
         else:
+            # The environment menu is shown with the message so the visitor can switch back.
+            mo.stop(
+                WEB,
+                mo.vstack(
+                    [
+                        environment,
+                        mo.callout(
+                            mo.md(
+                                "**Rough Bergomi is not supported on the web version: clone the "
+                                f"project to run it.** [{REPO_URL}]({REPO_URL}), then "
+                                "`make dashboard`. It is a Monte Carlo model from the separate "
+                                "rough-volatility package."
+                            ),
+                            kind="warn",
+                        ),
+                    ]
+                ),
+            )
             try:
                 env = env_lib.rbergomi_environment(**p)
             except KeyError:
                 mo.stop(
                     True,
-                    mo.callout(
-                        mo.md(
-                            "Rough Bergomi needs the `rough-volatility` package, a dev extra: "
-                            "`uv sync --extra dev`, or run `make dashboard`."
-                        ),
-                        kind="warn",
+                    mo.vstack(
+                        [
+                            environment,
+                            mo.callout(
+                                mo.md(
+                                    "Rough Bergomi needs the `rough-volatility` package, a dev "
+                                    "extra: `uv sync --extra dev`, or run `make dashboard`."
+                                ),
+                                kind="warn",
+                            ),
+                        ]
                     ),
                 )
     iv = env.iv(grid)
@@ -761,11 +808,19 @@ slices both fail it in reachable corners, while SANOS is built to pass.
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(REPO_URL, WEB, mo):
+    _web = (
+        "This web version runs entirely in your browser (Python compiled to WebAssembly with "
+        "Pyodide); nothing you do is sent anywhere. The SPX data are one bundled snapshot. "
+        "Rough Bergomi needs the full project. "
+        if WEB
+        else ""
+    )
+    mo.md(f"""
     ---
-    Run locally: `make dashboard` (or `uv run marimo run dashboard/vol_lab.py`). The
-    library code behind every panel is in `volsurface/environments.py`.
+    {_web}Run locally: clone [{REPO_URL}]({REPO_URL}) and run `make dashboard` (or
+    `uv run marimo run dashboard/vol_lab.py`). The library code behind every panel is in
+    `volsurface/environments.py`.
     """)
     return
 

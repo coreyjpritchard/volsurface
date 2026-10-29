@@ -12,3 +12,4 @@ data/cache/
 docs/*.html.tmp
 .ipynb_checkpoints/
 __marimo__/
+build/
