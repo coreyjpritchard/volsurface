@@ -4,6 +4,31 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The draft pre-registration is pinned and is not frozen. A day is `1/252` of a trading year. L1 matures in 21 trading days and L2's life is 30 trading days. The episode starts at `t0 = 0.5`, with the burn-in visible to the filter. P&L is per unit of the liability's time-0 premium at `lambda = 0.1`. The path counts are 100,000 train, 20,000 validation and 20,000 test. Validation is only for early stopping and selection. The bootstrap is hierarchical, paired, percentile, with `B = 10,000`. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The hedger's probability is the spot filter by default; the gate uses rv. Prices do not read that probability. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `state["xi"]` is the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. `surface_at` prices the call on that curve. Each copy runs the regime chain forward from the current true regime. Given the `nu` path so far, the variance swap is a martingale up to a tail-weight bias of about -0.1 percent of the quote. The call is a martingale by construction up to Monte Carlo error, because each copy replicates the simulator's law. The tail-weight bias does not enter the call. The surface grid from the clock to the last expiry is equally spaced. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `Q5 = 2.3 Q`, `Q0.5 = 23 Q`, the ratio grid, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda = 0.1`, the day, the episode start, the path counts, the bootstrap, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that pinned draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
+## 2026-10-29 The Cboe snapshot is no longer committed
+
+`data/snapshots/SPX_2026-10-14.parquet` is removed from the repository. Cboe's
+website terms (<https://www.cboe.com/en/terms/>) do not allow publishing or
+distributing the site's materials without written consent (fair use aside), and the
+snapshot was Cboe delayed quotes. The file stays in git history; nothing was rewritten.
+`.gitignore` now covers everything in `data/snapshots/` but its README, so a local copy
+stays local.
+
+Every SPX result in this log, the README and `docs/` was computed on that
+14 October 2026 SPXW snapshot. None of them is recomputed here, and no figure changes.
+A user can rebuild a snapshot with `scripts/build_cboe_spx_snapshot.py` from a saved copy
+of the JSON, under Cboe's terms. A snapshot from another day will not reproduce the numbers.
+
+The tests now run on `tests/fixtures/synthetic_spx_chain.parquet`: ten SPXW-style
+expiries priced by one Heston model, with bids and asks on a 0.05 tick that bracket the
+model price at a seeded random point, `source = "synthetic"`. It is written by
+`tests/fixtures/synthetic_spx.py`, and a test checks that the generator still writes it.
+The checks that used the real file (loading, `MarketData`, the quote checker, sparse
+against dense LPs, SANOS at the market bar) have synthetic versions. The ones that
+assert numbers of the real file (18,543 rows, 278 and 1,685 quotes) are kept and are
+skipped when no local snapshot exists, as on CI. The figure scripts and
+`docs/figure_00.py` call `chains.require_snapshot`, which stops with the build
+instructions and a note on Cboe's terms.
+
 ## 2026-10-22 Session 00 Heston fit: a discontinuous loss, and a reproducible refit
 
 The README fit (`rho = -0.5334`, cost 0.7454, entry below) did not reproduce:

@@ -148,7 +148,7 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
 
 
 def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     full = market_data_from_snapshot(chain)
     data = full.__class__(
         asof=full.asof,

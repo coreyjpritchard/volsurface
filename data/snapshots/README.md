@@ -1,5 +1,21 @@
 # Snapshots
 
+**The Cboe snapshot is not redistributed.** The SPX results in this repository (figures,
+notes, fitted parameters) were computed on `SPX_2026-10-14.parquet`, a 14 October 2026
+snapshot of the SPXW chain from Cboe's public delayed quotes. The file was removed from
+the repository on 29 October 2026: Cboe's terms of use (<https://www.cboe.com/en/terms/>)
+restrict republishing their data.
+Everything in this folder but this README is ignored by git, so a local copy stays local.
+
+To work with real data, build your own snapshot with `scripts/build_cboe_spx_snapshot.py`,
+from a saved copy of the JSON below (`python scripts/build_cboe_spx_snapshot.py _SPX.json`).
+Cboe's data is subject to Cboe's terms, and complying with them is up to you. A snapshot
+taken on another day is a different chain, so its numbers will not match the committed
+figures. Without a snapshot the tests run on the synthetic chain in `tests/fixtures/`, and
+the figure scripts stop with a message pointing here.
+
+The rest of this file describes the 14 October 2026 snapshot the results were computed on.
+
 ## `SPX_2026-10-14.parquet`
 
 Source: CBOE public delayed quotes,
@@ -14,12 +30,13 @@ object, `last_trade_time` is `2026-10-13T16:14:59` (no zone), `current_price`
 is 7805.4502, `prev_day_close` is 7805.4502, `close` is 7805.45, and
 `price_change` is -1.7898. The index print is the previous close, not a
 cash-session trade. Parity forwards do not use it. The option rows still
-carry a bid and an ask. The 13 MB JSON is not committed. A later snapshot
-should be taken in the regular session. This parquet is the 14 October 2026
-fetch and is not replaced by a refetch.
+carry a bid and an ask. Neither the 13 MB JSON nor the parquet is committed.
+A later snapshot should be taken in the regular session.
 
-`scripts/build_cboe_spx_snapshot.py` rebuilds the parquet from a saved copy
-or from the URL.
+`scripts/build_cboe_spx_snapshot.py` builds the parquet from a saved copy of
+the JSON, or downloads it from the URL when no path is given. Cboe's delayed
+quote pages prohibit downloading their data with automated programs, so check
+Cboe's terms before using the download.
 
 ### Settlement
 
@@ -77,4 +94,4 @@ rate. Doing either would change every implied vol downstream of this file.
 
 Re-running the script against a later download overwrites this path when the
 New York date of the timestamp is still 14 October 2026, and writes a new
-dated file when it is not. The committed parquet is this fetch.
+dated file when it is not. The numbers above are for the 14 October 2026 fetch.

@@ -2,12 +2,13 @@
 
 The existing Black-Scholes, Heston, and chain tests stay in their own files.
 These check the new surface of the same objects: state, parameters, the
-characteristic function, and a MarketData built from the committed snapshot.
+characteristic function, and a MarketData built from an SPX chain (synthetic, or a local snapshot).
 """
 
 import numpy as np
 import pytest
 
+from tests.fixtures import needs_real_snapshot
 from volsurface import models
 from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.protocols import (
@@ -110,11 +111,20 @@ def test_registry_and_entry_point_build_black_scholes():
     assert built.sigma == 0.25
 
 
-def test_market_data_from_committed_snapshot():
+def test_market_data_from_an_spx_chain(synthetic_spx):
+    data = market_data_from_snapshot(synthetic_spx)
+    _check_spx_market_data(data)
+
+
+@needs_real_snapshot
+def test_market_data_from_the_real_snapshot():
     from volsurface import chains
 
     chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    _check_spx_market_data(market_data_from_snapshot(chain))
+
+
+def _check_spx_market_data(data):
     assert data.day_count == "ACT/365"
     assert set(data.quotes["exercise"]) == {"european"}
     assert set(data.quotes["settlement"]) == {"cash"}

@@ -16,7 +16,7 @@ import pandas as pd
 from volsurface import chains
 from volsurface.core.types import MarketData
 
-# The committed snapshot is SPX: European and cash-settled. A ticker in
+# The SPX snapshot (and the synthetic test chain) is SPX: European and cash-settled. A ticker in
 # _EQUITY_AMERICAN is still marked American and physical if a chain with that
 # underlying is passed. Index options SPX and XSP are European and cash settled.
 # Anything else must be labelled by the caller. This is a loader assumption,

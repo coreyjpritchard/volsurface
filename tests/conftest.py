@@ -42,3 +42,11 @@ def impl(request):
         return module
 
     return load
+
+
+@pytest.fixture(scope="session")
+def synthetic_spx():
+    """The committed synthetic SPX-like chain (``tests/fixtures/synthetic_spx.py``)."""
+    from tests.fixtures import synthetic_spx
+
+    return synthetic_spx.load()

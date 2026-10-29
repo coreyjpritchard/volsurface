@@ -32,7 +32,7 @@ FIG = ROOT / "docs" / "figures"
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     result = SanosFitter(eta=0.25, omega=0.0, dx=0.05, time_interp="pchip").fit(data)
     surface = result.surface
