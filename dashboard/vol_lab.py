@@ -32,8 +32,11 @@ async def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(WEB, mo):
+    if WEB:
+        mo.output.append(mo.md('<small><a href="m/" target="_self">Mobile version</a></small>'))
+    mo.output.append(
+        mo.md(r"""
     # Volatility environment lab
 
     Pick a volatility environment, move its parameters, and watch three things change
@@ -43,6 +46,7 @@ def _(mo):
     SVI slices, the rough Bergomi plug-in (Monte Carlo), and the SVI and SANOS fits to the
     SPX option chain of 14 October 2026.
     """)
+    )
     return
 
 
