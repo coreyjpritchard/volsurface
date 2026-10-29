@@ -1035,9 +1035,10 @@ def _(mo):
     rough model (straight line). Fitted mode shows what each fingerprint can and cannot
     match on one real chain.
 
-    **What it does not show.** The grid is ten expiries (nine quoted ones in Fitted mode) by 45 strikes. Arbitrage checks are
-    pointwise on that grid, so a pass says nothing between the nodes. A fit to one snapshot
-    says nothing about how the parameters move from day to day.
+    **What it does not show.** The grid is ten expiries (nine quoted ones in Fitted mode)
+    by 45 strikes. Arbitrage checks are pointwise on that grid, so a pass says nothing
+    between the nodes. A fit to one snapshot says nothing about how the parameters move
+    from day to day.
     """)
     return
 
