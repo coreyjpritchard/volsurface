@@ -63,7 +63,9 @@ def test_load_model_fits_reads_bytes_like_the_web_build(fits):
 def test_flat_fit_is_the_mean_vol_and_its_rmse_the_spread(fits, market):
     flat = fits["models"]["flat"]
     sigma = flat["params"]["sigma"]
-    assert sigma == pytest.approx(np.mean(market["iv"]))
+    # The quotes' vols are re-inverted from the snapshot's prices, so the last digits can
+    # differ by platform (a few 1e-6 here); 1e-5 of vol is far below a quote's spread.
+    assert sigma == pytest.approx(np.mean(market["iv"]), abs=1e-5)
     assert flat["rmse_vol_points"] == pytest.approx(100 * np.std(market["iv"]), abs=1e-3)
 
 
