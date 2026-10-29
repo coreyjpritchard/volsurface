@@ -502,7 +502,7 @@ def _(
                 xaxis_title="k",
                 yaxis_title="T",
                 zaxis_title="vol",
-                camera=dict(eye=dict(x=-1.5, y=-1.8, z=0.9)),
+                camera=dict(eye=dict(x=-1.75, y=-2.1, z=1.0)),
                 xaxis=dict(title_font=dict(size=12), tickfont=dict(size=10)),
                 yaxis=dict(title_font=dict(size=12), tickfont=dict(size=10)),
                 zaxis=dict(title_font=dict(size=12), tickfont=dict(size=10)),
@@ -698,7 +698,7 @@ def _(
                 xaxis_title="k",
                 yaxis_title="T",
                 zaxis_title=_g,
-                camera=dict(eye=dict(x=-1.5, y=-1.8, z=0.9)),
+                camera=dict(eye=dict(x=-1.75, y=-2.1, z=1.0)),
             ),
         )
         _out = mo.vstack(
