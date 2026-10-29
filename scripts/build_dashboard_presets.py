@@ -37,9 +37,11 @@ def main() -> None:
     svi_params = np.array([[s.a, s.b, s.rho, s.m, s.sigma] for _, s in svi.pillars])
     print(f"SVI: {svi_T.size} expiries", flush=True)
 
-    sanos = SanosFitter(
-        eta=ETA, omega=0.0, dx=0.05, time_interp="pchip", method="highs-ipm"
-    ).fit(data).surface
+    sanos = (
+        SanosFitter(eta=ETA, omega=0.0, dx=0.05, time_interp="pchip", method="highs-ipm")
+        .fit(data)
+        .surface
+    )
     print(f"SANOS: {sanos.T.size} expiries", flush=True)
 
     quotes = data.quotes.dropna(subset=["iv"])

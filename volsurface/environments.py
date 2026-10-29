@@ -203,8 +203,13 @@ def svi_environment(grid_T, atm_vol, term_slope, b, rho, m, sigma, skew_decay) -
         name="SVI (raw slices, power-law term structure)",
         surface=surface,
         params={
-            "atm_vol": atm_vol, "term_slope": term_slope, "b": b, "rho": rho, "m": m,
-            "sigma": sigma, "skew_decay": skew_decay,
+            "atm_vol": atm_vol,
+            "term_slope": term_slope,
+            "b": b,
+            "rho": rho,
+            "m": m,
+            "sigma": sigma,
+            "skew_decay": skew_decay,
         },
         iv_override=iv,
         note=note,
@@ -219,8 +224,14 @@ def rbergomi_environment(H, eta, rho, sigma0, n_paths=4000, n_steps=64, seed=0) 
     from volsurface.plugins import create
 
     model = create(
-        "rbergomi", H=float(H), nu=float(eta), rho=float(rho), xi0=float(sigma0) ** 2,
-        n_paths=int(n_paths), n_steps=int(n_steps), seed=int(seed),
+        "rbergomi",
+        H=float(H),
+        nu=float(eta),
+        rho=float(rho),
+        xi0=float(sigma0) ** 2,
+        n_paths=int(n_paths),
+        n_steps=int(n_steps),
+        seed=int(seed),
     )
     return Environment(
         name="Rough Bergomi (Monte Carlo)",
@@ -254,12 +265,19 @@ def load_spx_presets(path: str | Path = PRESET_PATH) -> dict[str, Environment]:
     weights = [data[f"sanos_weights_{j}"] for j in range(n)]
     s_dom = data["sanos_domain"]
     sanos = SanosSurface(
-        data["sanos_T"], strikes, weights, data["sanos_variance"], float(data["sanos_eta"]),
-        UNIT_CURVES, Domain(*map(float, s_dom)),
+        data["sanos_T"],
+        strikes,
+        weights,
+        data["sanos_variance"],
+        float(data["sanos_eta"]),
+        UNIT_CURVES,
+        Domain(*map(float, s_dom)),
         time_interp=str(data["sanos_time_interp"]),
     )
     market = {
-        "T": data["market_T"], "k": data["market_k"], "iv": data["market_iv"],
+        "T": data["market_T"],
+        "k": data["market_k"],
+        "iv": data["market_iv"],
     }
     out = {}
     for key, surface, name in (
@@ -326,9 +344,7 @@ def smile_delta(env: Environment, grid: Grid, iv: np.ndarray, h: float = 1e-3) -
         base = bs.delta(F, K, T, iv, 1.0, "call")
         vega = bs.vega(F, K, T, iv)
     if env.dsigma_dF is not None:
-        slope = np.vstack(
-            [env.dsigma_dF(float(t), grid.k[i]) / F for i, t in enumerate(grid.T)]
-        )
+        slope = np.vstack([env.dsigma_dF(float(t), grid.k[i]) / F for i, t in enumerate(grid.T)])
     else:
         up = env.iv(Grid(grid.T, grid.z + h / (grid.sigma_ref * 1.0), grid.sigma_ref))
         down = env.iv(Grid(grid.T, grid.z - h / (grid.sigma_ref * 1.0), grid.sigma_ref))

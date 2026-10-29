@@ -49,8 +49,9 @@ def test_second_order_greeks_match_finite_differences(impl, kind):
     def p(f=F, sig=s, t=T):
         return bs.price(f, K, t, sig, df, kind)
 
-    fd_vanna = (p(F + hF, s + hs) - p(F + hF, s - hs) - p(F - hF, s + hs)
-                + p(F - hF, s - hs)) / (4 * hF * hs)
+    fd_vanna = (p(F + hF, s + hs) - p(F + hF, s - hs) - p(F - hF, s + hs) + p(F - hF, s - hs)) / (
+        4 * hF * hs
+    )
     fd_volga = (p(sig=s + hs) - 2 * p() + p(sig=s - hs)) / hs**2
     fd_theta = -(p(t=T + hT) - p(t=T - hT)) / (2 * hT)
     np.testing.assert_allclose(bs.vanna(F, K, T, s, df), fd_vanna, rtol=1e-4, atol=1e-5)
@@ -67,8 +68,7 @@ def test_black_scholes_equation_links_theta_vega_and_gamma(impl):
     T = np.array([0.02, 0.25, 1.0, 3.0])[None, :]
     for s in (0.1, 0.4):
         gamma = bs.gamma(F, K, T, s)
-        np.testing.assert_allclose(bs.theta(F, K, T, s), -0.5 * s**2 * F**2 * gamma,
-                                   rtol=1e-12)
+        np.testing.assert_allclose(bs.theta(F, K, T, s), -0.5 * s**2 * F**2 * gamma, rtol=1e-12)
         np.testing.assert_allclose(bs.vega(F, K, T, s), s * T * F**2 * gamma, rtol=1e-12)
 
 
@@ -149,8 +149,10 @@ def test_sabr_smile_delta_matches_a_hagan_price_bump():
 
 def test_flat_and_heston_surfaces_are_free_of_static_arbitrage():
     grid = env_lib.default_grid()
-    for env in (env_lib.flat_environment(0.25),
-                env_lib.heston_environment(0.02, 2.0, 0.04, 0.6, -0.7)):
+    for env in (
+        env_lib.flat_environment(0.25),
+        env_lib.heston_environment(0.02, 2.0, 0.04, 0.6, -0.7),
+    ):
         arb = env_lib.arbitrage_map(env, grid)
         assert arb.ok, (env.name, arb.counts)
         assert arb.n_checked == grid.k.size
@@ -158,8 +160,7 @@ def test_flat_and_heston_surfaces_are_free_of_static_arbitrage():
 
 def test_svi_presets_flag_the_arbitrage_they_are_built_for():
     grid = env_lib.default_grid()
-    base = dict(atm_vol=0.2, term_slope=0.05, b=0.06, rho=-0.6, m=0.0, sigma=0.15,
-                skew_decay=0.4)
+    base = dict(atm_vol=0.2, term_slope=0.05, b=0.06, rho=-0.6, m=0.0, sigma=0.15, skew_decay=0.4)
     assert env_lib.arbitrage_map(env_lib.svi_environment(grid.T, **base), grid).ok
 
     calendar = dict(base, atm_vol=0.12, term_slope=-0.6, b=0.05, skew_decay=0.3)
@@ -174,8 +175,9 @@ def test_svi_presets_flag_the_arbitrage_they_are_built_for():
 def test_svi_short_end_is_floored():
     """Below SVI_T_FLOOR the slice parameters stop moving, so the short end stays finite."""
     grid = env_lib.default_grid()
-    env = env_lib.svi_environment(grid.T, atm_vol=0.12, term_slope=-1.0, b=0.05, rho=-0.6,
-                                  m=0.0, sigma=0.15, skew_decay=1.5)
+    env = env_lib.svi_environment(
+        grid.T, atm_vol=0.12, term_slope=-1.0, b=0.05, rho=-0.6, m=0.0, sigma=0.15, skew_decay=1.5
+    )
     iv = env.iv(grid)
     assert np.all(np.isfinite(iv)) and iv.max() < 1.0
     atm = _iv_at(env, 7 / 365, 0.0)[0]
