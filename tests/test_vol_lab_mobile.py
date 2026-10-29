@@ -34,3 +34,15 @@ def test_both_pages_install_the_same_wheels():
     for wheel in ("plotly-7.1.0-py3-none-any.whl", "volsurface-0.1.0-py3-none-any.whl"):
         for page in ("vol_lab.py", "vol_lab_mobile.py"):
             assert wheel in (DASHBOARD / page).read_text()
+
+
+def test_modes_match_desktop():
+    desktop = _assigned(DASHBOARD / "vol_lab.py", "MODES")
+    mobile = _assigned(DASHBOARD / "vol_lab_mobile.py", "MODES")
+    assert mobile == desktop
+
+
+def test_both_pages_read_the_precomputed_fits():
+    for page in ("vol_lab.py", "vol_lab_mobile.py"):
+        text = (DASHBOARD / page).read_text()
+        assert "spx_model_fits.json" in text and "spx_fits.npz" in text

@@ -10,7 +10,7 @@ async def _():
 
     import marimo as mo
 
-    # The phone layout of dashboard/vol_lab.py: same environments, presets and library
+    # The phone layout of dashboard/vol_lab.py: same modes, models, presets and library
     # calls, one column, one plot at a time, coarser grid. WEB is the static build
     # (scripts/build_public_vollab.py), where this page lives in m/ next to the desktop one.
     WEB = sys.platform == "emscripten"
@@ -29,11 +29,12 @@ async def _():
     from plotly.subplots import make_subplots
 
     from volsurface import environments as env_lib
+    from volsurface import smile as smile_lib
 
     # A coarser grid than the desktop page (8 expiries by 28 strikes against 10 by 45).
     MOBILE_T = np.array([7, 14, 30, 61, 91, 182, 365, 730]) / 365.0
     MOBILE_Z = np.linspace(-3.0, 2.5, 28)
-    return BASE, MOBILE_T, MOBILE_Z, REPO_URL, WEB, env_lib, go, make_subplots, mo, np
+    return BASE, MOBILE_T, MOBILE_Z, REPO_URL, WEB, env_lib, go, make_subplots, mo, np, smile_lib
 
 
 @app.cell(hide_code=True)
@@ -42,7 +43,9 @@ def _(WEB, mo):
     mo.md(f"""
     # Volatility lab
 
-    Pick a model, open **Parameters** to move it, and switch views with the tabs. Every
+    Pick a **Mode** and a model, open **Parameters** to move it, and switch views with the
+    tabs. **Synthetic**: your parameters, not fitted to anything. **Fitted**: the model
+    calibrated to the SPX option chain of 14 October 2026, drawn over the quotes. Every
     number is computed in your browser by the `volsurface` library.
 
     <small>{_switch}Best on a wide screen for the full layout.</small>
@@ -52,17 +55,19 @@ def _(WEB, mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    # Same environments and presets as dashboard/vol_lab.py (tests/test_vol_lab_mobile.py
+    # Same modes, models and presets as dashboard/vol_lab.py (tests/test_vol_lab_mobile.py
     # checks they match); shorter labels for a phone.
+    MODES = {"Synthetic (your parameters)": "synthetic", "Fitted to SPX, 14 Oct 2026": "fitted"}
+    mode = mo.ui.radio(options=MODES, value="Synthetic (your parameters)", label="Mode")
     ENVIRONMENTS = {
         "Black-Scholes (flat vol)": "flat",
         "Heston": "heston",
         "SABR": "sabr",
         "SVI": "svi",
+        "SANOS (fitted only)": "sanos",
         "Rough Bergomi": "rbergomi",
-        "SPX 14 Oct 2026: SVI fit": "spx_svi",
-        "SPX 14 Oct 2026: SANOS fit": "spx_sanos",
     }
+    # Synthetic starting points. None of these is fitted to anything.
     PRESETS = {
         "flat": {"Calm market": {"sigma": 0.15}, "Stressed market": {"sigma": 0.45}},
         "heston": {
@@ -73,9 +78,6 @@ def _(mo):
             ),
             "Inverted term structure (stress)": dict(
                 v0=0.16, kappa=3.0, theta=0.04, xi=0.8, rho=-0.8
-            ),
-            "SPX fit in the README (xi on its bound)": dict(
-                v0=0.00287, kappa=8.72, theta=0.0642, xi=5.0, rho=-0.625
             ),
         },
         "sabr": {
@@ -94,29 +96,51 @@ def _(mo):
                 atm_vol=0.2, term_slope=0.0, b=0.4, rho=-0.95, m=0.0, sigma=0.02, skew_decay=0.3
             ),
         },
+        "sanos": {},
         "rbergomi": {
             "Rough, as in Gatheral et al. (H = 0.1)": dict(H=0.1, eta=1.9, rho=-0.9, sigma0=0.2),
-            "SPX free-H fit in the README": dict(H=0.207, eta=2.35, rho=-0.66, sigma0=0.13),
             "Almost Brownian (H = 0.45)": dict(H=0.45, eta=1.0, rho=-0.7, sigma0=0.2),
         },
-        "spx_svi": {"As fitted": {}},
-        "spx_sanos": {"As fitted": {}},
     }
     environment = mo.ui.dropdown(
         options=ENVIRONMENTS, value="Heston", label="Model", full_width=True
     )
-    return PRESETS, environment
+    MODEL_NAME = {v: k.split(" (")[0] for k, v in ENVIRONMENTS.items()}
+    return MODEL_NAME, PRESETS, environment, mode
 
 
 @app.cell(hide_code=True)
-def _(PRESETS, environment, mo):
-    _names = list(PRESETS[environment.value])
-    preset = mo.ui.dropdown(options=_names, value=_names[0], label="Preset", full_width=True)
-    return (preset,)
+async def _(BASE, WEB, env_lib, mo):
+    # The saved SPX fits (SVI, SANOS, the quotes) and every model's fitted parameters,
+    # served next to the page on the web. Nothing is fitted here and nothing is downloaded
+    # from anywhere else.
+    if WEB:
+        import io
+
+        from pyodide.http import pyfetch
+
+        _resp = await pyfetch(str(BASE / "public" / "spx_fits.npz"))
+        spx = env_lib.load_spx_presets(io.BytesIO(await _resp.bytes()))
+        _resp = await pyfetch(str(BASE / "public" / "spx_model_fits.json"))
+        fits = env_lib.load_model_fits(io.BytesIO(await _resp.bytes()))
+    else:
+        spx = mo.cache(env_lib.load_spx_presets)()
+        fits = env_lib.load_model_fits()
+    market = spx["spx_svi"].params["market"]
+    return fits, market, spx
 
 
 @app.cell(hide_code=True)
-def _(PRESETS, environment, mo, preset):
+def _(PRESETS, environment, mo, mode):
+    _names = list(PRESETS[environment.value]) if mode.value == "synthetic" else []
+    _names = _names or ["As fitted to SPX, 14 Oct 2026"]
+    preset = mo.ui.dropdown(options=_names, value=_names[0], label="Start from", full_width=True)
+    reset = mo.ui.button(label="Reset to fit", value=0, on_click=lambda v: v + 1)
+    return preset, reset
+
+
+@app.cell(hide_code=True)
+def _(PRESETS, environment, fits, mo, mode, preset, reset):
     _specs = {
         "flat": [("sigma", 0.05, 0.8, 0.01, "sigma, the one volatility")],
         "heston": [
@@ -141,16 +165,28 @@ def _(PRESETS, environment, mo, preset):
             ("sigma", 0.01, 0.6, 0.01, "sigma, ATM curvature (smaller is sharper)"),
             ("skew_decay", 0.0, 1.5, 0.05, "skew decay: b ~ T^-gamma"),
         ],
+        "sanos": [],
         "rbergomi": [
             ("H", 0.05, 0.49, 0.01, "H, Hurst index (roughness)"),
             ("eta", 0.2, 3.0, 0.05, "eta, vol of vol"),
             ("rho", -0.99, 0.0, 0.01, "rho, spot-vol correlation"),
             ("sigma0", 0.05, 0.6, 0.01, "sigma0, flat forward vol"),
         ],
-        "spx_svi": [],
-        "spx_sanos": [],
     }
-    _values = PRESETS[environment.value][preset.value]
+    _key = environment.value
+    _fitted = mode.value == "fitted"
+    _ = reset.value  # a click rebuilds the sliders at the fitted values
+    fit_values = None
+    if _fitted:
+        _spec = []
+        _saved = fits["models"].get(_key) or {}
+        if _key in ("flat", "heston", "rbergomi") and "params" in _saved:
+            fit_values = dict(_saved["params"])
+            _spec = [s for s in _specs[_key] if s[0] in fit_values]
+        _values = fit_values or {}
+    else:
+        _spec = _specs[_key]
+        _values = PRESETS[_key].get(preset.value, {})
     params = mo.ui.dictionary(
         {
             name: mo.ui.slider(
@@ -163,47 +199,98 @@ def _(PRESETS, environment, mo, preset):
                 debounce=True,
                 full_width=True,
             )
-            for name, lo, hi, step, label in _specs[environment.value]
+            for name, lo, hi, step, label in _spec
         }
     )
     # Shown from this cell, which does not re-run when a slider moves, so the panel stays
     # open while you drag.
+    if len(params):
+        _panel = mo.accordion(
+            {
+                f"Parameters ({len(params)})": mo.vstack(
+                    list(params.elements.values()) + ([reset] if fit_values else []), gap=0.8
+                )
+            }
+        )
+    elif _fitted:
+        _panel = mo.md("*Fitted expiry by expiry: no sliders.*")
+    else:
+        _panel = mo.md("")
     mo.vstack(
-        [
-            environment,
-            preset,
-            mo.accordion(
-                {f"Parameters ({len(params)})": mo.vstack(list(params.elements.values()), gap=0.8)}
-            )
-            if len(params)
-            else mo.md("*A fitted surface: no parameters.*"),
-        ],
+        [mode, environment] + ([] if _fitted else [preset]) + [_panel],
         gap=0.5,
     )
-    return (params,)
+    return fit_values, params
 
 
 @app.cell(hide_code=True)
-async def _(BASE, WEB, env_lib, mo):
-    if WEB:
-        import io
-
-        from pyodide.http import pyfetch
-
-        _resp = await pyfetch(str(BASE / "public" / "spx_fits.npz"))
-        spx = env_lib.load_spx_presets(io.BytesIO(await _resp.bytes()))
-    else:
-        spx = mo.cache(env_lib.load_spx_presets)()
-    return (spx,)
-
-
-@app.cell(hide_code=True)
-def _(MOBILE_T, MOBILE_Z, REPO_URL, WEB, env_lib, environment, mo, params, spx):
+def _(
+    MOBILE_T,
+    MOBILE_Z,
+    MODEL_NAME,
+    REPO_URL,
+    WEB,
+    env_lib,
+    environment,
+    fit_values,
+    fits,
+    market,
+    mo,
+    mode,
+    params,
+    spx,
+):
     key = environment.value
+    fitted = mode.value == "fitted"
     _p = {name: float(v) for name, v in params.value.items()}
-    if key in ("spx_svi", "spx_sanos"):
-        env = spx[key]
-        grid = env_lib.spx_grid(env, n_T=MOBILE_T.size, z=MOBILE_Z)
+    moved = fit_values is not None and any(abs(_p[n] - fit_values[n]) > 1e-12 for n in _p)
+    if fit_values is not None and not moved:
+        _p = dict(fit_values)
+    if not fitted and key == "sanos":
+        mo.stop(
+            True,
+            mo.callout(
+                mo.md(
+                    "**SANOS has no synthetic version.** It is a way of fitting a surface to "
+                    "option quotes, not a model with a few parameters to set. Switch **Mode** "
+                    "to **Fitted** to see its fit to the SPX chain."
+                ),
+                kind="warn",
+            ),
+        )
+    if key == "rbergomi" and WEB:
+        mo.stop(
+            True,
+            mo.callout(
+                mo.md(
+                    "**Rough Bergomi is not supported on the web version: clone the "
+                    f"project to run it.** [{REPO_URL}]({REPO_URL})"
+                ),
+                kind="warn",
+            ),
+        )
+    if fitted:
+        grid = env_lib.fitted_grid(market["T"], n_T=MOBILE_T.size, z=MOBILE_Z)
+        if key in ("flat", "heston"):
+            env = (env_lib.flat_environment if key == "flat" else env_lib.heston_environment)(**_p)
+        elif key == "sabr":
+            env = env_lib.fitted_sabr_environment(fits)
+        elif key in ("svi", "sanos"):
+            env = spx[f"spx_{key}"]
+        else:
+            mo.stop(
+                not fits["models"].get("rbergomi"),
+                mo.callout(mo.md("**Fitted rough Bergomi not available.**"), kind="warn"),
+            )
+            try:
+                env = env_lib.rbergomi_environment(**_p, xi0=env_lib.fitted_rbergomi_xi0(spx))
+            except KeyError:
+                mo.stop(
+                    True,
+                    mo.callout(
+                        mo.md("Rough Bergomi needs the `rough-volatility` dev extra."), kind="warn"
+                    ),
+                )
     else:
         grid = env_lib.default_grid(T=MOBILE_T, z=MOBILE_Z)
         if key == "flat":
@@ -215,24 +302,13 @@ def _(MOBILE_T, MOBILE_Z, REPO_URL, WEB, env_lib, environment, mo, params, spx):
         elif key == "svi":
             env = env_lib.svi_environment(grid.T, **_p)
         else:
-            mo.stop(
-                WEB,
-                mo.callout(
-                    mo.md(
-                        "**Rough Bergomi is not supported on the web version: clone the "
-                        f"project to run it.** [{REPO_URL}]({REPO_URL})"
-                    ),
-                    kind="warn",
-                ),
-            )
             try:
                 env = env_lib.rbergomi_environment(**_p)
             except KeyError:
                 mo.stop(
                     True,
                     mo.callout(
-                        mo.md("Rough Bergomi needs the `rough-volatility` dev extra."),
-                        kind="warn",
+                        mo.md("Rough Bergomi needs the `rough-volatility` dev extra."), kind="warn"
                     ),
                 )
     iv = env.iv(grid)
@@ -243,9 +319,35 @@ def _(MOBILE_T, MOBILE_Z, REPO_URL, WEB, env_lib, environment, mo, params, spx):
         else "Arbitrage: "
         + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in arb.counts.items() if v)
     )
+    # The label every tab carries: Synthetic or Fitted, and for Fitted the fit error.
+    if fitted:
+        _saved = fits["models"][key]
+        if moved and not env.monte_carlo:
+            _rmse = f"{env_lib.fit_quality(env, market).rmse:.2f} vol pts, your parameters"
+        elif moved:
+            _rmse = "not recomputed (Monte Carlo)"
+        else:
+            _rmse = f"{_saved['rmse_vol_points']:.2f} vol pts"
+        caption = f"**Fitted** · {MODEL_NAME[key]} · SPX (SPXW) 14 Oct 2026 · RMSE {_rmse}" + (
+            " · *moved away from the fit*" if moved else ""
+        )
+    else:
+        caption = f"**Synthetic** · {MODEL_NAME[key]} · your parameters, no data"
     _note = f"\n\n<small>{env.note}</small>" if env.note else ""
-    mo.callout(mo.md(_status + _note), kind="success" if arb.ok else "danger")
-    return arb, env, grid, iv, key
+    _moved = (
+        "\n\n**Moved away from the fit**: this is the model with your parameters. "
+        "Open Parameters and press Reset to fit to go back."
+        if moved
+        else ""
+    )
+    mo.vstack(
+        [
+            mo.callout(mo.md(caption + _moved), kind="info" if fitted else "neutral"),
+            mo.callout(mo.md(_status + _note), kind="success" if arb.ok else "danger"),
+        ],
+        gap=0.3,
+    )
+    return arb, caption, env, fitted, grid, iv, key
 
 
 @app.cell(hide_code=True)
@@ -258,14 +360,18 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(MOBILE_T, MOBILE_Z, env_lib, environment, mo, spx):
-    # Depends on the environment only, so moving a slider keeps the chosen expiry.
+def _(MOBILE_T, MOBILE_Z, env_lib, environment, market, mo, mode):
+    # Depends on the model and mode only, so moving a slider keeps the chosen expiry.
     _T = (
-        env_lib.spx_grid(spx[environment.value], n_T=MOBILE_T.size, z=MOBILE_Z).T
-        if environment.value in ("spx_svi", "spx_sanos")
+        env_lib.fitted_grid(market["T"], n_T=MOBILE_T.size, z=MOBILE_Z).T
+        if mode.value == "fitted"
         else MOBILE_T
     )
-    _labels = {f"{t * 365:.0f} days": i for i, t in enumerate(_T)}
+    _ = environment
+    _labels = {
+        (f"{t * 365:.1f} days" if t * 365 < 10 else f"{t * 365:.0f} days"): i
+        for i, t in enumerate(_T)
+    }
     expiry = mo.ui.dropdown(
         options=_labels,
         value=list(_labels)[min(4, len(_labels) - 1)],
@@ -316,17 +422,20 @@ def _():
 def _(
     PLOT_CONFIG,
     arb,
+    caption,
     env,
     env_lib,
     expiry,
+    fitted,
     go,
     greek,
     grid,
     iv,
-    key,
     make_subplots,
+    market,
     mo,
     np,
+    smile_lib,
     style,
     view,
 ):
@@ -334,7 +443,11 @@ def _(
     _bad = np.zeros(iv.shape, dtype=bool)
     for _m in arb.masks.values():
         _bad |= _m
-    _mk = env.params.get("market") if key.startswith("spx") else None
+    _mk = market if fitted else None
+    _cap = mo.md(f"<small>{caption}</small>")
+
+    def _days(t):
+        return f"{t * 365:.1f} days" if t * 365 < 10 else f"{t * 365:.0f} days"
 
     def _plot(fig):
         return mo.ui.plotly(fig, config=PLOT_CONFIG)
@@ -364,7 +477,20 @@ def _(
                     name="arbitrage",
                 )
             )
-        style(_fig, 400, "Implied vol surface")
+        if _mk is not None:
+            _in = (_mk["T"] >= grid.T[0]) & (_mk["T"] <= grid.T[-1])
+            _in &= np.abs(_mk["k"]) <= 0.6 * np.sqrt(_mk["T"]) + 0.02
+            _fig.add_trace(
+                go.Scatter3d(
+                    x=_mk["k"][_in],
+                    y=_mk["T"][_in],
+                    z=_mk["iv"][_in],
+                    mode="markers",
+                    marker=dict(size=1.5, color="black"),
+                    name="SPX quotes",
+                )
+            )
+        style(_fig, 400, "Implied vol surface" + (" over SPX quotes" if fitted else ""))
         _fig.update_layout(
             margin=dict(l=0, r=0, t=40, b=0),
             showlegend=False,
@@ -385,8 +511,8 @@ def _(
                     "Black implied vol for every strike and expiry; k = log(K/F). Drag to "
                     "rotate. Tilt is correlation, curvature is vol of vol, and how the short "
                     "end bends is the term structure of the skew. Red points fail an "
-                    "arbitrage check. The grid is 8 expiries by 28 strikes, coarser than the "
-                    "desktop page."
+                    "arbitrage check; in Fitted mode black points are the SPX quotes. The "
+                    "grid is 8 expiries by 28 strikes, coarser than the desktop page."
                 ),
             ]
         )
@@ -410,7 +536,7 @@ def _(
                 y=iv[_i],
                 mode="lines",
                 line=dict(width=3),
-                name=f"{grid.T[_i] * 365:.0f} days",
+                name="model",
             )
         )
         if _bad[_i].any():
@@ -424,8 +550,8 @@ def _(
                 )
             )
         if _mk is not None:
-            _near = np.abs(_mk["T"] - grid.T[_i]) <= 0.08 * grid.T[_i] + 1.0 / 365
-            _sel = _near & (_mk["k"] >= grid.k[_i].min()) & (_mk["k"] <= grid.k[_i].max())
+            _sel = np.isclose(_mk["T"], grid.T[_i])
+            _sel &= (_mk["k"] >= grid.k[_i].min()) & (_mk["k"] <= grid.k[_i].max())
             _fig.add_trace(
                 go.Scatter(
                     x=_mk["k"][_sel],
@@ -435,7 +561,7 @@ def _(
                     marker=dict(color="black", size=4),
                 )
             )
-        style(_fig, 360, f"Smile at {grid.T[_i] * 365:.0f} days")
+        style(_fig, 360, f"Smile at {_days(grid.T[_i])}")
         _fig.update_xaxes(title_text="k = log(K/F)")
         _fig.update_yaxes(title_text="implied vol")
         _out = mo.vstack(
@@ -445,8 +571,8 @@ def _(
                 _read(
                     "Implied vol against log-moneyness at one expiry; grey lines are the "
                     "other expiries. A downward slope is the equity skew: puts cost more "
-                    "vol than calls. For the SPX fits the black dots are the quotes the "
-                    "surface was fitted to."
+                    "vol than calls. In Fitted mode the black dots are the SPX quotes at "
+                    "this expiry."
                 ),
             ]
         )
@@ -457,6 +583,26 @@ def _(
         )
         _skew = env_lib.atm_skew(env, _Tt)
         _f1 = go.Figure(go.Scatter(x=_Tt, y=_atm, mode="lines+markers", name="ATM vol"))
+        _mrows = None
+        if _mk is not None:
+            # The market's ATM level and skew per quoted expiry, as on the desktop page.
+            _rows = []
+            for _t in np.unique(_mk["T"]):
+                _s = _mk["T"] == _t
+                _rows.append(
+                    (_t, *smile_lib.atm_fit(_mk["k"][_s], _mk["iv"][_s], smile_lib.skew_window(_t)))
+                )
+            _mrows = np.array(_rows)
+            _mrows = _mrows[np.isfinite(_mrows[:, 1]) & (_mrows[:, 0] >= _Tt[0] * 0.999)]
+            _f1.add_trace(
+                go.Scatter(
+                    x=_mrows[:, 0],
+                    y=_mrows[:, 1],
+                    mode="markers",
+                    marker=dict(color="black", size=5),
+                    name="SPX market",
+                )
+            )
         style(_f1, 280, "ATM vol against expiry")
         _f1.update_xaxes(title_text="T (years)")
         _f1.update_yaxes(title_text="implied vol")
@@ -470,10 +616,20 @@ def _(
                 name="|skew|",
             )
         )
+        if _mrows is not None:
+            _f2.add_trace(
+                go.Scatter(
+                    x=_mrows[:, 0],
+                    y=np.abs(_mrows[:, 2]),
+                    mode="markers",
+                    marker=dict(color="black", size=5),
+                    name="SPX market",
+                )
+            )
         _title = "|ATM skew|, log-log"
         if _ok.sum() >= 4:
             _slope = np.polyfit(np.log(_Tt[_ok]), np.log(np.abs(_skew[_ok])), 1)[0]
-            _title += f" (slope {_slope:.2f})"
+            _title += f" (model slope {_slope:.2f})"
         style(_f2, 280, _title)
         _f2.update_xaxes(title_text="T (years)", type="log")
         _f2.update_yaxes(title_text="|d sigma / dk|", type="log")
@@ -485,7 +641,8 @@ def _(
                     "Top: at-the-money vol by expiry. Bottom: the size of the at-the-money "
                     "skew on log-log axes, where a power law is a straight line. Diffusions "
                     "such as Heston bend (flat at the short end, then like 1/T); rough "
-                    "volatility stays straight with slope H - 1/2."
+                    "volatility stays straight with slope H - 1/2. In Fitted mode black dots "
+                    "are the market's level and skew."
                 ),
             ]
         )
@@ -519,7 +676,7 @@ def _(
                     line=dict(color="#ff7f0e", dash="dash", width=3),
                 )
             )
-        style(_f1, 320, f"{_g.capitalize()} at {grid.T[_i] * 365:.0f} days ({_units[_g]})")
+        style(_f1, 320, f"{_g.capitalize()} at {_days(grid.T[_i])} ({_units[_g]})")
         _f1.update_xaxes(title_text="k = log(K/F)")
         _f1.update_layout(showlegend=_g == "delta")
         _f2 = go.Figure(
@@ -597,21 +754,37 @@ def _(
                 ),
             ]
         )
-    mo.output.replace(_out)
+    mo.output.replace(mo.vstack([_cap, _out], gap=0.3))
     return
 
 
 @app.cell(hide_code=True)
-def _(REPO_URL, mo):
+def _(REPO_URL, fits, mo):
+    _d = fits["data"]
+    _F = _d["forward"]
     mo.accordion(
         {
+            "About the data (Fitted mode)": mo.md(f"""
+    - **Underlying:** {_d["underlying"]}.
+    - **Snapshot:** {_d["source"]}, {_d["quote_time_utc"][:16]} UTC on 14 October 2026
+      (06:01 in New York, before the cash open). One day, not refreshed.
+    - **Quotes:** {_d["n_quotes"]:,} out-of-the-money mids, {_d["n_expiries"]} expiries from
+      {_d["T_min"] * 365 * 24:.0f} hours to {_d["T_max"] * 365:.0f} days.
+    - **Spot:** index print {_d["index_print"]:,.2f} (the previous close); the fits do
+      not use it.
+    - **Rates and dividends:** none input. Each expiry's forward and discount factor come
+      from put-call parity near the money (forward {_F[0]:,.1f} at the front,
+      {_F[-1]:,.1f} at the last expiry), and k = log(K/F) uses that forward.
+    - **Fit error:** RMSE of model minus market implied vol over the quotes, in vol points,
+      measured the same way for every model.
+    """),
             "About this page": mo.md(f"""
     Runs entirely in your browser (Python compiled to WebAssembly with Pyodide); nothing
-    you do is sent anywhere. Models: Black-Scholes, Heston (Lewis Fourier prices), SABR
-    (Hagan's formula), raw SVI, and the SVI and SANOS fits to the SPX option chain of
-    14 October 2026. Rough Bergomi needs the full project: clone
-    [{REPO_URL}]({REPO_URL}) and run `make dashboard`.
-    """)
+    you do is sent anywhere, and the fits are precomputed files served with the page.
+    Models: Black-Scholes, Heston (Lewis Fourier prices), SABR (Hagan's formula), raw SVI
+    and SANOS. Rough Bergomi needs the full project: clone [{REPO_URL}]({REPO_URL}) and
+    run `make dashboard`.
+    """),
         }
     )
     return

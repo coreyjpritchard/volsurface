@@ -225,15 +225,17 @@ python -m http.server -d build/public-vollab
 
 The same app as one static folder that runs entirely in the visitor's browser (Pyodide,
 through `marimo export html-wasm`), with no server behind it. It ships the `volsurface`
-wheel, a slimmed plotly wheel and `data/presets/spx_fits.npz`, and by default it also
-self-hosts the Pyodide runtime and its packages, so the page requests nothing from any
-other host (`--cdn` loads the runtime from public CDNs instead). Every environment works
-except rough Bergomi, which needs the separate rough-volatility package and shows a note
-to clone this repository instead.
+wheel, a slimmed plotly wheel, `data/presets/spx_fits.npz` and
+`data/presets/spx_model_fits.json`, and by default it also self-hosts the Pyodide runtime
+and its packages, so the page requests nothing from any other host (`--cdn` loads the
+runtime from public CDNs instead). Fitted mode reads the precomputed fits from those two
+files: the browser never calibrates and never fetches market data. Every model works in
+both modes except rough Bergomi, which needs the separate rough-volatility package and
+shows a note to clone this repository instead.
 
 The folder holds two pages that share one runtime: the desktop page at the root and a
-phone page in `m/` (`dashboard/vol_lab_mobile.py`): one column, the parameters in a
-collapsible panel, and one view at a time behind tabs (surface, smile, term structure,
+phone page in `m/` (`dashboard/vol_lab_mobile.py`): the same Mode switch and models, one
+column, the parameters in a collapsible panel, a Synthetic or Fitted label on every tab, and one view at a time behind tabs (surface, smile, term structure,
 Greeks with a picker, arbitrage) on a coarser grid. Screens narrower than 760 px are sent
 to `m/`; each page links to the other, and the choice of the desktop page is remembered.
 While it loads, both pages show a plain HTML loading screen (`scripts/public_vollab/`)

@@ -7,7 +7,8 @@ Run from the repository root:
 The folder runs ``dashboard/vol_lab.py`` in the visitor's browser with Pyodide
 (``marimo export html-wasm --mode run``). Next to the page, in ``public/``, it ships
 the pure-Python ``volsurface`` wheel built from this checkout and the SPX fits in
-``data/presets/spx_fits.npz`` (14 October 2026 SPXW snapshot), plus the plotly wheel
+``data/presets/spx_fits.npz`` and every model's fitted parameters in
+``data/presets/spx_model_fits.json`` (14 October 2026 SPXW snapshot), plus the plotly wheel
 pinned in ``uv.lock`` (Pyodide does not ship plotly). Nothing calls back to
 any server of ours.
 
@@ -308,6 +309,9 @@ def main(out: Path, cdn: bool) -> None:
         )
         shutil.copy(Path(tmp) / "dist" / WHEEL, public / WHEEL)
         shutil.copy(ROOT / "data" / "presets" / "spx_fits.npz", public / "spx_fits.npz")
+        shutil.copy(
+            ROOT / "data" / "presets" / "spx_model_fits.json", public / "spx_model_fits.json"
+        )
         plotly = locked_wheel("plotly", public)
         slim_plotly(public / plotly)
         for name in ("vol_lab.py", "vol_lab_mobile.py"):
