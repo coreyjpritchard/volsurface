@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.fixtures import needs_real_snapshot
 from tests.test_sanos_eta0 import _heston_book, _known_surface
 from volsurface.arbitrage import check_surface
 from volsurface.core.types import ArbTol, Domain, MarketData
@@ -105,7 +106,24 @@ def test_pchip_time_derivative_matches_across_an_expiry_at_the_money():
     assert abs(wing_jump) > abs(atm_jump)
 
 
+def test_synthetic_spx_eta_025_is_arbitrage_free_and_mostly_in_spread(synthetic_spx):
+    """The market-bar configuration on the synthetic chain (about 0.86 in spread here)."""
+    from volsurface.core.market import market_data_from_snapshot
+
+    data = market_data_from_snapshot(synthetic_spx)
+    result = SanosFitter(eta=0.25, omega=0.0, dx=0.05, time_interp="pchip").fit(data)
+    assert result.detail["omega_label"] == "calendar guaranteed"
+    assert result.in_spread > 0.75
+    times = result.surface.T
+    grid_t = np.unique(np.concatenate([times, 0.5 * (times[:-1] + times[1:])]))
+    log_k = np.linspace(-0.4, 0.3, 71)
+    report = check_surface(result.surface, grid_t, log_k, tol=ArbTol(price=1e-9))
+    assert report.ok
+    assert report.violations.empty
+
+
 @pytest.mark.slow
+@needs_real_snapshot
 def test_spx_eta_025_meets_the_market_bar():
     """omega = 0, zero violations at 1e-9, in-spread fraction above 0.558."""
     from volsurface import chains
@@ -197,6 +215,7 @@ def test_heston_holdout_fits_and_prices_the_left_out_quotes():
 
 
 @pytest.mark.slow
+@needs_real_snapshot
 def test_spx_holdout_meets_the_leave_strikes_out_bar():
     """Held-out SANOS in-spread is at least raw SVI, and violations stay at 0.
 

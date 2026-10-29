@@ -284,7 +284,7 @@ def fetch_ibkr(
     """Fetch a stock option chain from a running TWS or IB Gateway in the tidy schema.
 
     The qualifier is a stock on SMART. SPX and XSP are indexes, so this function
-    does not fetch them. The committed SPX chain is the CBOE delayed file built
+    does not fetch them. The SPX chain the results use is the CBOE delayed file built
     by ``scripts/build_cboe_spx_snapshot.py``.
 
     Steps: qualify the stock, read its price, list expiries and strikes with
@@ -296,7 +296,7 @@ def fetch_ibkr(
     if symbol.upper() in {"SPX", "XSP", "VIX"}:
         raise ValueError(
             f"{symbol} is an index. fetch_ibkr qualifies a stock. "
-            "The committed SPX chain is scripts/build_cboe_spx_snapshot.py."
+            "For SPX use scripts/build_cboe_spx_snapshot.py."
         )
     from ib_async import IB, Option, Stock
 
@@ -382,11 +382,32 @@ def load_snapshot(path: str | Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+SNAPSHOT_HELP = (
+    "The Cboe snapshot is not redistributed with this repository. Build your own with "
+    "scripts/build_cboe_spx_snapshot.py (pass a saved copy of Cboe's delayed-quotes JSON, "
+    "see data/snapshots/README.md). Cboe's data is subject to Cboe's terms of use "
+    "(https://www.cboe.com/en/terms/); complying with them is up to you."
+)
+
+
 def latest_snapshot(underlying: str = "SPX", directory: Path = SNAPSHOT_DIR) -> Path:
     paths = sorted(Path(directory).glob(f"{underlying}_*.parquet"))
     if not paths:
-        raise FileNotFoundError(f"no {underlying} snapshot in {directory}")
+        raise FileNotFoundError(f"no {underlying} snapshot in {directory}. {SNAPSHOT_HELP}")
     return paths[-1]
+
+
+def has_snapshot(underlying: str = "SPX", directory: Path = SNAPSHOT_DIR) -> bool:
+    """Whether a local ``<underlying>_*.parquet`` snapshot exists (it is not committed)."""
+    return any(Path(directory).glob(f"{underlying}_*.parquet"))
+
+
+def require_snapshot(underlying: str = "SPX", directory: Path = SNAPSHOT_DIR) -> Path:
+    """:func:`latest_snapshot` for scripts: exit with the build instructions if missing."""
+    try:
+        return latest_snapshot(underlying, directory)
+    except FileNotFoundError as err:
+        raise SystemExit(str(err)) from None
 
 
 # %% Forward inference and implied vols
@@ -430,7 +451,7 @@ def market_implied_vols(
     argument if it is not None, otherwise a finite ``rate`` column on the
     snapshot. Then ``df_i = exp(-r T_i)`` and ``F_i`` is the median of
     ``K + (C - P) / df_i`` over the near-the-money strikes. A blank ``rate``
-    column, which is what the committed SPX file stores, leaves the parity
+    column, which is what the Cboe SPX snapshot stores, leaves the parity
     pair in place.
     """
     fits = {}

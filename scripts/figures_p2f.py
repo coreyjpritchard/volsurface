@@ -259,7 +259,7 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
 
 def spx_fit() -> dict:
     """One SABR parameter set per SPXW expiry. beta is fixed at 1."""
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     full = market_data_from_snapshot(chain)
     data = full.__class__(
         asof=full.asof,

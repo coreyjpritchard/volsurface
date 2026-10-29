@@ -1,4 +1,4 @@
-"""Linear SANOS (eta = 0) on the committed SPX snapshot.
+"""Linear SANOS (eta = 0) on the 14 October 2026 SPX snapshot (local, not committed).
 
 Run from the repository root:
 
@@ -30,7 +30,7 @@ TARGETS = (7 / 365, 30 / 365, 90 / 365, 0.96)
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     result = SanosFitter(eta=0.0, omega=0.0, dx=0.05).fit(data)
     surface = result.surface

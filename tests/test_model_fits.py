@@ -7,6 +7,7 @@ import io
 import numpy as np
 import pytest
 
+from tests.fixtures import needs_real_snapshot
 from volsurface import environments as env_lib
 from volsurface.models.sabr import hagan_implied_vol
 
@@ -145,6 +146,7 @@ def test_rbergomi_fit_has_free_h_on_the_sanos_forward_variance(fits):
 
 
 @pytest.mark.slow
+@needs_real_snapshot
 def test_sabr_fit_reruns_to_the_stored_parameters(fits):
     from volsurface import chains
     from volsurface.core.market import market_data_from_snapshot

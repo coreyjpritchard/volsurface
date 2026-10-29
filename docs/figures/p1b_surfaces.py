@@ -60,7 +60,7 @@ def _wing_min(spline, T: float, k_obs: np.ndarray) -> tuple[float, np.ndarray]:
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     market = Curves(data.F, data.df)
     # Same objective as the fitter, including vega weights from the half-spread.
