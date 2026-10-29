@@ -561,7 +561,7 @@ def _(TAG, arb, days, expiry, fitted, go, grid, iv, market, np, show_flags, x_ax
         )
     surface_fig.update_layout(
         title=f"Implied volatility surface ({TAG})",
-        height=480,
+        height=660,
         margin=dict(l=0, r=0, t=40, b=0),
         showlegend=False,
         uirevision="keep",
@@ -569,7 +569,7 @@ def _(TAG, arb, days, expiry, fitted, go, grid, iv, market, np, show_flags, x_ax
             xaxis_title=X_LABEL,
             yaxis_title="T (years)",
             zaxis_title="implied vol",
-            camera=dict(eye=dict(x=-1.4, y=-1.7, z=0.8)),
+            camera=dict(eye=dict(x=-1.6, y=-1.95, z=0.9)),
         ),
     )
 
@@ -720,15 +720,15 @@ def _(TAG, X_LABEL, days, delta_smile, expiry, go, greek, greeks, grid, make_sub
         )
     )
     greek_fig.update_layout(
-        title=f"{greek.value.capitalize()} surface ({_units[greek.value]}; {TAG})",
+        title=f"{greek.value.capitalize()} surface ({TAG})<br><sup>{_units[greek.value]}</sup>",
         height=480,
-        margin=dict(l=0, r=0, t=40, b=0),
+        margin=dict(l=0, r=0, t=64, b=0),
         uirevision="keep",
         scene=dict(
             xaxis_title=X_LABEL,
             yaxis_title="T (years)",
             zaxis_title=greek.value,
-            camera=dict(eye=dict(x=-1.4, y=-1.7, z=0.8)),
+            camera=dict(eye=dict(x=-1.6, y=-1.95, z=0.9)),
         ),
     )
 
@@ -1020,11 +1020,12 @@ def _(mo):
     mo.md(r"""
     ## How to read the surface panels
 
-    **What is plotted.** Left: Black implied vol for every strike and expiry. The
-    horizontal axis is log-moneyness $k = \log(K/F)$ (or the strike, with the forward at
-    100); each expiry spans the same number of standard deviations, so the short end is not
-    all wing. Middle: one expiry's smile, with the others in grey. Below: the ATM vol and the
-    ATM skew $d\sigma/dk$ against expiry; on log-log axes a power law is a straight line.
+    **What is plotted.** Top, beside the controls: Black implied vol for every strike and
+    expiry. The horizontal axis is log-moneyness $k = \log(K/F)$ (or the strike, with the
+    forward at 100); each expiry spans the same number of standard deviations, so the short
+    end is not all wing. Below, left: one expiry's smile, with the others in grey. Below,
+    right: the ATM vol and the ATM skew $d\sigma/dk$ against expiry; on log-log axes a power
+    law is a straight line.
     Red points are nodes where an arbitrage check fails. In Fitted mode the rows are quoted
     SPX expiries and, when the local snapshot is there, the black dots are the market
     quotes at that expiry (smile) or all expiries (surface, term structure).
@@ -1034,7 +1035,7 @@ def _(mo):
     rough model (straight line). Fitted mode shows what each fingerprint can and cannot
     match on one real chain.
 
-    **What it does not show.** The grid is ten expiries by 45 strikes. Arbitrage checks are
+    **What it does not show.** The grid is ten expiries (nine quoted ones in Fitted mode) by 45 strikes. Arbitrage checks are
     pointwise on that grid, so a pass says nothing between the nodes. A fit to one snapshot
     says nothing about how the parameters move from day to day.
     """)

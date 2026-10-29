@@ -192,25 +192,37 @@ seed 0) and leave out the 1,332 deep out-of-the-money quotes whose prices are to
 for the paths to resolve. This is one morning of one index; nothing here says how these
 fits behave on another day.
 
-![The dashboard: Heston controls, implied volatility surface and one smile](docs/figures/dashboard_surface.png)
+![The vol lab in Fitted mode: Heston controls and fit error beside the implied volatility surface](docs/figures/dashboard_surface.png)
 
-**How to read this.** Left: the environment, its parameters and the arbitrage status.
-Middle: Black implied vol over strike and expiry (log-moneyness $k = \log(K/F)$, ten
-expiries from 7 days to 2 years, each spanning the same number of standard deviations).
-Right: the smile at one expiry, with the other expiries in grey. Below these (not shown)
-are the at-the-money vol and the at-the-money skew against expiry on log-log axes, with
-the fitted slope. The takeaway is that each parameter has a fingerprint: in Heston,
-$\rho$ tilts the smile, $\xi$ bends it, and $\kappa$ sets where the skew stops being
-flat and starts decaying like $1/T$, so the log-log skew line bends; in rough Bergomi it
-stays straight with slope $H - 1/2$. Red markers appear where `check_surface` finds a
-call-spread, butterfly or calendar violation. What it does not show: the checks are
-pointwise on the grid, so a pass says nothing between nodes, and the rough Bergomi
-surface is a Monte Carlo estimate (4,000 paths) with no error bars.
+**How to read this.** Heston in Fitted mode, as the static web build shows it (fitted
+parameters only, no quotes). Left: the Mode switch, the model, the sliders at the fitted
+values with the table of their values to four figures, "Reset to fit", and the fit error:
+3.35 vol points over 8,918 of the 8,973 quotes, and 2.34 at the 78-day expiry. Right:
+Black implied vol over log-moneyness $k = \log(K/F)$ and expiry; in Fitted mode the rows
+are nine of the quoted SPX expiries, from 1.4 days out to 351 days, each spanning the same
+number of standard deviations. Run locally with the snapshot on disk, the same view also
+draws the quotes as black dots. The takeaway is the shape Heston can reach on this chain:
+a steep short-dated skew that flattens with expiry. What it does not show: the
+arbitrage checks (the status line below the controls) are pointwise on the grid, so a
+pass says nothing between nodes, and a fit to one morning says nothing about another day.
 
-![The dashboard: a vanna surface and all six Greeks at one expiry](docs/figures/dashboard_greeks.png)
+![The vol lab below the surface: one smile, the ATM vol and the ATM skew against expiry](docs/figures/dashboard_smile_term.png)
 
-**How to read this.** Left: one Greek as a surface over strike and expiry (here vanna,
-the change in delta per vol point). Right: delta, gamma, vega, vanna, volga and theta per
+**How to read this.** Below the surface, for the same fitted Heston. Left: the smile at the
+chosen expiry (78 days, yellow) with the other grid expiries in grey. Middle: the
+at-the-money vol against expiry. Right: the absolute at-the-money skew against expiry on
+log-log axes, with the fitted slope (here -0.51, a skew decaying like $1/\sqrt T$ over this
+range). The takeaway is that each parameter has a fingerprint: in Heston, $\rho$ tilts the
+smile, $\xi$ bends it, and $\kappa$ sets where the skew stops being flat and starts
+decaying like $1/T$, so the log-log skew line bends; in rough Bergomi it stays straight
+with slope $H - 1/2$. What it does not show: the market's own ATM level and skew per expiry
+are drawn as black dots only when the snapshot is on disk, and the rough Bergomi lines are
+a Monte Carlo estimate (4,000 paths) with no error bars.
+
+![The vol lab Greeks: a vanna surface and all six Greeks at one expiry](docs/figures/dashboard_greeks.png)
+
+**How to read this.** The same fitted Heston. Left: one Greek as a surface over strike and
+expiry (here vanna, the change in delta per vol point). Right: delta, gamma, vega, vanna, volga and theta per
 day at the chosen expiry. All are Black Greeks at each option's own implied vol, per 100
 of forward, with zero rates. Gamma and theta are the same surface with opposite sign
 ($\Theta = -\tfrac12\sigma^2F^2\Gamma$, checked live in the app), gamma piles up at the
