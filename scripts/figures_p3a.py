@@ -40,7 +40,7 @@ from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import MarketData
 
 t0 = time.perf_counter()
-chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+chain = chains.load_snapshot(chains.require_snapshot("SPX"))
 data = market_data_from_snapshot(chain)
 expiries = list(data.quotes.groupby("expiry", sort=True).groups)[:{n_expiries}]
 subset = data.quotes[data.quotes["expiry"].isin(expiries)].copy()

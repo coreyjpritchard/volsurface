@@ -40,7 +40,7 @@ HESTON = Heston(v0=0.007982, kappa=13.466, theta=0.03836, xi=2.703, rho=-0.6508)
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     market = market_term_structure(data.quotes)
     panel = model_term_structure(HESTON, market["T"].to_numpy(), n=9, iv_tol=1e-8)

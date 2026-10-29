@@ -66,7 +66,7 @@ def starts() -> list[np.ndarray]:
 
 
 # %% Data
-snapshot = chains.load_snapshot(chains.latest_snapshot("SPX"))
+snapshot = chains.load_snapshot(chains.require_snapshot("SPX"))
 market = chains.market_implied_vols(snapshot)
 ts = smile.market_term_structure(market)
 maturities = ts["T"].to_numpy()

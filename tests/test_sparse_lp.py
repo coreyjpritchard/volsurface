@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pytest
 
+from tests.fixtures import needs_real_snapshot, synthetic_spx
 from tests.test_arbitrage import _market, _quote_row
 from volsurface import chains
 from volsurface.arbitrage import check_quotes
@@ -21,8 +22,10 @@ def _objective(report) -> float:
     return float(match.group(1))
 
 
-def _book(n_expiries: int) -> MarketData:
-    chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
+def _book(n_expiries: int, chain=None) -> MarketData:
+    """The first ``n_expiries`` of the real snapshot, or of ``chain`` when given."""
+    if chain is None:
+        chain = chains.load_snapshot(chains.latest_snapshot("SPX"))
     data = market_data_from_snapshot(chain)
     expiries = list(data.quotes.groupby("expiry", sort=True).groups)[:n_expiries]
     subset = data.quotes[data.quotes["expiry"].isin(expiries)].copy()
@@ -46,6 +49,16 @@ def _same(sparse, dense) -> None:
     assert dense.violations.empty
 
 
+@pytest.mark.parametrize(("n_expiries", "n_quotes"), [(2, 29), (8, 182), (10, 231)])
+def test_sparse_matches_dense_on_the_synthetic_chain(n_expiries, n_quotes):
+    book = _book(n_expiries, synthetic_spx.load())
+    sparse = check_quotes(book)
+    dense = check_quotes(book, dense=True)
+    assert sparse.n_checked == n_quotes == len(book.quotes)
+    _same(sparse, dense)
+
+
+@needs_real_snapshot
 def test_sparse_matches_dense_on_two_expiries():
     """278 quotes, objective 0, the same empty violation set."""
     book = _book(2)
@@ -55,6 +68,7 @@ def test_sparse_matches_dense_on_two_expiries():
     _same(sparse, dense)
 
 
+@needs_real_snapshot
 def test_sparse_matches_dense_on_eight_expiries():
     """1,685 quotes. Dense peak RSS on this book is about 1.2 GB."""
     book = _book(8)
@@ -66,6 +80,7 @@ def test_sparse_matches_dense_on_eight_expiries():
 
 
 @pytest.mark.slow
+@needs_real_snapshot
 def test_sparse_matches_dense_on_the_first_24_expiries():
     """4,398 quotes. Dense peak RSS on this book reached 6.2 GB, so it is not fast."""
     book = _book(24)
@@ -88,6 +103,7 @@ def test_seeded_ask_is_the_gap_below_intrinsic():
 
 
 @pytest.mark.slow
+@needs_real_snapshot
 def test_all_forty_expiries_return_a_status_under_2gb():
     """Peak RSS of a fresh process on the full SPX book stays below 2 GB."""
     code = """

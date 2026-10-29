@@ -79,7 +79,8 @@ reproduces each version and explains why they differ.
 | `volsurface/core/`, `docs/DESIGN.md` | Shared types and protocols; the design document |
 | `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed |
 | `sessions/` | marimo apps, one per session |
-| `data/snapshots/` | The committed SPX chain (parquet) |
+| `data/snapshots/` | Where a local SPX chain goes (parquet); the Cboe snapshot itself is not redistributed |
+| `tests/fixtures/` | A small synthetic SPX-like chain (Heston prices with noisy quotes) for the tests |
 
 Rough Bergomi itself (the hybrid scheme of Bennedsen, Lunde and Pakkanen 2017) lives in
 a separate package, [rough-volatility](https://github.com/coreyjpritchard/rough-volatility),
@@ -92,8 +93,17 @@ Python 3.11. Dependencies are pinned in `uv.lock` ([uv](https://docs.astral.sh/u
 comes from the CPU wheel index. One command rebuilds the environment, runs the fast tests
 and redraws the first figure (about five minutes, most of it the Heston multi-start):
 
+The SPX results in this repository were computed on a Cboe delayed-quotes snapshot of
+the SPXW chain taken on 14 October 2026. That snapshot is not redistributed here; see
+[data/snapshots/README.md](data/snapshots/README.md) to rebuild one yourself, under Cboe's
+terms. The tests do not need it: they run on a synthetic chain in `tests/fixtures/`, and the
+few that check numbers of the real file are skipped without it. The figure scripts and
+`docs/figure_00.py` stop with a message pointing to the build script when there is no
+local snapshot. The committed figures and their CSV and JSON outputs are the ones computed
+on the 14 October 2026 file.
+
 ```bash
-make reproduce
+make reproduce   # the last step needs a local snapshot
 # the same by hand:
 uv sync --locked --extra dev --extra autodiff
 uv run pytest -m "not slow"
@@ -120,12 +130,15 @@ open it in a browser (GitHub shows the file as source rather than rendering it).
 GitHub Actions runs `ruff check` and the fast tests on every push to `main` and on pull
 requests (`.github/workflows/ci.yml`); the slow tests are run by hand.
 
-Fetch a new snapshot:
+Build a local snapshot (git ignores everything in `data/snapshots/` but its README):
 
 ```bash
-python scripts/build_cboe_spx_snapshot.py    # CBOE delayed SPXW quotes; the committed chain
-python -m volsurface.chains yfinance SPX     # writes data/snapshots/SPX_<date>.parquet
+python scripts/build_cboe_spx_snapshot.py _SPX.json   # a saved copy of Cboe's delayed SPXW quotes
+python -m volsurface.chains yfinance SPX              # writes data/snapshots/SPX_<date>.parquet
 ```
+
+Cboe's delayed quotes are subject to Cboe's terms of use (<https://www.cboe.com/en/terms/>),
+and complying with them is up to you. The repository does not redistribute the data.
 
 ## Next: the regime experiment (draft pre-registration, no results)
 

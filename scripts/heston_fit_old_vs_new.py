@@ -23,7 +23,7 @@ OLD_COST = 0.7454
 N_DRAWS = 600
 
 ts = smile.market_term_structure(
-    chains.market_implied_vols(chains.load_snapshot(chains.latest_snapshot("SPX")))
+    chains.market_implied_vols(chains.load_snapshot(chains.require_snapshot("SPX")))
 )
 T = ts["T"].to_numpy()
 ATM = ts["atm"].to_numpy()

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.fixtures import needs_real_snapshot
 from volsurface import bs, chains
 
 
@@ -87,7 +88,37 @@ def test_tidy_time_to_expiry_and_filters():
     assert with_last["price_source"].tolist() == ["mid", "last"]
 
 
-def test_committed_snapshot_loads():
+def test_synthetic_chain_loads_like_a_snapshot(synthetic_spx):
+    snap = synthetic_spx
+    assert list(snap.columns) == chains.COLUMNS
+    assert set(snap["underlying"]) == {"SPX"}
+    assert set(snap["source"]) == {"synthetic"}
+    assert set(snap["price_source"]) == {"mid"}
+    assert snap["bid"].notna().all() and (snap["bid"] > 0).all()
+    assert (snap["ask"] >= snap["bid"]).all()
+    assert snap["expiry"].nunique() == 10
+    out = chains.market_implied_vols(snap)
+    assert out["expiry"].nunique() == 10
+    assert out["iv"].between(0.02, 2.0).all()
+    # Parity on noisy mids recovers the model's discount factors to a few parts in 100.
+    from tests.fixtures import synthetic_spx as fixture
+
+    df = out.groupby("expiry", sort=True)[["T", "df"]].first()
+    np.testing.assert_allclose(df["df"], np.exp(-fixture.RATE * df["T"]), atol=0.02)
+
+
+def test_synthetic_chain_is_what_its_generator_writes(synthetic_spx):
+    from tests.fixtures import synthetic_spx as fixture
+
+    rebuilt = fixture.build()
+    assert len(rebuilt) == len(synthetic_spx)
+    for col in ("strike", "T", "bid", "ask"):
+        # Model prices are rounded to a 0.05 tick; platform digits can move one tick.
+        np.testing.assert_allclose(rebuilt[col], synthetic_spx[col], atol=0.051)
+
+
+@needs_real_snapshot
+def test_real_snapshot_loads():
     snap = chains.load_snapshot(chains.latest_snapshot("SPX"))
     assert list(snap.columns) == chains.COLUMNS
     assert set(snap["underlying"]) == {"SPX"}
@@ -105,6 +136,14 @@ def test_committed_snapshot_loads():
     df = out.groupby("expiry", sort=True)["df"].first()
     assert float(df.iloc[0]) > 1.0
     assert float(df.iloc[-1]) < 1.0
+
+
+def test_missing_snapshot_says_how_to_build_one(tmp_path):
+    with pytest.raises(FileNotFoundError, match="build_cboe_spx_snapshot.py"):
+        chains.latest_snapshot("SPX", tmp_path)
+    with pytest.raises(SystemExit, match="terms of use"):
+        chains.require_snapshot("SPX", tmp_path)
+    assert not chains.has_snapshot("SPX", tmp_path)
 
 
 def test_ibkr_refuses_an_index():
