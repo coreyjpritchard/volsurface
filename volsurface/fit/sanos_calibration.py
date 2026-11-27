@@ -304,8 +304,12 @@ def bound_hits(
     hits = []
     for spec in specs:
         value = float(params[spec.name])
-        scale = max(abs(spec.upper), abs(spec.lower), 1e-12)
-        if abs(value - spec.upper) <= frac * scale or abs(value - spec.lower) <= frac * scale:
+        # Compare to each bound on that bound's own scale, not the far end of
+        # the box. Otherwise a small interior v0 is flagged against upper=2.
+        if abs(value - spec.upper) <= max(frac * abs(spec.upper), 1e-12):
+            hits.append(spec.name)
+            continue
+        if abs(value - spec.lower) <= max(frac * abs(spec.lower), 1e-12):
             hits.append(spec.name)
     return hits
 

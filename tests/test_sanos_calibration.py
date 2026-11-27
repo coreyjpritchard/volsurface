@@ -132,6 +132,11 @@ def test_bound_hits_detects_the_numerical_box():
     assert bound_hits(params, specs) == ["kappa"]
     params["kappa"] = 1.5
     assert bound_hits(params, specs) == []
+    # A small interior v0 must not be judged against the far end of the box.
+    params["v0"] = 0.0036
+    assert bound_hits(params, specs) == []
+    params["xi"] = 5.0
+    assert bound_hits(params, specs) == ["xi"]
 
 
 def test_site_document_omits_parameters_and_forbidden_names(tmp_path: Path):
