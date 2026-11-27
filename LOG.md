@@ -14,6 +14,26 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 
 **Current state:** Switching `nu` acts on new increments, so variance does not jump at a switch. The draft pre-registration is pinned and is not frozen. A day is `1/252` of a trading year. L1 matures in 21 trading days and L2's life is 30 trading days. The episode starts at `t0 = 0.5`, with the burn-in visible to the filter. P&L is per unit of the liability's time-0 premium at `lambda = 0.1`. The path counts are 100,000 train, 20,000 validation and 20,000 test. Validation is only for early stopping and selection. The bootstrap is hierarchical, paired, percentile, with `B = 10,000`. The H2 premiums are Monte Carlo means at 65,536 copies and are held fixed in the bootstrap. The hedger's probability is the spot filter by default; the gate uses rv. Prices do not read that probability. The windowed filter reads the change in log realised variance, timed two steps back. The latent-variance benchmark is a pilot emission table, not an oracle, and it is not a price. `state["xi"]` is the conditional expectation of the simulated hybrid variance given the `nu` in force on each finished step. `surface_at` prices the call on that curve. Each copy runs the regime chain forward from the current true regime. Given the `nu` path so far, the variance swap is a martingale up to a tail-weight bias of about -0.1 percent of the quote. The call is a martingale by construction up to Monte Carlo error, because each copy replicates the simulator's law. The tail-weight bias does not enter the call. The surface grid from the clock to the last expiry is equally spaced. Hedge dates share a Monte Carlo seed. The Black control is cross-fit. `H = 1/2` is drawn here; any other `H` calls `volterra_components` on roughvol and keeps the near field. Corey ratified the SANOS held-out bar on 14 Oct 2026. The dynamic surface is minimal DYSANOS, and the full v3 baseline is future work. The preregistration pins the generator, `Q5 = 2.3 Q`, `Q0.5 = 23 Q`, the ratio grid, `p0`, `rho`, `xi0`, the spot cost, `H`, `nu_L`, `lambda = 0.1`, the day, the episode start, the path counts, the bootstrap, the H2 contrast and a Bonferroni rule, and it is still a draft. **Next:** freeze that pinned draft before the pilot ends. The pilot is CPU only, and the regime variable is `nu`.
 
+## 2026-11-27 SANOS-calibrated snapshot markets
+
+A SANOS-calibrated market means a parametric fit to the SANOS surface from one
+historical snapshot of index options, in a normalised market with spot 100.
+The surface itself is not simulated. `volsurface/fit/sanos_calibration.py`
+fits Black-Scholes (the interpolated at-the-money vol at T = 30/365) and
+two Heston models to a normalised implied-vol grid: an equal-weighted
+full-surface fit in the default numerical box, and a contract-weighted fit
+with residual weights peaked at the 30-day maturity and a wider kappa box
+(50 rather than 20). The default kappa bound is a numerical box, not a
+no-arbitrage constraint. Heston cannot match the short-dated skew of a
+typical equity-index surface; both fits remain parametric Heston models,
+not a simulation of the surface. `make calibration` writes the training
+document and a site pack under `data/exports/local/` (gitignored). The
+committed file `data/exports/examples/synthetic_snapshot_markets.json` is a
+schema example priced on a labelled synthetic Heston surface, rebuilt with
+`make synthetic-example`. Snapshot-derived premiums, implied vols and
+fitted parameters stay local and are not committed.
+
+
 ## 2026-10-29 Committed figure data holds no per-quote SPX values
 
 Two figure CSVs held one row per Cboe quote, and the static export of session 00 drew
