@@ -1,0 +1,24 @@
+{
+  "schema": "volsurface.snapshot_markets/v1",
+  "note": "A SANOS-calibrated market is a parametric fit to the SANOS surface from one historical snapshot of index options, in a normalised market with spot 100. The target is the SANOS surface, not raw quotes.",
+  "label": "calibrated to the fitted surface from one historical snapshot of index options, in a normalised market with spot 100",
+  "contract": {
+    "s0": 100.0,
+    "strike": 100.0,
+    "maturity": 0.0821917808219178,
+    "r": 0.0,
+    "n_steps": 30
+  },
+  "markets": {
+    "black_scholes": {
+      "label": "calibrated to the fitted surface from one historical snapshot of index options, in a normalised market with spot 100",
+      "premium": 1.3736990706295842
+    },
+    "heston": {
+      "label": "The network is trained in a Heston simulator fitted to that surface. The surface itself is not being simulated.",
+      "premium": 0.998134916565462
+    }
+  },
+  "surface_premium": 1.3736990706295842,
+  "premium_gap": -0.37556415406412214
+}

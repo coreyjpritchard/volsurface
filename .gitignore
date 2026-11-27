@@ -15,3 +15,6 @@ __marimo__/
 # Raw quote snapshots stay local: Cboe's terms restrict redistributing them.
 data/snapshots/*
 !data/snapshots/README.md
+
+# Local training calibration; not a site pack.
+data/exports/local/
