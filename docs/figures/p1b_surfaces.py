@@ -1,7 +1,7 @@
-"""Figure for P1b: three interpolators on one saved SPX expiry, and the spline wing.
+"""Figure for P1b: three interpolators on one expiry of the loaded chain, and the spline wing.
 
-The chain is ``data/snapshots/SPX_2026-10-14.parquet``: CBOE delayed mids on
-SPXW, which the loader marks European and cash-settled. The expiry in the top
+The default chain is the synthetic demo in ``volsurface.demo_market``
+(spot 100, European and cash-settled, not market data). The expiry in the top
 two panels is the one whose natural cubic, continued 0.12 in log-moneyness
 past each end of the quotes, reaches the lowest implied vol. That rule is
 this script. It is not the last expiry, and it is not chosen because SVI
@@ -26,9 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from volsurface import chains
 from volsurface.arbitrage import check_surface
-from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import ArbTol, Curves, Domain
 from volsurface.fit.svi import SVIFitter
 from volsurface.surface.linear import linear_surface
@@ -60,8 +58,9 @@ def _wing_min(spline, T: float, k_obs: np.ndarray) -> tuple[float, np.ndarray]:
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    from volsurface.demo_market import load_figure_market
+
+    chain, data, source, out_dir, _is_synthetic = load_figure_market()
     market = Curves(data.F, data.df)
     # Same objective as the fitter, including vega weights from the half-spread.
     fitted = SVIFitter().fit(data)
@@ -136,7 +135,7 @@ def main() -> None:
     ax.plot(wide, 100 * iv_linear, color="C1", label="linear in the call price, then inverted")
     ax.plot(wide, 100 * iv_spline, color="C0", label="cubic spline of implied vol")
     ax.plot(wide, 100 * iv_svi, color="C2", label="raw SVI, weighted least squares")
-    ax.plot(k_obs, 100 * iv_obs, "o", color="k", ms=2.5, label="SPXW mid quote")
+    ax.plot(k_obs, 100 * iv_obs, "o", color="k", ms=2.5, label="mid quote")
     ax.plot(
         wide[butterfly],
         np.clip(100 * iv_spline[butterfly], bottom, top),
@@ -232,7 +231,7 @@ def main() -> None:
 
     verdict = "passes" if this_passes else "fails"
     fig.suptitle(
-        "A cubic spline through SPX mids gives a negative density and a wing at "
+        "A cubic spline through the mids gives a negative density and a wing at "
         f"{m(100 * wing_min, '.0f')}%.\nRaw SVI {verdict} on this expiry, but g < 0 on "
         f"{n_fail} of {n_slices} slices for k in [{m(-0.5, '.1f')}, 0.5]",
         fontsize=11,
@@ -241,15 +240,16 @@ def main() -> None:
     fig.text(
         0.01,
         0.005,
-        "SPXW mids, CBOE delayed, 14 Oct 2026. The expiry is chosen by the script: the lowest\n"
+        f"{source}. The expiry is chosen by the script: the lowest\n"
         f"extrapolated cubic in the file. SVI in-sample knot RMS {100 * knot_gap:.2f} vol points.",
         fontsize=7.5,
         color="0.3",
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.subplots_adjust(top=0.925)
-    fig.savefig(OUT, dpi=140)
-    print(f"wrote {OUT}")
+    dest = out_dir / "p1b_surfaces.png"
+    fig.savefig(dest, dpi=140)
+    print(f"wrote {dest}")
     print(
         f"expiry {expiry.date()} T={T:.6f} n={len(k_obs)} "
         f"k=[{k_obs[0]:.4f},{k_obs[-1]:.4f}] "

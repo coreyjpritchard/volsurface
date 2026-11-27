@@ -1,4 +1,4 @@
-"""Linear SANOS (eta = 0) on the 14 October 2026 SPX snapshot (local, not committed).
+"""Linear SANOS (eta = 0) on the default synthetic demo chain.
 
 Run from the repository root:
 
@@ -24,8 +24,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import chains
-from volsurface.core.market import market_data_from_snapshot
 from volsurface.fit.sanos import SanosFitter
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,8 +57,11 @@ def residuals_by_expiry(quotes: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    from volsurface.demo_market import load_figure_market, market_data
+
+    chain, _data, source, FIG, _is_synthetic = load_figure_market()
+    FIG.mkdir(parents=True, exist_ok=True)
+    data = market_data(chain)
     result = SanosFitter(eta=0.0, omega=0.0, dx=0.05).fit(data)
     surface = result.surface
     FIG.mkdir(parents=True, exist_ok=True)
@@ -110,7 +111,7 @@ def main() -> None:
     axes[1].legend(frameon=False, fontsize=8)
     axes[1].grid(True, alpha=0.3)
     fig.suptitle(
-        f"Linear SANOS on SPX, objective {result.detail['objective']:.3e}, "
+        f"Linear SANOS on the demo chain, objective {result.detail['objective']:.3e}, "
         f"in spread {result.in_spread:.3f}."
     )
     fig.tight_layout()

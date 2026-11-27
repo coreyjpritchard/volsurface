@@ -1,3 +1,13 @@
+# Research log
+
+> **Note (27 November 2026).** Numbers, figures and fitted parameters derived
+> from a market option-quote snapshot have been removed from this public
+> repository. Dated entries below that discussed those results have been
+> shortened. The library, the figure scripts (which now default to a synthetic
+> demo chain) and the fetch script remain. Run the scripts with `--snapshot`
+> on a chain you supply to reproduce local results; those outputs are not
+> committed.
+
 # Log
 
 Dated entries, newest first. What was learned, what surprised, open questions.
@@ -7,28 +17,10 @@ Dated entries, newest first. What was learned, what surprised, open questions.
 ## 2026-10-29 Committed figure data holds no per-quote SPX values
 
 Two figure CSVs held one row per Cboe quote, and the static export of session 00 drew
-every quote. They now hold per-expiry summaries or model output only. No figure image
-and no published number changes.
-
-- `docs/figures/p2c_spx_smiles.csv` keeps the Heston smile (`T`, `k`, `model_iv`) and
-  drops the 44 market implied vols. `docs/figures/p2c_spx_smile_errors.csv` gives, per
-  plotted expiry, the number of quotes and the mean, RMSE and largest absolute model minus
-  market implied vol, in vol points.
-- `docs/figures/p3b_sanos_residuals.csv` (8,973 residuals) is replaced by
-  `docs/figures/p3b_sanos_residuals_by_expiry.csv`: per expiry, the count, mean, RMSE,
-  largest absolute value, the 5, 25, 50, 75 and 95 per cent quantiles of the residual in
-  half-spreads, and the share within one half-spread. The largest absolute residual is
-  still 0.669 half-spreads.
-- `docs/00_the_smile.html` no longer carries the SPX points of the 3D surface and the
-  30-day smile, and its overlay box is unticked. The skew figure keeps its SPX points,
-  one per expiry, as in `docs/figures/p2c_spx_skew.csv`.
-  `scripts/strip_export_quotes.py` makes that change to a fresh export.
-
-The summaries were computed from the per-quote files as committed, not from a refit.
-`scripts/figures_p2c.py` and `scripts/figures_p3b.py` now write the summaries, and write
-the per-quote files to `data/cache/figures/`, which git ignores.
-`tests/test_docs_data.py` checks that no CSV under `docs/` has a per-quote column and that
-the export has no per-quote trace.
+every quote. That 29 October change replaced per-quote files with per-expiry summaries
+or model output. The 27 November 2026 note above goes further: market-named figure
+stems, the session-00 HTML export, and snapshot-derived summaries have been removed,
+and committed figures are redrawn from a synthetic demo chain.
 
 ## 2026-10-29 The Cboe snapshot is no longer committed
 
@@ -39,78 +31,39 @@ snapshot was Cboe delayed quotes. The file stays in git history; nothing was rew
 `.gitignore` now covers everything in `data/snapshots/` but its README, so a local copy
 stays local.
 
-Every SPX result in this log, the README and `docs/` was computed on that
-14 October 2026 SPXW snapshot. None of them is recomputed here, and no figure changes.
-A user can rebuild a snapshot with `scripts/build_cboe_spx_snapshot.py` from a saved copy
-of the JSON, under Cboe's terms. A snapshot from another day will not reproduce the numbers.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 The tests now run on `tests/fixtures/synthetic_spx_chain.parquet`: ten SPXW-style
 expiries priced by one Heston model, with bids and asks on a 0.05 tick that bracket the
 model price at a seeded random point, `source = "synthetic"`. It is written by
 `tests/fixtures/synthetic_spx.py`, and a test checks that the generator still writes it.
 The checks that used the real file (loading, `MarketData`, the quote checker, sparse
-against dense LPs, SANOS at the market bar) have synthetic versions. The ones that
-assert numbers of the real file (18,543 rows, 278 and 1,685 quotes) are kept and are
-skipped when no local snapshot exists, as on CI. The figure scripts and
-`docs/figure_00.py` call `chains.require_snapshot`, which stops with the build
-instructions and a note on Cboe's terms.
+against dense LPs, SANOS at the market bar) have synthetic versions. Checks that assert
+numbers of a local snapshot are skipped when no local snapshot exists, as on CI. As of
+27 November 2026 the figure scripts and `docs/figure_00.py` default to the synthetic
+demo chain; pass `--snapshot` to run them on a chain you supply.
 
 ## 2026-10-22 Session 00 Heston fit: a discontinuous loss, and a reproducible refit
 
-The README fit (`rho = -0.5334`, cost 0.7454, entry below) did not reproduce:
-the same script on numpy 2.4.6 and scipy 1.17.1 stopped at `rho = -0.6995`,
-cost 0.6472. The cause is the loss, not the optimiser. At the 10-hour expiry
-the outer call strike of the `skew_window` grid prices near `4e-7` of the
-forward. `bs.implied_vol` at its default `tol = 1e-12` meets the tolerance on
-some parameter sets and returns NaN on neighbouring ones. The strike leaves the
-quadratic fit and the front skew jumps by about 0.13 under a relative change of
-`2e-4` in `rho`. Each start then stopped on `xtol` wherever it met a jump.
+The session 00 Heston fit was sensitive to the implied-vol tolerance: at the
+default `tol = 1e-12` a far out-of-the-money front-end strike can fail to
+invert, so the loss is discontinuous in the parameters and starts stop on
+`xtol` wherever they meet a jump. `smile.model_term_structure` takes
+`iv_tol`; at `1e-8` the strikes invert and the loss is smooth.
+`docs/figure_00.py` uses that tolerance with three hand-picked starts plus
+32 scrambled Sobol starts (seed 0). Snapshot-specific fitted parameters and
+market skew comparisons have been removed from this public log. The committed
+figure is now drawn from the synthetic demo chain.
 
-`smile.model_term_structure` takes `iv_tol`; at `1e-8` every strike inverts and
-the loss is smooth (largest second difference along each axis about `2e-6`,
-against 0.5 before). `docs/figure_00.py` now uses it with the three old starts
-plus 32 scrambled Sobol starts (seed 0). Result: cost 0.5288, `v0 = 0.0100`
-and `xi = 2.000` on the box edge, `rho = -0.5515`, Feller ratio 0.17. Of 35
-starts, 27 end within 1% of the best cost; across those, `rho` spans -0.553 to
--0.551 while `kappa` spans 2.0 to 7.1 and `theta` 0.05 to 0.15, so the level
-of mean reversion is not identified by this loss. Model skew against the
-market: -2.115 against -2.965 at the front, -2.101 against -1.989 at 1.42
-days, -1.236 against -1.057 at 7.42 days, -0.241 against -0.282 at 351 days.
-The T to 0 limit `rho xi / (4 sqrt(v0))` is -2.757. Below about 1.6 days the
-local log-log slope of the model skew falls under half the market's 0.333.
-Under the smooth loss the old README parameters cost 0.8379 and the
-`rho = -0.6995` rerun costs 0.7604. Two runs of the script give identical
-output.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-The 14 October fit reproduces on the old loss: parameters inside the LOG's
-printed precision give cost 0.7454 and skews 1.866, 1.785, 1.181 and 0.180,
-on the low side of a jump. On the smooth loss the same point costs 0.8375 and
-is not a stationary point; one run from it reaches cost 0.5288,
-`rho = -0.5515`. Script, data, starts, box, optimiser and loss weights were
-unchanged; only the dependency versions differed, and those were not recorded
-on 14 October. Detail: `docs/notes/heston_fit_old_vs_new.md`,
-`scripts/heston_fit_old_vs_new.py`.
-
-Later the same day: the fit above ends on two edges of the session box
-(`v0 >= 0.01`, `xi <= 2`), so its flat short end was set by the box. In a
+Later the same day: a narrow session box (`v0 >= 0.01`, `xi <= 2`) can pin
+the short end of the fit to the box edges. `docs/figure_00.py` now uses a
 wider box (`v0` in [1e-4, 0.15], `kappa` in [0.1, 50], `theta` in [0.001,
-0.3], `xi` in [0.05, 5]), same loss and same seeded design (34 of 35 starts
-have finite residuals; the other is skipped), the cost falls from 0.5288 to
-0.0658: `v0 = 0.00292`, `kappa = 10.15`, `theta = 0.0563`, `xi = 5.000` on
-the new edge, `rho = -0.6218`, Feller ratio 0.046. The model skew now follows
-the market: -2.782 against -2.965 at the front, -2.128 against -1.989 at 1.42
-days, -1.076 against -1.057 at 7.42 days, -0.290 against -0.282 at 351 days.
-The price is the at-the-money level: 0.056 against 0.151 at the front and
-0.048 against 0.120 at 1.42 days (`sqrt(v0) = 0.054`; the narrow-box fit had 0.099 at the
-front), rmse 0.0365 against
-0.0158 in the narrow box. The T to 0 limit is -14.39. With `xi <= 10`
-(`XI_MAX=10`) `xi` again ends on the edge: cost 0.0197, `v0 = 0.00553`,
-`kappa = 20.76`, `rho = -0.5584`, Feller ratio 0.028, front skew -2.930 and
-front level 0.070. So on this loss Heston has no interior optimum in `xi`:
-it buys the short-end skew with vol-of-vol and a low `v0`, and pays in the
-short-dated level. "Heston goes flat below about 2 days" was a statement
-about the box and is withdrawn. `docs/figure_00.py` now uses the `xi <= 5`
-box and says so in its caption.
+0.3], `xi` in [0.05, 5]) so that only vol-of-vol can bind, and says so in its
+caption. "Heston goes flat below about 2 days" was a statement about the
+narrow box and is withdrawn. Snapshot-specific fitted parameters have been
+removed from this public log.
 
 ## 2026-10-19 Review: path-bootstrap intervals for the gate filter skills
 
@@ -306,7 +259,7 @@ Chain, 4,000 paths, time 1. Counts 1,474 and 2,526 against 1,532.5 and 2,467.5. 
 
 `H` other than `1/2` asks the rBergomi plugin for `volterra_increments(n_paths, times, *, seed, H) -> dW`, shape `(n_paths, n_steps)`, drawn from the volatility child with no further spawn. This module applies the kernel weights and puts `nu` inside the sum. `driver_y` returning only `Y` is not enough. Until that method exists, `H = 1/2` is the fallback and does not call the plugin. A missing method raises. The hybrid scheme is not implemented here.
 
-Held-out strikes on the SPX snapshot, seed 0, about 20 percent per expiry (mean fraction 0.2002, 1,796 of 8,973 quotes). SANOS `eta = 0.25`, `omega = 0`, fit on the other 7,177, places 0.990535 of the held-out model calls inside the held-out bid and ask. Raw SVI on the same split places 0.541203. Violations on the dense grid: 0. Both fits and the check took 86.7 s.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 `experiments/regime/PREREG.md` H3 now prices I2 under the filter mixture. H4 records that the filter reads log realised variance and that prices do not identify the regime. The file is still a draft.
 
@@ -314,9 +267,9 @@ Held-out strikes on the SPX snapshot, seed 0, about 20 percent per expiry (mean 
 
 ## 2026-10-14 Review: quote memory, xi0, the rough curve, minimal DYSANOS
 
-The fast dense comparison is the first 8 SPX expiries, 1,685 quotes. A fresh dense solve peaked at 1.179 GB in 1.35 s. The 24-expiry dense solve, which peaked at 6.178 GB, is marked slow.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-`calibrate` passes `d VS / d T` into rBergomi. On the SPX SANOS surface at `eta = 0.25` that slope is `0.01637` at the first expiry, `0.04085` in the middle, and `0.06236` at the last. Three fits, plugin defaults 4,000 paths and 64 steps, seed 0, all stopped on `ftol`. Free `H`: `H = 0.2057`, `nu = 2.326`, `rho = -0.6593`, objective `3.039e-2`, 27.4 s. `H = 0.167`: `nu = 1.460`, `rho = -0.8231`, objective `6.746e-2`, 29.7 s. `H = 0.149`: `nu = 1.247`, `rho = -0.8863`, objective `1.319e-1`, 24.7 s. At `T = 0.00114` the free skew is `-2.9643` against the market `-2.9648`. `rough-volatility` `3888dfc` is a dev extra.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 For `H` other than 1/2 the forward variance is `xi0(u) exp(nu sqrt(2H) I_t(u) - nu^2 (u^{2H} - (u - t)^{2H}) / 2)`, with `I_t(u)` the kernel integral of `dW`. At `H = 1/2` the kernel is 1, so the exponent depends on `W_t` and not on the tenor. On a 5-path, 8-step draw the curve matches `roughvol` to `1e-10`. The `H = 0.5` regime mixture is unchanged.
 
@@ -364,11 +317,11 @@ Black-Scholes along one path, forward 100, strike 90, expiry 1, rate 0.01. The p
 
 On the known two-pillar mixture the log contract `VS(T) = -2 E[log Z_T]` matches `-2 q' log K + eta V` to `1e-12`, and the value at the midpoint maturity is the average of the two pillars to `1e-12`. On the three-expiry Heston book at `eta = 0.25` the same contract is nondecreasing on 13 maturities: every difference is at least `-1e-8`.
 
-A test double, not labelled rBergomi, prices `sigma = 0.2 + 0.4 nu k`. With `H` fixed at 0.167 and seed 7 it recovers `nu = 0.3` to `1e-3`. A second call with the same seed returns the same parameters. `detail["rbergomi"]` is false and the label is `_MockVol`.
+A test double, not labelled rBergomi, prices `sigma = 0.2 + 0.4 nu k`. With `H` fixed at 0.10 and seed 7 it recovers `nu = 0.3` to `1e-3`. A second call with the same seed returns the same parameters. `detail["rbergomi"]` is false and the label is `_MockVol`.
 
-SPX, 40 expiries. The power law refit to the market skew is `0.30511 T^{-0.33283}`. The merged Heston parameters are `v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`, `rho = -0.6508`. At `T = 0.00114` the market skew is `-2.9648` and the Heston skew is `-3.2744`. At `T = 0.02032` they are `-1.0565` and `-1.4822`. At `T = 0.4614` they are `-0.3817` and `-0.3881`. At `T = 0.96278` they are `-0.2815` and `-0.2387`. The front at-the-money level is `0.1511` in the market and `0.0879` in Heston. The figure is `docs/figures/p3e_skew.png`. No rBergomi curve is drawn.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-**Hypothesis:** the merged Heston fit is steeper than this snapshot from the front out to about half a year, and flatter after that. The next specification is the same figure with `create("rbergomi")` at `H` free, `H = 0.167` and `H = 0.149`, once `roughvol` is installed. The size of the gap between those three curves and the power law is the quantity that comparison measures.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 ## 2026-10-14 Library P3d: discrete local volatility
 
@@ -376,25 +329,25 @@ A random nonnegative `Sigma` on 9 strikes, seed 1, step `0.2`. The columns of `Q
 
 Round trip, seeds 2 and 3, step `0.25`. Calls go to `Sigma`, back to `Q`, and back to calls. The calls agree to `1e-10` (the measured gap on this draw is `1.1e-16`). The recovered interior `Sigma` differs from the input by at most `1.5e-14`. A source grid `(0.7, 1, 1.3)` split onto that target and then stepped keeps the mass at 1 and the mean at the source mean, to `1e-12`. Three expiries built from seeds 5, 6 and 7 pass `check_surface` at `1e-9` with an empty violation table.
 
-SPX, the `eta = 0.25` surface, 39 steps, 37 log-moneyness nodes from `-0.25` to `0.2`. Median discrete local volatility `0.283`. The 99th percentile is `5.81`. The maximum is `212.3`. The root mean square of the second difference along strike is `15.7`. 5.4 percent of the cells are 0. The figure clips the colour scale at the 99th percentile and records the maximum in the title. The file is `docs/figures/p3d_dlv.png`.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-**Hypothesis:** the cells above 5 are the ratio blowing up where the strike second difference is near 0, not a second mode of local volatility. The next specification is the same ratio on a grid that drops cells whose call convexity is below a stated floor. The median `0.283` is the level that specification should keep.
+**Hypothesis:** cells with a very large discrete local volatility are the ratio blowing up where the strike second difference is near 0, not a second mode of local volatility. The next specification is the same ratio on a grid that drops cells whose call convexity is below a stated floor.
 
 ## 2026-10-14 Library P3c: SANOS at eta > 0
 
 Theorem 3.1, fixed weights, atoms at 0.5, 1 and 1.5. The `eta = 0.25` call minus the `eta = 0` call is nonnegative at `T = 0.5`, `0.75` and `1`, to `1e-12`. On a 20,001-point grid the mixture density at each pillar has mass 1 and mean 1, to `1e-8`. The Heston book with cash half-spread 0.15, `eta = 0.25` and PCHIP in time, has no `check_surface` violation at `1e-9` and a positive minimum density.
 
-On SPX, `T = 0.0203`, the finite-difference jump in `dC/dT` at `k = 0` is `0.00206` at step `1e-4`, `2.11e-4` at step `1e-5`, and `2.1e-5` at step `1e-6`. It scales with the step. At `k = 0.15` the jump stays at `-1.41e-4` when the step goes from `1e-4` to `1e-6`.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-Market bar, `eta = 0.25`, `omega = 0`, PCHIP, `dx = 0.05`, interior point method. Grid: every pillar, every midpoint, and 71 log-moneyness nodes from `-0.4` to `0.3` (5,609 nodes), tolerance `1e-9`. Violations: 0. `in_spread = 1`, above 0.558. Objective `6.302e-05`. Wall time 149.8 s. Projection L1 `3.29e-13`. Minimum density on that grid `1.10e-38`, which is the wing of the shortest expiry. Every expiry's own in-spread fraction is 1.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-Eta sweep, same solver and `omega = 0`. `eta = 0`: objective `1.633e-05`, 0 violations, 116.1 s, minimum density 0 because the call is piecewise linear. `eta = 0.0625`: objective `2.093e-05`, 0 violations, 146.1 s, minimum density `5.46e-142`. `eta = 0.25` is the bar above. The `eta = 0` objective here is the interior point value. The simplex value on the same book is the P3b entry, `1.752e-06`. Both have `in_spread = 1`.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-`omega = 1` at `eta = 0.25` is labelled not guaranteed. Objective `5.529e-04`, `in_spread = 1`, wall time 171.2 s. On the same 5,609 nodes the report is not ok: 6 calendar violations, largest magnitude `4.5e-5`, all near `T = 0.10` and `k = 0.16` or `0.17`.
+`omega = 1` at `eta = 0.25` is labelled not guaranteed. Snapshot-specific counts from that run have been removed from this public log.
 
-Shoot-out on that grid. Linear: `in_spread = 1`, 1,167 violations, minimum density 0, 0.030 s. Spline: `in_spread = 1`, 3,170 violations, minimum density `-197.0`, root mean square second difference of local variance `11.84`, 0.055 s. Raw SVI: `in_spread = 0.55823`, 2,244 violations, minimum density `-0.00330`, local-variance second-difference `64.52`, 8.56 s. That in-spread fraction is the same 0.558 as the earlier log entry. SANOS `eta = 0.25`: `in_spread = 1`, 0 violations, 149.8 s. The finite-difference local variance of SANOS on this sample has root mean square second difference `1.45e6`. That sample includes the front expiry, where the implied-vol step is unstable. It is not a smoothness of the mixture density.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-**Hypothesis:** moving `eta` from 0 to 0.25 raises the objective from `1.633e-05` to `6.302e-05` and does not move the in-spread fraction off 1. The next specification is the discrete local variance of these marginals. The finite-difference Dupire ratio is not yet a stable object on the front of this book.
+**Hypothesis:** moving `eta` from 0 to 0.25 raises the objective and need not move the in-spread fraction. The next specification is the discrete local variance of these marginals. The finite-difference Dupire ratio is not yet a stable object on the front of a short-dated book.
 
 ## 2026-10-14 Library P3b: SANOS at eta = 0
 
@@ -402,31 +355,26 @@ The call at a pillar is `sum q (K - x)+`. On a known two-point-free marginal (at
 
 Heston mids, `v0 = 0.04`, `kappa = 1.5`, `theta = 0.04`, `xi = 0.3`, `rho = -0.5`, three expiries, nine strikes, cash half-spread 0.15. The linear program objective is under `1e-6` and every two-sided quote is inside the spread. After projection each weight vector is nonnegative, the mass is 1 and the mean is 1, each to `1e-12`. On a grid of seven maturities that are not pillars and eleven log-moneyness nodes, `check_surface` reports no calendar violation. The objective and the pre-projection quote prices from `highs` and from `highs-ds` agree to `1e-9`.
 
-SPX snapshot, 40 expiries, 8,973 quotes, `dx = 0.05`, `omega = 0`. HiGHS status optimal. Objective `1.752e-06`. Wall time 23.35 s. Projection L1 `1.978e-06`. `in_spread = 1`. The largest absolute residual is 0.669 half-spreads. The median is `3.39e-08` half-spreads. No expiry had its ATM total variance raised. Wing strikes used in the program: `K_min = 0.03193`, `K_max = 2.088`. The figure is `docs/figures/p3b_sanos_eta0.png`.
+The committed figure `docs/figures/p3b_sanos_eta0.png` is now drawn from the synthetic demo chain. Snapshot-specific fit numbers have been removed from this public log.
 
-**Hypothesis:** the gap between this `in_spread` and the raw SVI value 0.558 on the same file is the linear model's freedom to kink at the quoted strikes. The next specification is `eta` in `{0.0625, 0.25}` with the same in-spread rule. The size of the drop, if there is one, is the quantity P3c measures.
+**Hypothesis:** a gap between SANOS `in_spread` at `eta = 0` and raw SVI on the same book is the linear model's freedom to kink at the quoted strikes. The next specification is `eta` in `{0.0625, 0.25}` with the same in-spread rule. The size of the drop, if there is one, is the quantity P3c measures.
 
 ## 2026-10-14 Library P3a: sparse quote linear program
 
 The coefficients are the ones in section 6.2. The rows are a CSR matrix.
 `dense=True` solves that same matrix as an array.
 
-First 24 expiries, 4,398 quotes. Sparse and dense both return `ok` true,
-objective 0, and an empty violation set. In a fresh process the sparse run
-took 2.87 s with peak RSS 0.709 GB. The dense run took 8.56 s with peak
-RSS 6.178 GB. The two shortest expiries, 278 quotes, agree the same way.
 A planted ask of 0.1 at normalised strike 0.5 is short of the intrinsic
-0.5 by 0.4.
+0.5 by 0.4. Scale measurements on a market snapshot have been removed from
+this public log.
 
-All 40 expiries, 8,973 quotes. HiGHS status optimal, objective 0, `ok`
-true, 0 violations. Fresh-process wall time 6.64 s, peak RSS 1.552 GB.
-That is under the 2 GB bar. At 32 expiries, 6,189 quotes, the sparse peak
-is 0.969 GB. The figure is `docs/figures/p3a_lp_memory.png`.
+The committed figure `docs/figures/p3a_lp_memory.png` is now drawn from the
+synthetic demo chain. Scale measurements on a market snapshot have been
+removed from this public log.
 
-**Hypothesis:** the 15.6 GB kill was the dense allocation. These RSS
-numbers are what that hypothesis predicted. The full book having objective
-0 is a property of this snapshot and this program, not a claim about every
-pre-open file.
+**Hypothesis:** an earlier dense-allocation kill was the dense row stack,
+not a measured arbitrage. A full book having objective 0 is a property of
+that program on that book, not a claim about every pre-open file.
 
 ## 2026-10-14 Library P3-0: Phase 3 interfaces
 
@@ -483,14 +431,7 @@ Synthetic book, `beta` fixed at 1, one fit per expiry, truth
 Each of `T = 0.5`, `1` and `1.5` recovers the parameters. The largest
 price residual is `4.6e-10`, on `T = 1.5`.
 
-The same fitter on the thinned SPXW book (440 quotes, 40 expiries,
-`beta = 1`, four starts, seed 0) takes 5.94 seconds. Median price RMSE
-is `2.82` index points. The largest is `3.84`, at `T = 0.371`. The
-expiry nearest one year (`T = 0.963`) has `alpha = 0.161`,
-`rho = -0.669`, `nu = 0.932`, RMSE `1.62`. The front expiry has
-`alpha = 0.161`, `rho = -0.999`, `nu = 4`, RMSE `0.37`. `nu` is on its
-upper bound of 4 for the 15 expiries through `T = 0.056`, and `rho` is
-on its lower bound of `-0.999` for the first three.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 `check_surface` on Hagan prices, `alpha = 0.3`, `beta = 1`, `rho = -0.3`,
 `nu = 1.5`, `T = 10`, `k` from `-1.5` to `0.5`. The report is not ok, and
@@ -538,16 +479,7 @@ the gaps are `-5.0`, `-2.2` and `+0.1` bp. An earlier 16,000-path run on
 the narrow grid, before clipping, had gaps `-29.9`, `-18.6` and `-13.1`
 bp against standard errors `28.7`, `23.6` and `20.2` bp.
 
-SPXW mids, expiry nearest 23 calendar days (`T = 0.06427`, 6 November
-2026), quoted `k` from `-0.673` to `0.104`. On `k` from `-0.55` to `0.30`
-the spline of implied vol has maximum |local variance| `44.16` inside the
-quotes and `3.18` outside them. Exploding cells inside the quotes: 3
-(cap 5). Negative denominators inside the quotes: 20. On this window the
-large spline values sit inside the quotes. Linear interpolation of the
-call, differenced, reaches `6.193e6`, with 40 exploding cells and 43
-negative denominators. Raw SVI on that window has maximum |local variance|
-`1.059` inside the fit domain and `0.328` outside, with 0 negative
-denominators and 0 exploding cells.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 At `k = 0`, total variance is linear in time between expiries, so local
 variance is one level on each open interval. SVI levels run from `0.003785`
@@ -614,18 +546,7 @@ about `0.4` seconds. The Feller ratio is reported (`0.75` on that set) and
 not enforced. `check_surface` on a Heston `ModelSurface`, five expiries by
 nine strikes, returns no violations.
 
-SPXW mids of 14 October 2026, thinned to `|k| <= 0.4` and at most 11 strikes
-an expiry: 440 quotes, 40 expiries. Four starts, seed 0, vega-weighted
-prices, 27.2 seconds on that run. The fit file does not store the clock.
-`v0 = 0.007982`, `kappa = 13.466`, `theta = 0.03836`, `xi = 2.703`,
-`rho = -0.6508`, Feller ratio `0.141`. Solver `xtol`, cost `6.912e-2`.
-Root-mean-square price residual `5.48` index points, largest `20.68`, on a
-spot of `7805.45`. ATM skew on the full quote set, not the thinned fit set.
-At `T = 0.00114`: market `-2.965`, model `-3.050` (level `0.151` against
-`0.087`). At `T = 0.00388`: market `-1.989`, model `-2.890`. At
-`T = 0.0203`: market `-1.057`, model `-1.498`. At `T = 0.963`: market
-`-0.282`, model `-0.239` (level `0.160` against `0.164`). The short-dated
-model skew is steeper than the market. The long end is a little flat.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 **Hypothesis:** that pattern is this loss and this thinning, not the only
 thing Heston can do. The session 00 fit on this same file, ATM level and
@@ -646,78 +567,29 @@ works through the material.
 
 ## 2026-10-14 SPY snapshot replaced by SPX
 
-The committed chain is now `data/snapshots/SPX_2026-10-14.parquet`. The file
-`data/snapshots/SPY_2026-10-07.parquet` is removed. SPY options are American
-and SPY pays dividends, so a European implied vol on that chain does not match
-the contract. SPX options are European and cash-settled. The note is
-`docs/notes/spx_not_spy.md`. The entries below this one that quote SPY counts
-are that removed file. `docs/figures/p1b_surfaces.png` and `docs/00_the_smile.png`
-were regenerated on the SPX chain.
+The SPY last-trade snapshot was replaced by an SPX chain because SPY options
+are American and SPY pays dividends, so a European implied vol on that chain
+does not match the contract. SPX options are European and cash-settled. The
+note is `docs/notes/spx_not_spy.md`. Neither snapshot is redistributed. As of
+27 November 2026 the committed figures are drawn from the synthetic demo
+chain, not from either market file.
 
-Source: CBOE public delayed quotes,
-`https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json`. The JSON
-`timestamp` is `2026-10-14 10:01:12` with no timezone. The fetch clock matched
-that stamp in UTC, so `quote_time` is that instant as UTC. The index object
-has `current_price` 7805.4502, equal to `prev_day_close` 7805.4502, `close`
-7805.45, `price_change` -1.7898, and `last_trade_time` `2026-10-13T16:14:59`
-(no zone). At 10:01 UTC the US cash session is not open. The option rows still
-have a bid and an ask.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-Only the SPXW root is kept: 18,543 rows, 40 expiries, T from 0.001139 to
-0.962783, strikes per expiry 134, 366.5, 1232 (min, median, max). The SPX root
-is the AM-settled monthly and is dropped, including on dates where both roots
-list the same calendar day. Every SPXW expiry with T > 0 inside moneyness
-0.5 to 1.3 and price at least 0.03 is kept, dailies included. `rate` is NaN.
-`price_source` is mid. No crossed market remains. Out-of-the-money implied
-vols: 8,973 rows, from 0.0800 to 0.8571. Median half-spread 0.20 index points
-(maximum 0.85); the median half-spread is 1.08% of the mid.
+The snapshot builder keeps the SPXW root only. The SPX root is the
+AM-settled monthly and is dropped, including on dates where both roots list
+the same calendar day. Snapshot row counts and implied-vol ranges have been
+removed from this public log.
 
-Put-call parity at each expiry, eight strikes nearest the crossing of C - P:
-`df = -slope`, `F = intercept / df`. No dividend yield. The front expiry
-(14 October, T = 0.001139) has F = 7823.9057 and df = 1.000357. The next
-(15 October, T = 0.003879) has F = 7824.2157 and df = 1.001786. The last
-(30 September 2027, T = 0.962783) has F = 8133.2863 and df = 0.953810, so
-`-log(df) / T = 0.0491`. A discount factor above 1 on the two front expiries
-is what the regression returned. **Hypothesis:** that is the bid-ask tilt on
-a pre-open book, not a negative policy rate. An explicit `rate` still replaces
-`df` with `exp(-r T)`.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-At-the-money skew on this file: 2.965 at T = 0.001139 (about 10 hours), 1.989
-at T = 0.003879 (1.42 days), 1.057 at T = 0.02032 (7.42 days), 0.282 at
-T = 0.9628 (351 days). Power law on all 40 expiries:
-`|ψ(T)| = 0.30511 T^(-0.33283)`, so `H = 0.167` if read as `1/2 - alpha`.
-The 7 October SPY last-trade fit in the Session 00 entry was 0.30 and 0.26.
-The date, the quote (last trade against mid), and the underlying all changed.
-**Hypothesis:** the exponent moved. This pair of files does not say which
-change did it.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-Heston, joint least squares of at-the-money level and skew, three starts,
-slider box with kappa up to 20 (`docs/figure_00.py`). Winning start, `xtol`,
-cost 0.7454: `v0 = 0.012593`, `kappa = 8.805`, `theta = 0.044344`,
-`xi = 1.740`, `rho = -0.5334`. Rho is inside [-0.99, 0.99]. RMSE 0.0128 in
-the level and 0.193 in the skew. Model skew against the market: -1.865 against
--2.965 at the front, -1.785 against -1.989 at 1.42 days, -1.181 against
--1.057 at 7.42 days, -0.180 against -0.282 at 351 days. The T to 0 limit
-`rho xi / (4 sqrt(v0))` is -2.068. The short end of this fit is flatter than
-the market. The one-week point is steeper. The long end is flatter.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-SVI on the same `MarketData`, vega weights from the half-spread: 40 slices,
-wall 8.5 seconds, `in_spread = 0.558`. On `k` in [-0.5, 0.5], 24 of 40 slices
-have `g < 0`. The smallest such `g` is -0.0923 at T = 0.1218 (27 November
-2026). The plotted expiry is 30 October 2026, T = 0.044975, 466 strikes,
-chosen because the cubic continued 0.12 past the quotes reaches implied vol
--24.95, the lowest such wing in the file. On that slice the weighted SVI has
-`g` minimum 0.0578 on the same window, in-sample implied-vol RMS 0.00213, and
-spline density negative on 125 of 263 points inside the quotes. Butterfly
-nodes on the plotted grid: 129 of 361. The fitter's wider diagnostic grid,
-half a unit of log-moneyness past the quoted strikes, is a different count:
-minimum `g` is -5509.8 at T = 0.711 (30 June 2027) and -13054 at T = 0.963
-(30 September 2027). Those wings are outside the figure's window.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
-The quote linear program on the two shortest expiries together: `ok` true,
-278 quotes, total slack 0, 0.08 seconds. The first 24 expiries together:
-`ok` true, 4,398 quotes, 0 violations, 9.0 seconds. The first 32, and all 40,
-were killed at 15.6 GB before a status came back.
+_[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_
 
 ## 2026-10-14 Library P1d review: finite-difference errors, torch extra
 
@@ -785,10 +657,8 @@ deltas agree only while the discount factor is held fixed.
 `SVISurface` accepts list inputs, which is what `in_spread` passes. The floor
 penalty in the SVI residual is always one row, so the Jacobian length stays
 put. Each fitted slice reports `min_g`, Lee's bound, calendar order, and its
-own `in_spread`. Spreads weight the fit when they exist. On the saved SPY
-chain they do not, and 14 of 24 slices still have `g < 0` on `k` in
-`[-0.5, 0.5]`. The figure says so, and shows the short-dated slice where `g`
-reaches about -0.18.
+own `in_spread`. Spreads weight the fit when they exist. Snapshot-specific
+`g` counts from a saved SPY chain have been removed from this public log.
 
 The quote linear program carries a tail mass and moment instead of a strike
 at 1.5 times the last quote. A normalised call of 0.8 at the money is
@@ -842,13 +712,11 @@ cubic of implied volatility, and raw SVI with total variance linear in
 expiry. The surface checker is pointwise (bounds, call spread, butterfly,
 calendar). The quote checker is the feasibility linear program, not a fit.
 
-On the saved SPY chain the figure uses the 30 September 2027 expiry. The
-spline passes through the last-trade vols and still goes negative in density
-between those strikes; past the lowest strike the same cubic crosses through
-zero volatility. Raw SVI on that slice stays positive in density. Across all
-24 expiries, 14 fitted slices have Durrleman's `g` negative somewhere on
-`k` in `[-0.5, 0.5]`. The file has no bid or ask, so the quote checker drops
-every row. `in_spread` on the SVI fit is NaN for that reason.
+The committed figure is now drawn from the synthetic demo chain, which has
+a bid and an ask on every row. Snapshot-specific spline and SVI counts from
+a saved SPY chain have been removed from this public log. The quote checker
+still drops every row of a book with no bid and no ask, so `in_spread` is
+NaN in that case.
 
 Hypotheses, not findings: flat extrapolation of the linear call is the SANOS
 linear model; the SPY marks mix stale lasts, American premium, and real
@@ -875,25 +743,9 @@ is all Phase 1 asks of them.
 ## 2026-10-08 Session 00: the smile is the model's fingerprint
 
 Built the package core (Black-Scholes, Heston, the `Model` interface, yfinance and IBKR
-chain loaders) and the first app: a Heston implied vol surface with sliders, a Black-Scholes
-switch and SPY market points on the same $(k, T)$ grid.
+chain loaders) and the first app: a Heston implied vol surface with sliders and a
+Black-Scholes switch on the same $(k, T)$ grid.
 
 - Heston pricing matches Fang and Oosterlee (2008) to $2 \times 10^{-8}$ (5.785155434
   against 5.785155450 at $T = 1$) and converges to Black-Scholes as $\xi \to 0$.
-- Snapshot `data/snapshots/SPY_2026-10-07.parquet`: 3,695 options, 24 expiries from 1 to 358
-  days. Fetched before the US open, so prices are last trades of the 7 October session,
-  priced against the close of 777.22. Rate 4.11% from the 13-week T-bill.
-- SPY at-the-money skew: 1.56 at 1 day, 0.74 at 1 week, 0.28 at 1 year. A power law fits it
-  well: $|\psi(T)| \approx 0.30\, T^{-0.26}$, so $H \approx 0.24$ if read through rough
-  volatility.
-- One Heston fit to all expiries' ATM vols and skews (scipy `least_squares`, three starts,
-  box as in the app sliders with $\kappa \le 20$): $v_0 = 0.0098$, $\kappa = 4.26$,
-  $\theta = 0.0373$, $\xi = 0.388$, $\rho = -0.99$ (at the bound). Skew 0.97 at 1 day
-  against 1.56; 0.19 at 1 year against 0.28. Heston's skew is flat for $T \ll 1/\kappa$ and
-  decays like $1/T$ beyond it; the market's does neither.
-- Correction to the session brief: Heston can make a one-day skew steeper than the market's
-  (6.3 at $\xi = 2$, $\rho = -0.99$). What it cannot do is match the short and long ends with
-  one parameter set.
-
-Open questions: why is the exponent 0.26 here and about 0.4 in the literature (window
-choice, SPY against SPX, last trades against mids)? Does a mid-quote snapshot move it?
+- _[This paragraph reported numbers derived from a market option-quote snapshot and has been removed from the public log.]_

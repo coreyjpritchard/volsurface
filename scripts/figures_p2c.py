@@ -1,12 +1,13 @@
-"""Figures for the Heston cosine pricer and the SPX calibration.
+"""Figures for the Heston cosine pricer and a chain calibration.
 
 Run from the repository root:
 
     python scripts/figures_p2c.py
 
 Writes PNG and CSV under docs/figures/, and the widget preset
-data/presets/heston.json. Seeds are fixed. The chain is a local SPXW snapshot
-(CBOE delayed mids, European and cash-settled), which is not committed. The
+data/presets/heston.json. Seeds are fixed. The default chain is the synthetic
+demo in ``volsurface.demo_market`` (not market data). Pass ``--snapshot`` for
+a local chain; those outputs go to ``data/cache/figures/``. The
 committed smile CSVs hold the fitted model and per-expiry fit errors only; the
 per-quote market implied vols go to data/cache/figures/, which git ignores.
 """
@@ -25,8 +26,8 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import NullLocator
 
-from volsurface import bs, chains
-from volsurface.core.market import market_data_from_snapshot
+from volsurface import bs
+from volsurface.demo_market import load_figure_market, market_data
 from volsurface.fit.heston import HestonFitter
 from volsurface.models.heston import COS_L, COS_N, Heston
 from volsurface.smile import atm_fit, skew_window
@@ -37,7 +38,6 @@ FIG = ROOT / "docs" / "figures"
 LOCAL = ROOT / "data" / "cache" / "figures"
 FO = dict(v0=0.0175, kappa=1.5768, theta=0.0398, xi=0.5751, rho=-0.5711)
 FO_CALL = 5.785155450
-SOURCE = "SPXW mids, CBOE delayed, 14 Oct 2026"
 
 
 def smile_errors(smiles: pd.DataFrame) -> pd.DataFrame:
@@ -57,12 +57,13 @@ def smile_errors(smiles: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def write_smiles(smiles: pd.DataFrame) -> None:
-    """Commit the model smiles and per-expiry errors; keep per-quote market vols local."""
+def write_smiles(smiles: pd.DataFrame, out_dir: Path) -> None:
+    """Write the model smiles and per-expiry errors; keep per-quote market vols local."""
     LOCAL.mkdir(parents=True, exist_ok=True)
-    smiles.to_csv(LOCAL / "p2c_spx_smiles.csv", index=False)
-    smiles[["T", "k", "model_iv"]].to_csv(FIG / "p2c_spx_smiles.csv", index=False)
-    smile_errors(smiles).to_csv(FIG / "p2c_spx_smile_errors.csv", index=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    smiles.to_csv(LOCAL / "p2c_demo_smiles_full.csv", index=False)
+    smiles[["T", "k", "model_iv"]].to_csv(out_dir / "p2c_demo_smiles.csv", index=False)
+    smile_errors(smiles).to_csv(out_dir / "p2c_demo_smile_errors.csv", index=False)
 
 
 def cos_error_against_n() -> pd.DataFrame:
@@ -175,9 +176,10 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(kept, ignore_index=True)
 
 
-def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    full = market_data_from_snapshot(chain)
+def chain_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston, Path]:
+    chain, _data, SOURCE, out_dir, _is_synthetic = load_figure_market()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    full = market_data(chain)
     data = full.__class__(
         asof=full.asof,
         quotes=_thin(full.quotes),
@@ -208,7 +210,9 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         "n_quotes": int(len(data.quotes)),
         "n_expiries": int(data.quotes["expiry"].nunique()),
     }
-    (FIG / "p2c_spx_fit.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (out_dir / "p2c_demo_fit.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
 
     # Smiles at four expiries nearest 1 day, 1 week, 1 month, 1 year.
     targets = np.array([1.0 / 365.0, 7.0 / 365.0, 30.0 / 365.0, 1.0])
@@ -248,7 +252,7 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
                 }
             )
     handles += [
-        Line2D([], [], color="0.3", marker="o", ms=3.5, lw=0, label="dots: SPXW mid quotes"),
+        Line2D([], [], color="0.3", marker="o", ms=3.5, lw=0, label="dots: mid quotes"),
         Line2D([], [], color="0.3", lw=1.2, label="lines: Heston, full-price fit"),
     ]
     ax.set_xlabel("log-moneyness k = log(K/F)")
@@ -269,10 +273,10 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         color="0.3",
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
-    fig.savefig(FIG / "p2c_spx_smiles.png", dpi=140)
+    fig.savefig(out_dir / "p2c_demo_smiles.png", dpi=140)
     plt.close(fig)
     smiles = pd.DataFrame(smile_rows)
-    write_smiles(smiles)
+    write_smiles(smiles, out_dir)
 
     skew_rows = []
     # Market skew uses every quote, not the 11-strike subset the fitter saw.
@@ -299,7 +303,7 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
             }
         )
     skew = pd.DataFrame(skew_rows).sort_values("T")
-    skew.to_csv(FIG / "p2c_spx_skew.csv", index=False)
+    skew.to_csv(out_dir / "p2c_demo_skew.csv", index=False)
 
     finite = skew[np.isfinite(skew["market_skew"]) & np.isfinite(skew["model_skew"])]
     short = finite.iloc[0]
@@ -307,7 +311,12 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
     fig, ax = plt.subplots(figsize=(7.4, 5.0))
     days = 365.0 * finite["T"]
     ax.loglog(
-        days, np.abs(finite["market_skew"]), "o", ms=4.5, color="k", label="SPX, one dot per expiry"
+        days,
+        np.abs(finite["market_skew"]),
+        "o",
+        ms=4.5,
+        color="k",
+        label="chain, one dot per expiry",
     )
     ax.loglog(
         days,
@@ -347,9 +356,9 @@ def spx_calibration() -> tuple[pd.DataFrame, pd.DataFrame, Heston]:
         color="0.3",
     )
     fig.tight_layout(rect=(0, 0.05, 1, 1))
-    fig.savefig(FIG / "p2c_spx_skew.png", dpi=140)
+    fig.savefig(out_dir / "p2c_demo_skew.png", dpi=140)
     plt.close(fig)
-    return smiles, skew, model
+    return smiles, skew, model, out_dir
 
 
 def preset() -> None:
@@ -386,7 +395,7 @@ def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     error = cos_error_against_n()
     gap = lewis_minus_cos()
-    _, skew, _ = spx_calibration()
+    _, skew, _, out_dir = chain_calibration()
     preset()
     at_256 = error.loc[error["N"] == 256].iloc[0]
     print(f"cos N=256 minus reference {at_256['cos_minus_reference']:.3e}")
@@ -399,7 +408,7 @@ def main() -> None:
         f"skew T={short['T']:.4f} market {short['market_skew']:.3f} model {short['model_skew']:.3f}"
     )
     print(f"skew T={long['T']:.4f} market {long['market_skew']:.3f} model {long['model_skew']:.3f}")
-    print(json.loads((FIG / "p2c_spx_fit.json").read_text()))
+    print(json.loads((out_dir / "p2c_demo_fit.json").read_text()))
     over = finite[np.abs(finite["model_skew"]) > 1.05 * np.abs(finite["market_skew"])]
     print(
         f"heston skew above market by >5%: {365 * over['T'].min():.2f} to "

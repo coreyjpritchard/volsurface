@@ -27,10 +27,9 @@ These are not results.
 
 - The normalised call used here matches SANOS once the PDF is checked equation
   by equation. The HTML summary is all we have used.
-- The committed chain is SPX, labelled European and cash-settled. SPY options
-  are American and the ETF pays dividends, so a European implied vol on that
-  chain does not match the contract. The loader still marks a SPY ticker
-  American and physical if one is passed. That label is why the snapshot is SPX.
+- Committed figures use the synthetic demo chain, labelled European and
+  cash-settled. The loader still marks a SPY ticker American and physical, and
+  SPX or XSP European and cash-settled, if one of those underlyings is passed.
   See `docs/notes/spx_not_spy.md`.
 - The Heston cumulant stencil is accurate enough to place a cosine grid. `c1`
   matches the integrated expected variance, and `c2` and `c4` match a second

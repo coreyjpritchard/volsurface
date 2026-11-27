@@ -284,8 +284,8 @@ def fetch_ibkr(
     """Fetch a stock option chain from a running TWS or IB Gateway in the tidy schema.
 
     The qualifier is a stock on SMART. SPX and XSP are indexes, so this function
-    does not fetch them. The SPX chain the results use is the CBOE delayed file built
-    by ``scripts/build_cboe_spx_snapshot.py``.
+    does not fetch them. For index options, build a local snapshot with
+    ``scripts/build_cboe_spx_snapshot.py`` (not redistributed).
 
     Steps: qualify the stock, read its price, list expiries and strikes with
     ``reqSecDefOptParams``, qualify every option contract (strikes do not exist for every

@@ -71,10 +71,6 @@ seed at 256 steps gives `0.04420` (`z = +0.57`). Across seeds 10000 to
 that mean `0.17`) and mean probability `0.04476`.
 
 Calibration holds `beta` fixed and fits `alpha`, `rho` and `nu` on each
-expiry. On the thinned SPXW book, 440 quotes and 40 expiries, four starts
-and seed 0, the fit takes 5.94 seconds. Median price RMSE is 2.82 index
-points. The largest is 3.84, at `T = 0.371`. The expiry nearest one year
-(`T = 0.963`) has `alpha = 0.161`, `rho = -0.669`, `nu = 0.932` and RMSE
-1.62. The front expiry has `alpha = 0.161`, `rho = -0.999`, `nu = 4` and
-RMSE 0.37. `nu` is on its upper bound of 4 for the 15 expiries through
-`T = 0.056`. `rho` is on its lower bound of `-0.999` for the first three.
+expiry. Snapshot-specific fitted parameters and RMSEs have been removed
+from this public note. Run `scripts/figures_p2f.py --snapshot path/to/chain.parquet`
+to fit a chain you supply; those outputs are not committed.

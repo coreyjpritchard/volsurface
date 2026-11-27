@@ -183,18 +183,18 @@ def test_cboe_builder_keeps_spxw_and_drops_the_am_root():
         }
 
     payload = {
-        "timestamp": "2026-10-14 10:01:12",
+        "timestamp": "2020-01-02 15:00:00",
         "data": {
-            "current_price": 7805.45,
+            "current_price": 100.0,
             "options": [
-                row("SPXW261016C07600000"),
-                row("SPXW261016P07600000", bid=90.0, ask=91.0),
-                row("SPXW261016C08000000"),
-                row("SPXW261016P08000000", bid=80.0, ask=81.0),
-                row("SPX261016C07600000"),
-                row("SPX261016P07600000", bid=90.0, ask=91.0),
-                row("SPXW261016C07700000", bid=50.0, ask=40.0),
-                row("SPXW261013C07600000"),
+                row("SPXW200109C00095000"),
+                row("SPXW200109P00095000", bid=8.0, ask=8.2),
+                row("SPXW200109C00105000"),
+                row("SPXW200109P00105000", bid=4.0, ask=4.2),
+                row("SPX200109C00095000"),
+                row("SPX200109P00095000", bid=8.0, ask=8.2),
+                row("SPXW200109C00100000", bid=5.0, ask=4.0),
+                row("SPXW191231C00095000"),
             ],
         },
     }
@@ -204,10 +204,10 @@ def test_cboe_builder_keeps_spxw_and_drops_the_am_root():
     assert set(chain["source"]) == {"cboe"}
     assert chain["expiry"].nunique() == 1
     assert pd.Timestamp(chain["quote_time"].iloc[0]) == pd.Timestamp(
-        "2026-10-14 10:01:12", tz="UTC"
+        "2020-01-02 15:00:00", tz="UTC"
     )
     assert not np.isfinite(chain["rate"].iloc[0])
-    assert set(chain["strike"]) == {7600.0, 8000.0}
+    assert set(chain["strike"]) == {95.0, 105.0}
 
 
 def test_read_env(tmp_path, monkeypatch):

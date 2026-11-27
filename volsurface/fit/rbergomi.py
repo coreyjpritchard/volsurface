@@ -28,7 +28,7 @@ from volsurface.plugins import create
 from volsurface.smile import market_term_structure, model_term_structure
 
 # The three settings in DESIGN section 20. None means H is free.
-FIXED_H = (0.167, 0.149)
+FIXED_H = (0.10, 0.15)
 
 
 def variance_swap(surface, maturities: np.ndarray) -> np.ndarray:
@@ -115,7 +115,7 @@ def _check_h(H: float | None) -> None:
     if H is None:
         return
     if not any(np.isclose(H, fixed) for fixed in FIXED_H):
-        raise ValueError(f"H is free, or fixed at 0.167 or 0.149, got {H}")
+        raise ValueError(f"H is free, or fixed at 0.10 or 0.15, got {H}")
 
 
 def _build(model, values: dict):
@@ -151,7 +151,7 @@ def calibrate(
     n_steps: int | None = None,
     max_nfev: int | None = None,
 ) -> FitResult:
-    """Match at-the-money level and skew. ``H`` is free, 0.167, or 0.149.
+    """Match at-the-money level and skew. ``H`` is free, or fixed at 0.10 or 0.15.
 
     The model comes from ``create("rbergomi")``. ``xi0`` is
     :func:`forward_variance` of ``surface``, or of one SANOS fit of ``data``

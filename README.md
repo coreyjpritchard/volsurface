@@ -1,63 +1,41 @@
 # volsurface
 
-**On the 14 October 2026 SPX option chain (SPXW mid quotes, 40 expiries from 10 hours
-to 351 days), the at-the-money skew follows a power law, $|\psi(T)| \approx 0.305\,
-T^{-0.333}$. Rough volatility predicts this shape, with Hurst index
-$H = 0.5 - 0.333 \approx 0.17$. Fitted to the at-the-money level and skew, Heston can follow
-the power law only with its vol-of-vol on whatever upper bound it is given
-($\xi = 5$, Feller ratio 0.05), and then its short-dated at-the-money vol is far too low
-(5.6% against the market's 15.1% at 10 hours).** A rough Bergomi model with three
-parameters, on a forward variance curve read from the same chain, matches the skew at all
-40 expiries to within 5.2%.
+A Python library that turns an option chain into an implied volatility surface
+and prices it under Black-Scholes, Heston, SABR, local volatility and rough
+Bergomi through one interface. This is a personal research project in
+mathematical finance.
 
-This is a personal research project in mathematical finance: a Python library that turns
-an option chain into an implied volatility surface and prices it under Black-Scholes,
-Heston, SABR, local volatility and rough Bergomi through one interface. Every number on
-this page is printed by a script in this repository; `make reproduce` rebuilds the
-environment, runs the tests and redraws the first figure. [LOG.md](LOG.md) records what
-each session found, dated, including the results that did not survive.
+Committed figures and tables are built from a **synthetic** option chain
+(Heston mid quotes with bid-ask noise, spot 100). They are labelled as such
+and are not market data. A fetch script is included so you can run the same
+code on a chain you supply; those outputs stay local.
 
-![SPX smiles against one Heston fit, and the at-the-money skew term structure](docs/00_the_smile.png)
+Every number on this page is printed by a script in this repository;
+`make reproduce` rebuilds the environment, runs the tests and redraws the
+first figure. [LOG.md](LOG.md) records what each session found, dated.
 
-**How to read this.** The left panel shows SPXW smiles at five expiries (dots) against one
-Heston model (lines); the right panel shows the at-the-money skew, the slope of implied
-vol in log-moneyness, for all 40 expiries on log-log axes, where a power law is a straight
-line. The market points lie on a line of slope $-1/3$. Rough volatility models predict a
-short-maturity skew of order $T^{H-1/2}$ (Alòs, León and Vives 2007; Fukasawa 2011), so
-the slope gives $H \approx 0.17$, and rough Bergomi, built on this idea, fits SPX skews well
-(Bayer, Friz and Gatheral 2016). In Heston (1993) the variance is a diffusion, so as
-$T \to 0$ the at-the-money skew tends to a finite limit, $\rho\xi / (4\sqrt{v_0})$, and the
-at-the-money vol tends to $\sqrt{v_0}$. To keep the skew rising down to 10 hours the fit has
-to push that limit far above the data (14.4 here), and the cheapest way is a large $\xi$
-and a small $v_0$: $\xi$ ends on its bound and $\sqrt{v_0} = 5.4\%$, which is why the
-34-hour smile in the left panel dips far below the quotes at the money. The caveat: this
-is one snapshot, and the Heston optimum is bound-limited. With $\xi \le 10$ the fit moves
-again ($\xi$ on the new bound, Feller ratio 0.03, cost 0.020 against 0.066) and its
-10-hour at-the-money vol is still only 7.0%, so the failure is the level-skew trade-off,
-not a missing local minimum.
+![Smiles against one Heston fit, and the at-the-money skew term structure, on a synthetic chain](docs/00_the_smile.png)
 
-![SPX skew against Heston and three rough Bergomi calibrations](docs/figures/p3e_skew.png)
+**How to read this.** The left panel shows implied-volatility smiles at five
+expiries (dots) against one Heston model (lines), both on the synthetic
+demo chain. The right panel shows the at-the-money skew, the slope of implied
+vol in log-moneyness, for every expiry on log-log axes, where a power law is a
+straight line. In a diffusion model such as Heston (1993) the at-the-money
+skew tends to a finite limit as $T \to 0$, $\rho\xi / (4\sqrt{v_0})$, and the
+at-the-money vol tends to $\sqrt{v_0}$. Rough volatility models instead
+predict a short-maturity skew of order $T^{H-1/2}$ (Alòs, León and Vives 2007;
+Fukasawa 2011; Bayer, Friz and Gatheral 2016). The figure is a demonstration
+on synthetic quotes, not a market result.
 
-**How to read this.** Black dots are the market skews again; the open markers are a
-Heston fit to option prices (not to the skew) and rough Bergomi calibrated to the
-at-the-money level and skew with $H$ free (fitted $H = 0.207$), and with $H$ fixed at
-0.167 and at 0.149. Rough Bergomi tracks the market from 10 hours to a year: the free-$H$
-fit is within 5.2% of the market skew at every expiry (median 1.8%), with three
-parameters plus a forward variance curve read off the market. The price-fitted Heston
-needs $\xi = 2.70$ (Feller ratio 0.14) to reach the 10-hour skew and then overshoots by more
-than 5% from 1.4 to 128 days (by up to 52%, at 5 days). In Heston the skew is roughly
-constant for maturities well below $1/\kappa$ and decays like $1/T$ well above it (Gatheral
-2006); with one mean-reversion speed ($1/\kappa \approx 27$ days here) it cannot decay like
-$T^{-1/3}$ over three orders of magnitude in maturity. Caveats: the rough Bergomi skews
-are Monte Carlo estimates (4,000 paths, 64 steps, seed 0) with no error bars drawn,
-the fitted at-the-money level is up to 2.4 vol points above the market at the front, and
-$H = 0.21$ from one day's option prices is not the $H \approx 0.1$ that
-Gatheral, Jaisson and Rosenbaum (2018) estimate from realised volatility time series.
+![Skew against Heston and three rough Bergomi calibrations, on a synthetic chain](docs/figures/p3e_skew.png)
 
-Earlier versions of the first figure reported a Heston fit with $\rho = -0.533$ and a
-10-hour skew of 1.87, and then $\rho = -0.551$ and 2.12, both in the narrower session box
-($v_0 \ge 0.01$, $\xi \le 2$). [docs/notes/heston_fit_old_vs_new.md](docs/notes/heston_fit_old_vs_new.md)
-reproduces each version and explains why they differ.
+**How to read this.** Black dots are the synthetic-chain skews; the open
+markers are a Heston fit to option prices (not to the skew) and rough Bergomi
+calibrated to the at-the-money level and skew with $H$ free, and with $H$
+fixed at 0.10 and at 0.15 (a typical realised-volatility range, not an
+implied-skew estimate from market quotes). The rough Bergomi skews are Monte
+Carlo estimates (the script's path count and seed are in the footer). This
+panel is also a synthetic demonstration.
 
 ## What is in the library
 
@@ -74,13 +52,14 @@ reproduces each version and explains why they differ.
 | `volsurface/dynamic/` | A minimal dynamic SANOS (arXiv:2608.12587) |
 | `volsurface/markets/` | Simulated markets with regime switching, a Hamilton filter, and pricers for the regime experiment |
 | `volsurface/mc/` | Random number streams and time grids for Monte Carlo |
-| `volsurface/chains.py` | Option chains from yfinance or IBKR (CBOE through `scripts/build_cboe_spx_snapshot.py`), snapshots, forwards, market implied vols |
+| `volsurface/chains.py` | Option chains from yfinance or IBKR (Cboe through `scripts/build_cboe_spx_snapshot.py`), snapshots, forwards, market implied vols |
+| `volsurface/demo_market.py` | The synthetic demo chain used by committed figures and the session app |
 | `volsurface/smile.py` | At-the-money level and skew, power-law fits |
 | `volsurface/core/`, `docs/DESIGN.md` | Shared types and protocols; the design document |
-| `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed (SPX quote data as per-expiry summaries only) |
+| `scripts/`, `docs/figures/` | One script per figure, with the CSV or JSON it printed (synthetic unless you pass `--snapshot`) |
 | `sessions/` | marimo apps, one per session |
-| `data/snapshots/` | Where a local SPX chain goes (parquet); the Cboe snapshot itself is not redistributed |
-| `tests/fixtures/` | A small synthetic SPX-like chain (Heston prices with noisy quotes) for the tests |
+| `data/snapshots/` | Where a local chain goes (parquet); not redistributed |
+| `tests/fixtures/` | A small synthetic chain (Heston prices with noisy quotes) for the tests |
 
 Rough Bergomi itself (the hybrid scheme of Bennedsen, Lunde and Pakkanen 2017) lives in
 a separate package, [rough-volatility](https://github.com/coreyjpritchard/rough-volatility),
@@ -89,33 +68,25 @@ through a plugin entry point.
 
 ## How to reproduce
 
-The SPX results in this repository were computed on a Cboe delayed-quotes snapshot of
-the SPXW chain taken on 14 October 2026. That snapshot is not redistributed here; see
-[data/snapshots/README.md](data/snapshots/README.md) to rebuild one yourself, under Cboe's
-terms. The tests do not need it: they run on a synthetic chain in `tests/fixtures/`, and the
-few that check numbers of the real file are skipped without it. The figure scripts and
-`docs/figure_00.py` stop with a message pointing to the build script when there is no
-local snapshot. The committed figures and their CSV and JSON outputs are the ones computed
-on the 14 October 2026 file.
-
 Python 3.11. Dependencies are pinned in `uv.lock` ([uv](https://docs.astral.sh/uv/)); torch
 comes from the CPU wheel index. One command rebuilds the environment, runs the fast tests
-and redraws the first figure (about five minutes, most of it the Heston multi-start):
+and redraws the first figure from the synthetic demo chain:
 
 ```bash
-make reproduce   # the last step needs a local snapshot
+make reproduce
 # the same by hand:
 uv sync --locked --extra dev --extra autodiff
 uv run pytest -m "not slow"
 uv run python docs/figure_00.py
 ```
 
-The other figures: `uv run python scripts/figures_p3e.py` (rough Bergomi, Monte
-Carlo), `scripts/figures_p2c.py` (Heston price fit and COS checks), and so on, one script
-per figure. `XI_MAX=10 uv run python docs/figure_00.py` reruns the Heston fit with the wider
-$\xi$ bound quoted above.
+The other figures (`uv run python scripts/figures_p3e.py`, `scripts/figures_p2c.py`,
+and so on) also default to the synthetic chain. Pass `--snapshot path/to/chain.parquet`
+to run a script on a chain you supply; those outputs go to `data/cache/figures/` and
+are not committed.
 
-The interactive app:
+The interactive app uses a local snapshot when one is present, and the synthetic
+demo otherwise:
 
 ```bash
 uv run marimo run sessions/00_the_smile.py   # sliders, surface, smile
@@ -123,12 +94,7 @@ uv run marimo edit sessions/00_the_smile.py  # the same, with the code
 ```
 
 Plain pip also works (`pip install -e ".[dev]"`, then `pytest -m "not slow"`). Without the
-`autodiff` extra the torch tests are skipped rather than failing at collection. Without
-Python, download the static export [docs/00_the_smile.html](docs/00_the_smile.html) and
-open it in a browser (GitHub shows the file as source rather than rendering it). The export
-leaves out the SPX market point of each quote; its skew figure keeps one SPX skew
-per expiry. After re-exporting, `python scripts/strip_export_quotes.py docs/00_the_smile.html`
-removes the per-quote points again.
+`autodiff` extra the torch tests are skipped rather than failing at collection.
 
 GitHub Actions runs `ruff check` and the fast tests on every push to `main` and on pull
 requests (`.github/workflows/ci.yml`); the slow tests are run by hand.
@@ -137,11 +103,12 @@ Build a local snapshot (git ignores everything in `data/snapshots/` but its READ
 
 ```bash
 python scripts/build_cboe_spx_snapshot.py _SPX.json   # a saved copy of Cboe's delayed SPXW quotes
-python -m volsurface.chains yfinance SPX              # writes data/snapshots/SPX_<date>.parquet
+python -m volsurface.chains yfinance SPY              # writes data/snapshots/SPY_<date>.parquet
 ```
 
 Cboe's delayed quotes are subject to Cboe's terms of use (<https://www.cboe.com/en/terms/>),
-and complying with them is up to you. The repository does not redistribute the data.
+and complying with them is up to you. The repository does not redistribute the data, or
+results derived from it.
 
 ## Next: the regime experiment (draft pre-registration, no results)
 
@@ -154,20 +121,12 @@ correction. It is a draft and is not frozen, and there are no results yet.
 
 ## Honest limits
 
-- One snapshot. Every SPX number here comes from one chain, taken at 06:01 New York time on
-  14 October 2026, in the overnight (global trading hours) session before the cash open,
-  not in the cash session.
-- The skew is a quadratic fit within $\max(0.15\sqrt{T}, 0.01)$ of the money; another
-  window would move the exponent slightly.
-- Calibrations are local least squares from seeded starts, not global optimisation. The
-  headline Heston fit ends on its $\xi$ bound, and $\kappa$ is poorly identified (8.0 to
-  10.8 across the starts that end within 1% of the best cost).
-- Because that fit sits in a flat valley in $\kappa$, the last digits of the first figure's
-  numbers (the Feller ratio, the short-skew limit) can differ slightly from machine to
-  machine with the linear algebra library and thread count (Feller 0.045 against 0.046,
-  limit 14.4 against 14.6, on two Linux machines); the conclusions do not.
-- Raw SVI fitted slice by slice is not free of static arbitrage on this chain: 2,246
-  violations on the check grid, against 0 for SANOS (`docs/figures/p3c_shootout.csv`).
+- Committed figures are demonstrations on a synthetic chain. They are not
+  market results.
+- The skew is a quadratic fit within $\max(0.15\sqrt{T}, 0.01)$ of the money;
+  another window would move the exponent slightly.
+- Calibrations are local least squares from seeded starts, not global
+  optimisation.
 - The yfinance fetcher has no test, and the IBKR test needs a live gateway.
 
 ## References

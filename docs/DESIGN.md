@@ -382,15 +382,13 @@ dominate the shorter one's, again up to a slack. A positive slack is kind
 `"calendar"`.
 
 Quotes with a missing bid or ask are dropped from a `"bidask"` check. The
-note records how many were dropped. The committed SPX file is two-sided
-mids on SPXW (see section 10), so a bid-ask check has quotes to constrain.
-Checked alone, the two shortest expiries are feasible together: 278 quotes,
-objective 0, `ok` true. The first 24 expiries together, 4,398 quotes, are
-also feasible, in 9.0 seconds. The program on the first 32, and on all 40,
-was killed at a 15.6 GB memory limit before HiGHS returned. That is a limit
-of this run, not a measured arbitrage. **Hypothesis:** a slack on this book
-would be a failure of the quoted mids to sit on one martingale, or a stale
-pre-open quote. It would not be an American early-exercise premium.
+note records how many were dropped. The loader marks SPX and XSP European
+and cash-settled, and SPY American and physical (see section 10), so a
+bid-ask check has quotes to constrain when those fields exist. Scale
+measurements on a market snapshot are not recorded in this public file.
+**Hypothesis:** a slack on a European mid book would be a failure of the
+quoted mids to sit on one martingale, or a stale pre-open quote. It would
+not be an American early-exercise premium.
 
 `ok` is True when every slack is within `tol.price` and at least one quote
 entered the program. `n_checked` is that quote count. When every quote was
@@ -593,19 +591,20 @@ Exercise and settlement are not in the parquet file. The loader fills
 requires the caller to pass them. **Hypothesis:** that mapping matches the
 contracts. It is an assumption of the loader, not a field we observed.
 
-The SPX results use `data/snapshots/SPX_2026-10-14.parquet`, which is not
-redistributed (see `data/snapshots/README.md`; the tests use a synthetic chain). It is SPXW
-only, PM-settled, two-sided mids from CBOE's delayed quotes. Forwards and
-discount factors come from put-call parity at each expiry. The note
-`docs/notes/spx_not_spy.md` says why this replaced the SPY last-trade file.
-Surface demos use this file. SANOS fits, later, want European quotes, which
-is what this file is.
+Committed figures use the synthetic demo chain in `volsurface.demo_market`
+(spot 100, European and cash-settled, not market data). A user-supplied
+snapshot can be passed to the figure scripts with `--snapshot`; it is not
+redistributed (see `data/snapshots/README.md`). The tests use a synthetic
+chain. Forwards and discount factors come from put-call parity at each
+expiry. The note `docs/notes/spx_not_spy.md` says why the Cboe builder keeps
+the SPXW root, and why a European cash-settled book is the right input for
+SANOS.
 
 ## 11. Tests that Phase 1 must keep
 
 Existing tests stay green: Black-Scholes parity and implied-vol round trip,
-the Fang and Oosterlee Heston references, the chain schema, the committed
-snapshot. New tests are those named in sections 5 to 8. A test marked
+the Fang and Oosterlee Heston references, and the chain schema. New tests
+are those named in sections 5 to 8. A test marked
 `slow` is allowed to be heavy. `pytest -m "not slow"` is the bar for a
 pull request, together with `ruff check`.
 
@@ -784,10 +783,8 @@ mixture is the reference: Hagan is about 184 to 271 bp high, and the
 `alpha = 0.8` and `nu = 0`, the exact absorption probability is 0.04394.
 At 64 steps and 200,000 paths the estimate is 0.04551 (seed 2) and
 0.04542 (seed 3). At 256 steps, seed 2, it is 0.04420. `SABRFitter` holds
-`beta` fixed and fits `alpha`, `rho` and `nu` once per expiry. On the
-thinned SPXW book that fit has median price RMSE 2.82 index points. The
-expiry nearest one year has `alpha = 0.161`, `rho = -0.669`, `nu = 0.932`.
-Through `T = 0.056`, `nu` sits on its upper bound of 4.
+`beta` fixed and fits `alpha`, `rho` and `nu` once per expiry.
+Snapshot-specific fitted parameters are not recorded in this public file.
 
 `check_surface` on Hagan prices at `T = 10`, `nu = 1.5`, `beta = 1` reports
 a butterfly. The implied vol on that window stays positive. The negative
@@ -796,8 +793,8 @@ number is the density.
 ## 17. Sparse linear program
 
 `check_quotes` in section 6.2 builds every row as a dense vector and stacks
-those rows. On the committed SPX book that allocation is what the 15.6 GB
-kill measured. The constraint coefficients are unchanged. The storage is
+those rows. On a large quoted book that allocation can exceed a practical
+memory budget. The constraint coefficients are unchanged. The storage is
 what changes.
 
 `volsurface/fit/_lp.py` is the shared core. It accepts the constraint matrix
@@ -811,16 +808,14 @@ coefficients for the equivalence test. Production code does not set it.
 solver that returns no point still sets `ok` to None and copies the message.
 
 The equivalence test compares sparse and dense on the same coefficients.
-The first 24 expiries are 4,398 quotes, objective 0, `ok` true, and an
-empty violation set. The two shortest expiries are 278 quotes, with the
-same outcome. Seeded bid, ask, and calendar violations stay on the node and
-at the magnitude the existing tests name.
+Seeded bid, ask, and calendar violations stay on the node and at the
+magnitude the existing tests name. Scale measurements on a market snapshot
+are not recorded in this public file.
 
-The scale test runs all 40 expiries, requires a HiGHS status, and requires
-peak resident memory below 2 GB. The figure plots peak memory and wall time
+The scale test requires a HiGHS status and peak resident memory below 2 GB
+on the chain used by the test. The figure plots peak memory and wall time
 against the number of expiries, dense against sparse. Dense stops at the
-expiry count whose matrix would pass the memory budget of that run. The
-logged numbers are the ones the script measured.
+expiry count whose matrix would pass the memory budget of that run.
 
 ## 18. SANOS
 
@@ -880,13 +875,12 @@ linear `alpha` is the linear-in-time surface. `SanosSurface` implements
 mixture. `dcall_dT` uses `alpha'(T)`. Values outside the boundary strikes
 or outside the first and last model expiry are marked extrapolated.
 
-The market bar on the committed SPX snapshot, with `omega = 0`, is zero
-static-arbitrage violations on a dense grid, and an in-spread fraction
-strictly above 0.558. That 0.558 is the raw SVI in-spread already in
-`LOG.md` for this file. The paper's 91.4 percent is a different book and
-is context only.
+The market bar, with `omega = 0`, is zero static-arbitrage violations on a
+dense grid, and an in-spread fraction at least that of raw SVI on the same
+book. Snapshot-specific fractions are not recorded in this public file. The
+paper's 91.4 percent is a different book and is context only.
 
-A second bar holds strikes out of the same snapshot. In each expiry, about
+A second bar holds strikes out of the loaded chain. In each expiry, about
 20 percent of the strikes are drawn without replacement by
 `numpy.random.default_rng` with a fixed seed, and those quotes are left
 out of the fit. The bar is that the share of held-out quotes whose model
@@ -958,7 +952,7 @@ rBergomi.
 
 `volsurface/fit/rbergomi.py` calibrates `(H, nu, rho)` through
 `create("rbergomi")`, with common random numbers. The three settings are
-`H` free, `H` fixed at 0.167, and `H` fixed at 0.149. The forward variance
+`H` free, `H` fixed at 0.10, and `H` fixed at 0.15. The forward variance
 `xi0` is read from a SANOS surface by the log contract,
 `VS(T) = -2 E[log Z_T]`, integrated against the surface density. Calendar
 order makes `VS` increasing in `T`. Rough Heston is not implemented.

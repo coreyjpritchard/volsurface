@@ -22,8 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import bs, chains
-from volsurface.core.market import market_data_from_snapshot
+from volsurface import bs
 from volsurface.core.types import Curves, Domain
 from volsurface.fit.sabr import SABRFitter
 from volsurface.models.sabr import SABR, euler_price, integrated_black_mixture
@@ -257,10 +256,13 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(kept, ignore_index=True)
 
 
-def spx_fit() -> dict:
-    """One SABR parameter set per SPXW expiry. beta is fixed at 1."""
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    full = market_data_from_snapshot(chain)
+def chain_fit() -> dict:
+    """One SABR parameter set per expiry. beta is fixed at 1."""
+    from volsurface.demo_market import load_figure_market, market_data
+
+    chain, _data, source, out_dir, _is_synthetic = load_figure_market()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    full = market_data(chain)
     data = full.__class__(
         asof=full.asof,
         quotes=_thin(full.quotes),
@@ -271,16 +273,22 @@ def spx_fit() -> dict:
     )
     fitted = SABRFitter(beta=1.0, n_starts=4, loss="vega", seed=0).fit(data)
     report = fitted.slice_report
-    report.to_csv(FIG / "p2f_spx_sabr.csv", index=False)
+    report.to_csv(out_dir / "p2f_demo_sabr.csv", index=False)
 
     days = 365.0 * report["T"].to_numpy()
     nu_cap = 4.0
     rho_floor = -0.999
     at_nu = np.isclose(report["nu"].to_numpy(), nu_cap, atol=1e-6)
     at_rho = np.isclose(report["rho"].to_numpy(), rho_floor, atol=1e-6)
+
+    def _last(mask: np.ndarray) -> str:
+        if not mask.any():
+            return "none"
+        return f"{days[mask].max():.1f} days"
+
     print(
-        f"nu at cap on {int(at_nu.sum())} expiries, last at {days[at_nu].max():.1f} days; "
-        f"rho at floor on {int(at_rho.sum())} expiries, last at {days[at_rho].max():.1f} days",
+        f"nu at cap on {int(at_nu.sum())} expiries, last at {_last(at_nu)}; "
+        f"rho at floor on {int(at_rho.sum())} expiries, last at {_last(at_rho)}",
         flush=True,
     )
     fig, axes = plt.subplots(2, 2, figsize=(10.4, 6.4), sharex=True)
@@ -314,18 +322,24 @@ def spx_fit() -> dict:
         ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
         ax.set_xlabel("time to expiry (days, log scale)")
     median = float(report["rmse_price"].median())
+    bound_bits = []
+    if at_nu.any():
+        bound_bits.append(f"nu sits at its cap of {nu_cap:g} up to {days[at_nu].max():.0f} days")
+    if at_rho.any():
+        bound_bits.append(f"rho sits at ${rho_floor:g}$ on {int(at_rho.sum())} expiries")
+    if bound_bits:
+        bound_text = "bound-limited values are limits, not estimates: " + "; ".join(bound_bits)
+    else:
+        bound_text = "no fitted parameter sits on its bound"
     fig.suptitle(
-        f"SABR fitted one SPX expiry at a time has a median price RMSE of {median:.2f} index "
-        f"points, but the short end is bound-limited:\n"
-        f"nu sits at its cap of {nu_cap:g} up to {days[at_nu].max():.0f} days and rho at "
-        f"${rho_floor:g}$ on the first {int(at_rho.sum())} expiries, so read those values "
-        "as limits, not estimates",
+        f"SABR fitted one expiry at a time has a median price RMSE of {median:.2f} "
+        f"points. {bound_text}",
         fontsize=10.5,
     )
     fig.text(
         0.01,
         0.005,
-        f"SPXW mids, CBOE delayed, 14 Oct 2026. beta = 1, Hagan lognormal formula, vega-weighted "
+        f"{source} beta = 1, Hagan lognormal formula, vega-weighted "
         f"price loss, 4 starts; up to 11 strikes per expiry with |k| <= 0.4 "
         f"({len(data.quotes)} quotes, {len(report)} expiries).",
         fontsize=7.5,
@@ -333,7 +347,7 @@ def spx_fit() -> dict:
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.subplots_adjust(top=0.88)
-    fig.savefig(FIG / "p2f_spx_sabr.png", dpi=140)
+    fig.savefig(out_dir / "p2f_demo_sabr.png", dpi=140)
     plt.close(fig)
 
     summary = {
@@ -348,7 +362,9 @@ def spx_fit() -> dict:
         "nu_at_T1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["nu"]),
         "T_nearest_1": float(report.iloc[(report["T"] - 1.0).abs().argmin()]["T"]),
     }
-    (FIG / "p2f_spx_sabr.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (out_dir / "p2f_demo_sabr.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
     summary["wall_time"] = fitted.wall_time
     return summary
 
@@ -360,7 +376,7 @@ def main() -> None:
         "smiles": smile_panel(),
         "density": density_panel(),
         "monte_carlo": monte_carlo_panel(),
-        "spx": spx_fit(),
+        "chain": chain_fit(),
     }
     print(json.dumps(summary, indent=2))
 

@@ -17,10 +17,22 @@ def _():
 
 @app.cell(hide_code=True)
 def _(chains, mo, np, smile):
-    # Market data and the fixed (k, T) grid. Runs once; sliders never touch this cell.
+    # Chain data and the fixed (k, T) grid. Runs once; sliders never touch this cell.
+    # A local snapshot in data/snapshots/ is used when present; otherwise the
+    # synthetic demo chain (not market data).
+    from pathlib import Path as _Path
+
+    from volsurface.demo_market import build as _demo_build
+
     _dir = (mo.notebook_dir() or chains.REPO_ROOT / "sessions").parent / "data" / "snapshots"
-    snapshot_path = chains.latest_snapshot("SPX", _dir)
-    snapshot = chains.load_snapshot(snapshot_path)
+    if chains.has_snapshot("SPX", _dir):
+        snapshot_path = chains.latest_snapshot("SPX", _dir)
+        snapshot = chains.load_snapshot(snapshot_path)
+        chain_label = f"local snapshot {_Path(snapshot_path).name}"
+    else:
+        snapshot_path = _Path("synthetic-demo")
+        snapshot = _demo_build()
+        chain_label = "synthetic demo chain (not market data)"
     market = chains.market_implied_vols(snapshot)
     market_ts = smile.market_term_structure(market)
 
@@ -50,6 +62,7 @@ def _(chains, mo, np, smile):
     return (
         T_grid,
         T_surface,
+        chain_label,
         grid_ts,
         k_slice,
         k_surface,
@@ -78,7 +91,7 @@ def _(maturity_labels, mo):
         -0.99, 0.99, step=0.01, value=-0.9, label="rho, correlation", show_value=True
     )
     use_bs = mo.ui.switch(value=False, label="Black-Scholes instead (sigma = sqrt(v0))")
-    show_market = mo.ui.checkbox(value=True, label="Overlay SPX market implied vols")
+    show_market = mo.ui.checkbox(value=True, label="Overlay chain implied vols")
     maturity = mo.ui.dropdown(
         options=maturity_labels, value=list(maturity_labels)[3], label="Smile at expiry"
     )
@@ -143,7 +156,7 @@ def _(
                 z=market_grid["iv"],
                 mode="markers",
                 marker=dict(size=2, color="#d62728"),
-                name="SPX",
+                name="chain",
             )
         )
     surface.update_layout(
@@ -173,7 +186,7 @@ def _(
                 x=_m["k"],
                 y=_m["iv"],
                 mode="markers",
-                name="SPX",
+                name="chain",
                 marker=dict(size=5, color="#d62728"),
             )
         )
@@ -293,7 +306,7 @@ def _(T_grid, go, kappa, market_ts, mo, model, np, rho, smile, theta, use_bs, v0
                 x=market_ts["T"],
                 y=-market_ts["skew"],
                 mode="markers",
-                name="SPX",
+                name="chain",
                 marker=dict(size=7, color="#d62728"),
             ),
             go.Scatter(
@@ -330,7 +343,7 @@ def _(T_grid, go, kappa, market_ts, mo, model, np, rho, smile, theta, use_bs, v0
 
 
 @app.cell(hide_code=True)
-def _(market_ts, mo, smile, snapshot, snapshot_path):
+def _(market_ts, mo, smile, snapshot, snapshot_path, chain_label):
     _A, _alpha = smile.power_law(market_ts["T"], market_ts["skew"])
     _short, _long = market_ts.iloc[0], market_ts.iloc[-1]
     _time = snapshot["quote_time"].iloc[0]
@@ -342,40 +355,28 @@ def _(market_ts, mo, smile, snapshot, snapshot_path):
         _n = round(float(_short["T"]) * 365)
         _short_label = f"{_n} day" + ("" if _n == 1 else "s")
     mo.md(rf"""
-    ## What the market says
+    ## What the chain says
 
-    The SPX skew keeps steepening as expiry shrinks, and Heston's does not. The figure above
-    plots minus the at-the-money skew $\partial \sigma / \partial k$ against maturity on log
-    axes. SPX goes from {-_long["skew"]:.2f} at {_long["T"] * 365:.0f} days to
+    The loaded chain's at-the-money skew keeps steepening as expiry shrinks, and
+    Heston's does not. The figure above plots minus the at-the-money skew
+    $\partial \sigma / \partial k$ against maturity on log axes. The chain goes
+    from {-_long["skew"]:.2f} at {_long["T"] * 365:.0f} days to
     {-_short["skew"]:.2f} at {_short_label}, close to a straight line:
     $|\psi(T)| \approx {_A:.3f}\, T^{{-{_alpha:.3f}}}$. Heston's skew flattens to a
     constant, roughly $\rho\xi / (4\sqrt{{v_0}})$, as $T \to 0$, and decays like $1/T$
     once $T$ is well past $1/\kappa$.
-
-    The least squares fit of all five parameters to the at-the-money vols and skews, at
-    every expiry at once, is the best of three starts in the slider box with $\kappa \le 20$
-    (`docs/figure_00.py`, recorded in `LOG.md`). On this file it is
-    $v_0 = 0.01259$, $\kappa = 8.805$, $\theta = 0.04434$, $\xi = 1.740$, $\rho = -0.533$,
-    with $\rho$ inside $[-0.99, 0.99]$. The front skew is 1.87 in the fit against the
-    market's {-_short["skew"]:.2f}. At {_long["T"] * 365:.0f} days the fit is 0.18 against
-    the market's {-_long["skew"]:.2f}. At the expiry nearest one week the fit is steeper
-    than the market, 1.18 against 1.06. The $T \to 0$ limit of this parameter set is
-    $\rho\xi / (4\sqrt{{v_0}}) = -2.07$.
 
     A power law in $T$ is what rough volatility predicts. If volatility is driven by a
     fractional Brownian motion with Hurst exponent $H < 1/2$, the short-dated skew behaves
     like $T^{{H - 1/2}}$ (Bayer, Friz and Gatheral 2016, *Pricing under rough volatility*,
     Quant. Finance 16(6)), and time series of realised volatility suggest $H \approx 0.1$
     (Gatheral, Jaisson and Rosenbaum 2018, *Volatility is rough*, Quant. Finance 18(6)).
-    This snapshot gives an exponent of {_alpha:.3f}, so $H \approx {0.5 - _alpha:.3f}$:
-    rougher than Brownian motion, less rough than the time series estimate. The exponent
-    depends on the window used to measure the skew, which Session 04 takes up with rough
-    Bergomi behind the same interface.
+    This chain gives an exponent of {_alpha:.3f}, so $H \approx {0.5 - _alpha:.3f}$.
+    The exponent depends on the window used to measure the skew.
 
-    Data: SPXW options from the CBOE delayed quotes, {_src} at {_time:%Y-%m-%d %H:%M} UTC,
-    file `data/snapshots/{snapshot_path.name}`. The forward and the discount factor at each
-    expiry are the put-call parity regression. No dividend yield is fitted.
-    See `docs/notes/spx_not_spy.md`.
+    Data: {chain_label}, {_src} at {_time:%Y-%m-%d %H:%M} UTC.
+    The forward and the discount factor at each expiry are the put-call parity
+    regression. No dividend yield is fitted.
     """)
     return
 

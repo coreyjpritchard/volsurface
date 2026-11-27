@@ -40,8 +40,10 @@ from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import MarketData
 
 t0 = time.perf_counter()
-chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-data = market_data_from_snapshot(chain)
+from volsurface.demo_market import load_figure_market, market_data
+chain, _data, source, FIG, _is_synthetic = load_figure_market()
+FIG.mkdir(parents=True, exist_ok=True)
+data = market_data(chain)
 expiries = list(data.quotes.groupby("expiry", sort=True).groups)[:{n_expiries}]
 subset = data.quotes[data.quotes["expiry"].isin(expiries)].copy()
 book = MarketData(
@@ -89,7 +91,7 @@ def main() -> None:
         ax.set_xlabel("expiries")
         ax.grid(True, alpha=0.3)
         ax.legend(frameon=False, fontsize=8)
-    fig.suptitle("Quote linear program on SPX, 14 October 2026.")
+    fig.suptitle("Quote linear program on the synthetic demo chain (not market data).")
     fig.tight_layout()
     fig.savefig(FIG / "p3a_lp_memory.png", dpi=140)
     plt.close(fig)

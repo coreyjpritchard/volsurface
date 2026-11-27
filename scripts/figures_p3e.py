@@ -4,8 +4,8 @@ Run from the repository root:
 
     python scripts/figures_p3e.py
 
-The Heston parameters are the merged P2c fit in LOG.md. The skew is
-recomputed here. Each rBergomi curve is ``create("rbergomi")`` with ``xi0``
+Heston is fitted to the loaded chain (the synthetic demo by default).
+Each rBergomi curve is ``create("rbergomi")`` with ``xi0``
 equal to the slope of the SANOS log contract. A missing plugin raises.
 Nothing in this figure is a mock labelled rBergomi.
 
@@ -24,8 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import NullLocator
 
-from volsurface import chains
-from volsurface.core.market import market_data_from_snapshot
+from volsurface.fit.heston import HestonFitter
 from volsurface.fit.rbergomi import calibrate, forward_variance
 from volsurface.fit.sanos import SanosFitter
 from volsurface.models.heston import Heston
@@ -35,15 +34,29 @@ from volsurface.smile import market_term_structure, model_term_structure, power_
 ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "docs" / "figures"
 
-# Merged P2c fit, LOG.md. Skew is recomputed, not copied.
-HESTON = Heston(v0=0.007982, kappa=13.466, theta=0.03836, xi=2.703, rho=-0.6508)
-
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    from volsurface.demo_market import load_figure_market, market_data
+
+    chain, _data, source, FIG, _is_synthetic = load_figure_market()
+    FIG.mkdir(parents=True, exist_ok=True)
+    data = market_data(chain)
     market = market_term_structure(data.quotes)
-    panel = model_term_structure(HESTON, market["T"].to_numpy(), n=9, iv_tol=1e-8)
+    fitted_heston = HestonFitter(n_starts=4, loss="vega", seed=0).fit(data)
+    row = fitted_heston.slice_report.iloc[0]
+    heston_model = Heston(
+        v0=float(row["v0"]),
+        kappa=float(row["kappa"]),
+        theta=float(row["theta"]),
+        xi=float(row["xi"]),
+        rho=float(row["rho"]),
+    )
+    print(
+        f"heston v0={heston_model.v0:.6f} kappa={heston_model.kappa:.4f} "
+        f"theta={heston_model.theta:.6f} xi={heston_model.xi:.4f} "
+        f"rho={heston_model.rho:.4f} feller={heston_model.feller_ratio():.3f}"
+    )
+    panel = model_term_structure(heston_model, market["T"].to_numpy(), n=9, iv_tol=1e-8)
     frame = market.copy()
     frame["heston_atm"] = panel[:, 0]
     frame["heston_skew"] = panel[:, 1]
@@ -71,7 +84,7 @@ def main() -> None:
 
     fig, ax = plt.subplots(figsize=(7.6, 5.0))
     days = 365.0 * frame["T"]
-    ax.plot(days, frame["market_abs"], "o", ms=5, color="k", label="SPX, one dot per expiry")
+    ax.plot(days, frame["market_abs"], "o", ms=5, color="k", label="chain, one dot per expiry")
     ax.plot(
         days,
         frame["heston_abs"],
@@ -79,7 +92,10 @@ def main() -> None:
         ms=3.5,
         mfc="none",
         color="C1",
-        label="Heston, full-price fit (xi = 2.70, Feller violated)",
+        label=(
+            f"Heston, full-price fit (xi = {heston_model.xi:.2f}, "
+            f"Feller {heston_model.feller_ratio():.2f})"
+        ),
     )
     grid = np.geomspace(float(frame["T"].min()), float(frame["T"].max()), 80)
     ax.plot(
@@ -90,15 +106,18 @@ def main() -> None:
         ls=":",
         label=f"power law ${amplitude:.3f}\\,T^{{-{exponent:.3f}}}$, H = {0.5 - exponent:.2f}",
     )
-    markers = {"free": "d", "0.167": "^", "0.149": "v"}
+    markers = {"free": "d", "0.10": "^", "0.15": "v"}
     fitted_h = {}
     over = frame[frame["heston_abs"] > 1.05 * frame["market_abs"]]
-    over_lo, over_hi = 365.0 * over["T"].min(), 365.0 * over["T"].max()
-    print(
-        f"heston skew above market by >5%: {over_lo:.2f} to {over_hi:.2f} days, "
-        f"{len(over)} expiries"
-    )
-    for label, hurst in (("free", None), ("0.167", 0.167), ("0.149", 0.149)):
+    if len(over):
+        over_lo, over_hi = 365.0 * over["T"].min(), 365.0 * over["T"].max()
+        print(
+            f"heston skew above market by >5%: {over_lo:.2f} to {over_hi:.2f} days, "
+            f"{len(over)} expiries"
+        )
+    else:
+        print("heston skew is within 5% of the chain at every expiry")
+    for label, hurst in (("free", None), ("0.10", 0.10), ("0.15", 0.15)):
         result = calibrate(data, H=hurst, seed=0, surface=surface)
         params = result.detail["parameters"]
         built = type(plugin)(
@@ -121,7 +140,7 @@ def main() -> None:
             markers[label],
             ms=3.5,
             mfc="none",
-            color={"free": "C0", "0.167": "C2", "0.149": "C4"}[label],
+            color={"free": "C0", "0.10": "C2", "0.15": "C4"}[label],
             label=f"rough Bergomi, {name}",
         )
         print(
@@ -145,8 +164,8 @@ def main() -> None:
     ax.set_ylabel("ATM skew |d(iv)/dk| at k = 0 (log scale)")
     ax.set_title(
         f"Rough Bergomi (H from {min(fitted_h.values()):.2f} to {max(fitted_h.values()):.2f}) "
-        "tracks the SPX skew from 10 hours to a year;\n"
-        f"Heston, even with xi = 2.70, overshoots from {over_lo:.0f} to {over_hi:.0f} days",
+        "tracks the chain skew across the listed expiries;\n"
+        f"Heston (xi = {heston_model.xi:.2f}) compared on the same expiries",
         fontsize=10,
     )
     ax.grid(True, alpha=0.3)
@@ -154,7 +173,7 @@ def main() -> None:
     fig.text(
         0.5,
         0.01,
-        "SPXW mids, CBOE delayed, 14 Oct 2026. Rough Bergomi: forward variance from the "
+        f"{source}. Rough Bergomi: forward variance from the "
         "SANOS log contract, Monte Carlo, seed 0.",
         ha="center",
         fontsize=7,

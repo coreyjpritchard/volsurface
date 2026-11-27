@@ -1,4 +1,4 @@
-"""Discrete local volatility heatmap on the SPX SANOS surface.
+"""Discrete local volatility heatmap on the demo-chain SANOS surface.
 
 Run from the repository root:
 
@@ -22,8 +22,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import chains
-from volsurface.core.market import market_data_from_snapshot
 from volsurface.fit.sanos import SanosFitter
 from volsurface.surface.sanos_dlv import implied_sigma
 
@@ -32,8 +30,11 @@ FIG = ROOT / "docs" / "figures"
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    from volsurface.demo_market import load_figure_market, market_data
+
+    chain, _data, source, FIG, _is_synthetic = load_figure_market()
+    FIG.mkdir(parents=True, exist_ok=True)
+    data = market_data(chain)
     result = SanosFitter(eta=0.25, omega=0.0, dx=0.05, time_interp="pchip").fit(data)
     surface = result.surface
     log_k = np.linspace(-0.25, 0.2, 37)
@@ -125,7 +126,7 @@ def main() -> None:
         frameon=True,
     )
     fig.suptitle(
-        f"SANOS discrete local vol on SPX is tame beyond a month (median {np.median(late):.2f}, "
+        f"SANOS discrete local vol is tame beyond a month (median {np.median(late):.2f}, "
         f"max {late.max():.2f}),\nbut reaches {summary['sigma_max']:.0f} in the wings "
         f"of the first few days; median over all cells {summary['sigma_median']:.2f}",
         fontsize=10.5,
@@ -133,7 +134,7 @@ def main() -> None:
     fig.text(
         0.01,
         0.005,
-        "SPXW mids, CBOE delayed, 14 Oct 2026. SANOS fit, eta = 0.25, omega = 0, PCHIP in time; "
+        f"{source}. SANOS fit, eta = 0.25, omega = 0, PCHIP in time; "
         "one cell per pair of neighbouring expiries.",
         fontsize=7.5,
         color="0.3",

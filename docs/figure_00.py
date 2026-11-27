@@ -1,5 +1,5 @@
 # %% Static figure for the README: python docs/figure_00.py -> docs/00_the_smile.png
-"""Session 00 figure: SPX smiles against one Heston fit, and the ATM skew term structure.
+"""Session 00 figure: smiles against one Heston fit, and the ATM skew term structure.
 
 The Heston parameters are refit here. The loss is the at-the-money level and
 skew at every expiry, unweighted, in one residual vector, minimised with scipy
@@ -40,6 +40,7 @@ from scipy.optimize import least_squares  # noqa: E402
 from scipy.stats import qmc  # noqa: E402
 
 from volsurface import chains, models, smile  # noqa: E402
+from volsurface.demo_market import CACHE_FIG, load_figure_market  # noqa: E402
 
 # Wide enough that only xi, the parameter the short-end skew needs, can bind.
 LO = np.array([1e-4, 0.1, 0.001, 0.05, -0.99])
@@ -55,7 +56,6 @@ HAND_STARTS = (
 SOBOL_SEED = 0
 SOBOL_LOG2_N = 5  # 32 Sobol starts
 IV_TOL = 1e-8
-SOURCE = "SPXW mids, CBOE delayed, 14 Oct 2026"
 
 
 def starts() -> list[np.ndarray]:
@@ -66,8 +66,8 @@ def starts() -> list[np.ndarray]:
 
 
 # %% Data
-snapshot = chains.load_snapshot(chains.require_snapshot("SPX"))
-market = chains.market_implied_vols(snapshot)
+_chain, _data, SOURCE, _out_dir, _is_synthetic = load_figure_market()
+market = chains.market_implied_vols(_chain)
 ts = smile.market_term_structure(market)
 maturities = ts["T"].to_numpy()
 market_atm = ts["atm"].to_numpy()
@@ -175,15 +175,21 @@ for d, c in zip(days, colours, strict=True):
     label = f"{n_days:.0f} days" if n_days >= 1.5 else f"{n_days * 24:.0f} hours"
     handles.append(Line2D([], [], color=c, marker=".", label=label))
 print(f"left panel iv range {min(iv_seen):.4f} to {max(iv_seen):.4f}")
+dot_label = "dots: synthetic mid quotes" if _is_synthetic else "dots: mid quotes"
+smile_title = (
+    "Smiles: synthetic quotes against one Heston fit"
+    if _is_synthetic
+    else "Smiles: mid quotes against one Heston fit"
+)
 handles += [
-    Line2D([], [], color="0.3", marker=".", ls="none", label="dots: SPXW mid quotes"),
+    Line2D([], [], color="0.3", marker=".", ls="none", label=dot_label),
     Line2D([], [], color="0.3", label="lines: Heston, calibrated"),
 ]
 ax.set(
     xlabel="log-moneyness k = log(K/F)",
     ylabel="implied volatility",
     ylim=(0.0, 0.6),
-    title="Smiles: market quotes against one Heston fit",
+    title=smile_title,
 )
 ax.grid(True, alpha=0.3)
 ax.legend(handles=handles, title="expiry", fontsize=8, loc="upper right")
@@ -195,7 +201,7 @@ ax.loglog(
     "o",
     ms=4,
     color="#d62728",
-    label="SPX ATM skew, one dot per expiry",
+    label="ATM skew, one dot per expiry",
 )
 ax.loglog(
     365 * T_line,
@@ -222,17 +228,27 @@ ax.grid(True, which="major", alpha=0.3)
 ax.legend(fontsize=8, loc="lower left")
 feller = 2 * fit.kappa * fit.theta / fit.xi**2
 xi_text = f"xi on its bound of {HI[3]:g}" if "xi" in at_bound else f"xi = {fit.xi:.2f}"
+front_years = float(maturities[0])
+front_hours = 365.0 * 24.0 * front_years
+if front_hours < 36:
+    front_label = f"{front_hours:.0f} hours"
+else:
+    front_label = f"{365.0 * front_years:.0f} days"
+chain_name = "Synthetic-chain" if _is_synthetic else "Loaded-chain"
 fig.suptitle(
-    f"SPX ATM skew follows the $T^{{-1/3}}$ power law (H \u2248 {H:.2f}). Heston can follow it "
-    f"only with {xi_text},\nand then its short-dated ATM vol is far too low "
-    f"({100 * pred[0, 0]:.1f}% against {100 * market_atm[0]:.1f}% at 10 hours)",
+    f"{chain_name} ATM skew compared with a power law (H ≈ {H:.2f}). "
+    f"Heston is the calibrated line, with {xi_text};\n"
+    f"short-dated ATM vol is {100 * pred[0, 0]:.1f}% against "
+    f"{100 * market_atm[0]:.1f}% at {front_label}",
     fontsize=12,
 )
 fig.text(
     0.5,
     0.012,
-    f"{SOURCE}. {len(ts)} expiries, 10 hours to 351 days. Heston is fitted to the ATM "
-    f"level and skew of every expiry with xi <= {HI[3]:g} and v0 >= {LO[0]:g}; "
+    f"{SOURCE}. {len(ts)} expiries, "
+    f"T = {365 * ts['T'].min():.1f} to {365 * ts['T'].max():.0f} days. "
+    f"Heston is fitted to the ATM level and skew of every expiry with "
+    f"xi <= {HI[3]:g} and v0 >= {LO[0]:g}; "
     f"on the bound: {bound_text or 'none'}. Feller ratio {feller:.2f}.",
     ha="center",
     fontsize=8,
@@ -240,6 +256,8 @@ fig.text(
 )
 fig.tight_layout(rect=(0, 0.03, 1, 0.93))
 suffix = "" if XI_MAX == 5.0 else f"_xi{XI_MAX:g}"
-out = Path(__file__).with_name(f"00_the_smile{suffix}.png")
+out_dir = Path(__file__).parent if _is_synthetic else CACHE_FIG
+out_dir.mkdir(parents=True, exist_ok=True)
+out = out_dir / f"00_the_smile{suffix}.png"
 fig.savefig(out, dpi=110)
 print(out)
