@@ -5,9 +5,9 @@ Run from the repository root:
     python scripts/figures_p2d.py
 
 Writes PNG and CSV under docs/figures/, and data/presets/localvol.json.
-The snapshot is SPXW mids. Local variance outside the quoted domain is
-kept in the wing panel and marked extrapolated. The default dupire call
-blanks that wing.
+The default chain is the synthetic demo (not market data). Local variance
+outside the quoted domain is kept in the wing panel and marked
+extrapolated. The default dupire call blanks that wing.
 """
 
 from __future__ import annotations
@@ -23,8 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import bs, chains
-from volsurface.core.market import market_data_from_snapshot
+from volsurface import bs
 from volsurface.core.types import Curves, Domain
 from volsurface.fit.svi import SVIFitter
 from volsurface.models.heston import Heston
@@ -42,8 +41,8 @@ def _flat(level):
     return lambda t: np.full(np.shape(t), level, dtype=float)
 
 
-def snapshot_panels(data) -> dict:
-    """Linear, spline and SVI local variance of the SPX snapshot.
+def snapshot_panels(data, source: str, out_dir: Path) -> dict:
+    """Linear, spline and SVI local variance of the loaded chain.
 
     The expiry is the one nearest 23 calendar days. The vertical axis is
     symmetric-log so a spike and the at-the-money level share a panel.
@@ -79,7 +78,7 @@ def snapshot_panels(data) -> dict:
                 }
             )
     frame = pd.DataFrame(rows)
-    frame.to_csv(FIG / "p2d_snapshot_localvol.csv", index=False)
+    frame.to_csv(out_dir / "p2d_demo_localvol.csv", index=False)
 
     fig, axes = plt.subplots(1, 3, figsize=(11.0, 4.4))
     peaks = {}
@@ -117,7 +116,7 @@ def snapshot_panels(data) -> dict:
     axes[0].set_ylabel("local variance (per year, symmetric log scale)")
     axes[2].legend(frameon=False, fontsize=7.5, loc="lower left")
     fig.suptitle(
-        "Dupire local variance needs a smooth, convex surface. On SPX at "
+        "Dupire local variance needs a smooth, convex surface. On the loaded chain at "
         f"{365 * target:.0f} days it reaches\n{_sci(peaks['linear'])} in size from linear "
         f"interpolation and {_sci(peaks['spline'])} from a cubic spline; raw SVI peaks at "
         f"{_sci(peaks['svi'])}\nbut turns negative past the last strike, and negative "
@@ -127,14 +126,14 @@ def snapshot_panels(data) -> dict:
     fig.text(
         0.01,
         0.005,
-        f"SPXW mids, CBOE delayed, 14 Oct 2026; expiry nearest 23 days (T = {target:.3f}). "
+        f"{source}; expiry nearest 23 days (T = {target:.3f}). "
         "Local variance from the Dupire formula in total variance, quoted domain not masked.",
         fontsize=7.5,
         color="0.3",
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.subplots_adjust(top=0.78)
-    fig.savefig(FIG / "p2d_snapshot_localvol.png", dpi=140)
+    fig.savefig(out_dir / "p2d_demo_localvol.png", dpi=140)
     plt.close(fig)
 
     # dw/dT is constant between expiries. One sample in each open interval
@@ -195,16 +194,16 @@ def snapshot_panels(data) -> dict:
     fig.text(
         0.01,
         0.005,
-        "SPXW mids, CBOE delayed, 14 Oct 2026; k = 0, one sample in each gap between "
+        f"{source}; k = 0, one sample in each gap between "
         "quoted expiries.",
         fontsize=7.5,
         color="0.3",
     )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.subplots_adjust(top=0.84)
-    fig.savefig(FIG / "p2d_calendar_jumps.png", dpi=140)
+    fig.savefig(out_dir / "p2d_calendar_jumps.png", dpi=140)
     plt.close(fig)
-    pd.DataFrame(cal_rows).to_csv(FIG / "p2d_calendar_jumps.csv", index=False)
+    pd.DataFrame(cal_rows).to_csv(out_dir / "p2d_calendar_jumps.csv", index=False)
 
     summary = {
         "T": target,
@@ -380,11 +379,14 @@ def heston_panel() -> dict:
 
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
-    summary = snapshot_panels(data)
+    from volsurface.demo_market import load_figure_market, market_data
+
+    chain, _data, source, out_dir, _is_synthetic = load_figure_market()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data = market_data(chain)
+    summary = snapshot_panels(data, source, out_dir)
     heston = heston_panel()
-    print(json.dumps({"snapshot": summary, "heston": heston}, indent=2))
+    print(json.dumps({"chain": summary, "heston": heston}, indent=2))
 
 
 if __name__ == "__main__":

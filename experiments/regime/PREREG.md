@@ -47,7 +47,7 @@ pilot can afford it.
 These are settings, not measurements.
 
 The generative Hurst index is `H = 0.1`. That is the default of the rough
-Bergomi plugin. It is not the SPX skew-route value 0.167.
+Bergomi plugin. It is not an implied-skew estimate from a market option chain.
 
 The low-regime vol of vol is `nu_L = 1.5`, the same plugin's default
 `nu`. The primary ratio `nu_H / nu_L` is 2, so `nu_H = 3`. H1, H2 and H3

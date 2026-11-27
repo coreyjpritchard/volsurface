@@ -1,4 +1,4 @@
-# One entry point: a locked environment, the fast tests, and the README figure.
+# One entry point: a locked environment, the fast tests, and the README figure (synthetic demo).
 .PHONY: reproduce test lint
 
 reproduce:

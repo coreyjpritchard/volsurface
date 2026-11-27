@@ -1,0 +1,13 @@
+{
+  "v0": 0.03991095243751423,
+  "kappa": 1.534320674103802,
+  "theta": 0.04008509783531898,
+  "xi": 0.7982115406584481,
+  "rho": -0.7035174651688632,
+  "feller": 0.1930603438513233,
+  "solver_status": "`ftol` termination condition is satisfied. cost=2.282e-04 starts=4",
+  "rmse_price": 0.015298624695864045,
+  "max_abs_price": 0.05933376944289703,
+  "n_quotes": 105,
+  "n_expiries": 10
+}

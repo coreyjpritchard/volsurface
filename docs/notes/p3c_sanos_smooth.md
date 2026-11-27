@@ -19,10 +19,11 @@ call is the Black call of that total variance. Off the money the same
 weight does not cancel the ratio of call gaps, so a jump in `dC/dT` is
 expected and is measured.
 
-The market bar on this SPX snapshot, with `omega = 0`, is zero
-static-arbitrage violations on the checked grid at tolerance `1e-9`, and
-an in-spread fraction strictly above 0.558. The 0.558 is the raw SVI
-figure already in `LOG.md`. The paper's 91.4 percent is a different book.
+The market bar, with `omega = 0`, is zero static-arbitrage violations
+on the checked grid at tolerance `1e-9`, and an in-spread fraction at
+least that of raw SVI on the same book. Snapshot-specific fractions are
+not recorded in this public note. The paper's 91.4 percent is a different
+book.
 
 A second bar holds out strikes. In each expiry, about 20 percent of the
 strikes are drawn without replacement by `numpy.random.default_rng` with
@@ -34,15 +35,9 @@ violations on the dense grid. Corey has ratified this bar: SANOS
 held-out in-spread at least raw SVI held-out in-spread, with zero
 static-arbitrage violations, ratified 14 Oct 2026.
 
-Seed 0 holds out 1,796 of 8,973 quotes. The mean fraction of strikes
-left out of an expiry is 0.2002. SANOS at `eta = 0.25` and `omega = 0`,
-fit on the other 7,177 quotes, places 0.990535 of the held-out model
-calls inside the held-out bid and ask. Raw SVI on the same split places
-0.540646 on the locked dependencies of `uv.lock` (0.541203 on the
-unrecorded versions of the first run). The fitted SANOS surface has 0
-violations on the dense grid. Both fits and that check took 86.7 s on
-the first run. `pytest -s -m slow tests/test_sanos_smooth.py -k holdout`
-prints these numbers.
+`pytest -s -m slow tests/test_sanos_smooth.py -k holdout` runs the
+held-out check on the chain used by the test. Numbers from a market
+snapshot are not committed.
 
 The solver is the HiGHS interior point method, with crossover off. The
 simplex run on the smooth book returns HiGHS status 15 and no solution

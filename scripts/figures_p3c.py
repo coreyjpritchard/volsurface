@@ -1,4 +1,4 @@
-"""SANOS smoothing, the eta sweep, and the shoot-out on SPX.
+"""SANOS smoothing, the eta sweep, and the shoot-out on the demo chain.
 
 Run from the repository root:
 
@@ -22,9 +22,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from volsurface import bs, chains
+from volsurface import bs
 from volsurface.arbitrage import check_surface
-from volsurface.core.market import market_data_from_snapshot
 from volsurface.core.types import ArbTol, Curves
 from volsurface.fit.sanos import SanosFitter, quote_in_spread
 from volsurface.fit.svi import SVIFitter
@@ -88,8 +87,10 @@ def _nearest(surface, target: float) -> int:
 
 
 def main() -> None:
-    chain = chains.load_snapshot(chains.require_snapshot("SPX"))
-    data = market_data_from_snapshot(chain)
+    from volsurface.demo_market import load_figure_market, market_data
+    chain, _data, source, FIG, _is_synthetic = load_figure_market()
+    FIG.mkdir(parents=True, exist_ok=True)
+    data = market_data(chain)
     FIG.mkdir(parents=True, exist_ok=True)
     market = Curves(data.F, data.df)
 
@@ -308,7 +309,7 @@ def main() -> None:
     peak = f"${objectives.max() / 10**peak_exp:.1f} \\times 10^{{{peak_exp}}}$"
     trend = "rises with eta" if rising else "does not rise steadily with eta"
     status = (
-        "keeps every SPX quote inside its spread\nwith no static-arbitrage violations"
+        "keeps every quote inside its spread\nwith no static-arbitrage violations"
         if clean
         else "does not keep every quote inside its spread with zero violations"
     )
@@ -323,7 +324,7 @@ def main() -> None:
     fig.text(
         0.01,
         0.005,
-        "SPXW mids, CBOE delayed, 14 Oct 2026. HiGHS interior point, PCHIP in time; "
+        f"{source}. HiGHS interior point, PCHIP in time; "
         f"violations checked on {int(top['n_checked'])} points at tolerance 1e-9.",
         fontsize=7.5,
         color="0.3",

@@ -14,7 +14,7 @@ the calls. Strikes that change with expiry are handled by splitting each
 source atom onto the two target strikes that bracket it, which keeps the
 mean, and then applying the homogeneous operator on the target grid.
 
-The heatmap is this ratio on the `eta = 0.25` SANOS fit of the SPX
-snapshot, on one common strike grid. A large second difference along
-strike is the statement that these discrete local volatilities are not a
-smooth surface in the strike.
+The heatmap is this ratio on the `eta = 0.25` SANOS fit of the loaded
+chain (the synthetic demo by default), on one common strike grid. A large
+second difference along strike is the statement that these discrete local
+volatilities are not a smooth surface in the strike.

@@ -31,7 +31,7 @@ def test_missing_plugin_is_a_key_error_and_not_a_substitute(monkeypatch):
 
     monkeypatch.setattr("volsurface.fit.rbergomi.create", absent)
     with pytest.raises(KeyError):
-        calibrate(_heston_book(0.15), H=0.167)
+        calibrate(_heston_book(0.15), H=0.10)
 
 
 def test_log_contract_is_the_mixture_and_rises_with_variance():
@@ -181,16 +181,16 @@ def test_mock_calibration_is_not_labelled_rbergomi(monkeypatch):
     monkeypatch.setattr(rbergomi_fit, "create", factory)
     monkeypatch.setattr(rbergomi_fit, "_build", spy)
     surface = _smooth_known()
-    result = calibrate(_skew_book(0.3), H=0.167, seed=7, surface=surface)
+    result = calibrate(_skew_book(0.3), H=0.10, seed=7, surface=surface)
     assert result.detail["label"] == "_MockVol"
     assert result.detail["rbergomi"] is False
     assert result.detail["parameters"]["nu"] == pytest.approx(0.3, abs=1e-3)
-    assert result.detail["parameters"]["H"] == pytest.approx(0.167)
+    assert result.detail["parameters"]["H"] == pytest.approx(0.10)
     expect = forward_variance(surface)
     assert callable(built[-1].xi0)
     assert built[-1].xi0(np.array([0.75])) == pytest.approx(expect(np.array([0.75])))
     assert float(built[-1].xi0(0.75)) != pytest.approx(0.04)
-    again = calibrate(_skew_book(0.3), H=0.167, seed=7, surface=surface)
+    again = calibrate(_skew_book(0.3), H=0.10, seed=7, surface=surface)
     assert again.detail["parameters"] == result.detail["parameters"]
 
 
@@ -217,7 +217,7 @@ def test_roughbergomi_is_built_with_the_sanos_slope(monkeypatch):
 
     monkeypatch.setattr("volsurface.fit.rbergomi.least_squares", fake_least_squares)
     monkeypatch.setattr("volsurface.fit.rbergomi.model_term_structure", fake_panel)
-    result = calibrate(_skew_book(0.3), H=0.167, seed=1, surface=surface, n_paths=8, n_steps=4)
+    result = calibrate(_skew_book(0.3), H=0.10, seed=1, surface=surface, n_paths=8, n_steps=4)
     model = captured["model"]
     assert type(model).__module__.startswith("roughvol")
     assert result.detail["rbergomi"] is True
