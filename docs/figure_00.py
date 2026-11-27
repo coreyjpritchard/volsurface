@@ -57,6 +57,7 @@ SOBOL_SEED = 0
 SOBOL_LOG2_N = 5  # 32 Sobol starts
 IV_TOL = 1e-8
 
+
 def starts() -> list[np.ndarray]:
     """Hand-picked starts, then a seeded scrambled Sobol design inside the box."""
     sobol = qmc.Sobol(d=5, scramble=True, seed=SOBOL_SEED).random_base2(SOBOL_LOG2_N)

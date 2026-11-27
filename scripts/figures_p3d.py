@@ -31,6 +31,7 @@ FIG = ROOT / "docs" / "figures"
 
 def main() -> None:
     from volsurface.demo_market import load_figure_market, market_data
+
     chain, _data, source, FIG, _is_synthetic = load_figure_market()
     FIG.mkdir(parents=True, exist_ok=True)
     data = market_data(chain)

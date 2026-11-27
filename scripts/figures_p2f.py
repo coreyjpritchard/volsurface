@@ -259,6 +259,7 @@ def _thin(quotes: pd.DataFrame) -> pd.DataFrame:
 def chain_fit() -> dict:
     """One SABR parameter set per expiry. beta is fixed at 1."""
     from volsurface.demo_market import load_figure_market, market_data
+
     chain, _data, source, out_dir, _is_synthetic = load_figure_market()
     out_dir.mkdir(parents=True, exist_ok=True)
     full = market_data(chain)
@@ -279,6 +280,7 @@ def chain_fit() -> dict:
     rho_floor = -0.999
     at_nu = np.isclose(report["nu"].to_numpy(), nu_cap, atol=1e-6)
     at_rho = np.isclose(report["rho"].to_numpy(), rho_floor, atol=1e-6)
+
     def _last(mask: np.ndarray) -> str:
         if not mask.any():
             return "none"
@@ -322,17 +324,11 @@ def chain_fit() -> dict:
     median = float(report["rmse_price"].median())
     bound_bits = []
     if at_nu.any():
-        bound_bits.append(
-            f"nu sits at its cap of {nu_cap:g} up to {days[at_nu].max():.0f} days"
-        )
+        bound_bits.append(f"nu sits at its cap of {nu_cap:g} up to {days[at_nu].max():.0f} days")
     if at_rho.any():
-        bound_bits.append(
-            f"rho sits at ${rho_floor:g}$ on {int(at_rho.sum())} expiries"
-        )
+        bound_bits.append(f"rho sits at ${rho_floor:g}$ on {int(at_rho.sum())} expiries")
     if bound_bits:
-        bound_text = (
-            "bound-limited values are limits, not estimates: " + "; ".join(bound_bits)
-        )
+        bound_text = "bound-limited values are limits, not estimates: " + "; ".join(bound_bits)
     else:
         bound_text = "no fitted parameter sits on its bound"
     fig.suptitle(

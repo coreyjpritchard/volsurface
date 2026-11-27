@@ -194,8 +194,7 @@ def snapshot_panels(data, source: str, out_dir: Path) -> dict:
     fig.text(
         0.01,
         0.005,
-        f"{source}; k = 0, one sample in each gap between "
-        "quoted expiries.",
+        f"{source}; k = 0, one sample in each gap between quoted expiries.",
         fontsize=7.5,
         color="0.3",
     )
