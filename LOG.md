@@ -20,10 +20,18 @@ A SANOS-calibrated market means a parametric fit to the SANOS surface from one
 historical snapshot of index options, in a normalised market with spot 100.
 The surface itself is not simulated. `volsurface/fit/sanos_calibration.py`
 fits Black-Scholes (the interpolated at-the-money vol at T = 30/365) and
-Heston (vega-weighted prices, seed 0, four starts) to a normalised implied-vol
-grid. `make calibration` writes a training document under `data/exports/local/`
-(gitignored) and a site pack under `data/exports/site/` that keeps only the
-contract, premiums and labels, not the fitted parameters or the grid.
+two Heston models to a normalised implied-vol grid: an equal-weighted
+full-surface fit in the default numerical box, and a contract-weighted fit
+with residual weights peaked at the 30-day maturity and a wider kappa box
+(50 rather than 20). The default kappa bound is a numerical box, not a
+no-arbitrage constraint. Heston cannot match the short-dated skew of a
+typical equity-index surface; both fits remain parametric Heston models,
+not a simulation of the surface. `make calibration` writes the training
+document and a site pack under `data/exports/local/` (gitignored). The
+committed file `data/exports/examples/synthetic_snapshot_markets.json` is a
+schema example priced on a labelled synthetic Heston surface, rebuilt with
+`make synthetic-example`. Snapshot-derived premiums, implied vols and
+fitted parameters stay local and are not committed.
 
 
 ## 2026-10-29 Committed figure data holds no per-quote SPX values

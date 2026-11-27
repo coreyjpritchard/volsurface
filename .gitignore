@@ -18,3 +18,6 @@ data/snapshots/*
 
 # Local training calibration; not a site pack.
 data/exports/local/
+
+# Local site packs built from a user-supplied snapshot; not committed.
+data/exports/site/

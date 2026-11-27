@@ -1,0 +1,25 @@
+{
+  "schema": "volsurface.snapshot_markets/v1",
+  "note": "Example pack for the snapshot-markets schema. Premiums are from a labelled synthetic Heston surface in a normalised market with spot 100, not from a historical snapshot.",
+  "label": "Example pack for the snapshot-markets schema. Premiums are from a labelled synthetic Heston surface in a normalised market with spot 100, not from a historical snapshot.",
+  "synthetic": true,
+  "contract": {
+    "s0": 100.0,
+    "strike": 100.0,
+    "maturity": 0.0821917808219178,
+    "r": 0.0,
+    "n_steps": 30
+  },
+  "markets": {
+    "black_scholes": {
+      "label": "Example pack for the snapshot-markets schema. Premiums are from a labelled synthetic Heston surface in a normalised market with spot 100, not from a historical snapshot.",
+      "premium": 1.9768113865042523
+    },
+    "heston": {
+      "label": "The network would be trained in this synthetic Heston simulator. Values are not from a historical snapshot.",
+      "premium": 1.9768113865041954
+    }
+  },
+  "surface_premium": 1.9768113865042523,
+  "premium_gap": -5.684341886080802e-14
+}
